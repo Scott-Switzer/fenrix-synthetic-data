@@ -1,0 +1,67 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "instructions": [
+    "AGENTS.md",
+    "docs/ARCHITECTURE.md",
+    "docs/DECISIONS.md",
+    "docs/SOURCE_PROVENANCE.md"
+  ],
+
+  "snapshot": true,
+
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
+
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      ".venv/**",
+      "__pycache__/**",
+      ".pytest_cache/**",
+      ".ruff_cache/**",
+      "data/**",
+      "artifacts/**",
+      "references/**"
+    ]
+  },
+
+  "permission": {
+    "edit": "allow",
+
+    "bash": {
+      "*": "ask",
+
+      "pwd": "allow",
+      "ls *": "allow",
+      "find *": "allow",
+      "grep *": "allow",
+
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git branch*": "allow",
+      "git checkout*": "ask",
+      "git add*": "ask",
+      "git commit*": "ask",
+      "git push*": "deny",
+
+      "python *": "allow",
+      "python3 *": "allow",
+      "uv *": "allow",
+      "pytest *": "allow",
+      "ruff *": "allow",
+      "mypy *": "allow",
+
+      "rm *": "deny",
+      "sudo *": "deny"
+    },
+
+    "external_directory": "ask",
+    "webfetch": "ask",
+    "websearch": "allow"
+  }
+}
