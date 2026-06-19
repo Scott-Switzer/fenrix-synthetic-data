@@ -675,7 +675,6 @@ def mask(
                 return mp
         return MatchPolicy.LITERAL
 
-    entity_map: dict[str, str] = {}
     for ent in reg_data.get("entities", []):
         eid = ent.get("entity_id", "")
         etype = _lookup_etype(ent.get("entity_type", "company"))
@@ -683,7 +682,6 @@ def mask(
         if eid and value:
             try:
                 reg.add_entity(eid, etype, value, ent.get("source_references"))
-                entity_map[eid] = eid
             except ValueError:
                 click.echo(f"Warning: duplicate entity '{eid}', skipping", err=True)
 
