@@ -233,29 +233,62 @@ def run_pilot(config: RunConfig) -> RunManifest:
     )
     from fenrix_synthetic.utility import evaluate_unstructured_utility
 
-    # ── Stage 2: validate_source_manifest ──────────────────────────
+    # ── Stage 2: validate_source_manifest (MANDATORY) ──────────────
     manifest_path = private_root / "sources" / config.source_id / "source_manifest.yaml"
-    if manifest_path.exists():
-        import yaml as _yaml
-
-        try:
-            with open(manifest_path) as f:
-                data = _yaml.safe_load(f)
-            doc_count = len(data.get("documents", [])) if isinstance(data, dict) else 0
-            series_count = len(data.get("series", [])) if isinstance(data, dict) else 0
-            _record(
-                StageName.VALIDATE_MANIFEST,
-                StageStatus.PASSED,
-                metadata={"documents": doc_count, "series": series_count},
-            )
-        except Exception as exc:
-            _record(StageName.VALIDATE_MANIFEST, StageStatus.FAILED, errors=[str(exc)])
-    else:
+    if not manifest_path.exists():
         _record(
             StageName.VALIDATE_MANIFEST,
-            StageStatus.SKIPPED_NOT_CONFIGURED,
-            metadata={"reason": "source_manifest.yaml not found"},
+            StageStatus.FAILED,
+            errors=["source_manifest.yaml not found — required for all pilots"],
+            blocking_findings=["Missing source manifest"],
         )
+        manifest.stages = stages
+        manifest.overall_status = "failed"
+        manifest.completed_at = datetime.now(UTC).isoformat()
+        return manifest
+
+    import yaml as _yaml
+
+    try:
+        with open(manifest_path) as f:
+            data = _yaml.safe_load(f)
+        raw: dict[str, Any] = data if isinstance(data, dict) else {}
+        doc_count = len(raw.get("documents", []))
+        series_count = len(raw.get("series", []))
+        manifest_source_id = raw.get("source_id", "")
+        if manifest_source_id and manifest_source_id != config.source_id:
+            _record(
+                StageName.VALIDATE_MANIFEST,
+                StageStatus.FAILED,
+                errors=[f"Source ID mismatch: manifest={manifest_source_id} config={config.source_id}"],
+                blocking_findings=["Source ID mismatch"],
+            )
+            manifest.stages = stages
+            manifest.overall_status = "failed"
+            manifest.completed_at = datetime.now(UTC).isoformat()
+            return manifest
+        if doc_count == 0 and not config.test_fixture:
+            _record(
+                StageName.VALIDATE_MANIFEST,
+                StageStatus.FAILED,
+                errors=["No documents listed in source manifest"],
+                blocking_findings=["Empty document list"],
+            )
+            manifest.stages = stages
+            manifest.overall_status = "failed"
+            manifest.completed_at = datetime.now(UTC).isoformat()
+            return manifest
+        _record(
+            StageName.VALIDATE_MANIFEST,
+            StageStatus.PASSED,
+            metadata={"documents": doc_count, "series": series_count, "source_id": manifest_source_id},
+        )
+    except Exception as exc:
+        _record(StageName.VALIDATE_MANIFEST, StageStatus.FAILED, errors=[str(exc)], blocking_findings=["Manifest parse error"])
+        manifest.stages = stages
+        manifest.overall_status = "failed"
+        manifest.completed_at = datetime.now(UTC).isoformat()
+        return manifest
 
     # ── Stage 3: compile_identity_atlas + validate completeness ────
     atlas_path = private_root / "sources" / config.source_id / "identity_atlas.yaml"
@@ -268,8 +301,8 @@ def run_pilot(config: RunConfig) -> RunManifest:
 
             with open(atlas_path) as f:
                 data = _yaml.safe_load(f)
-            raw: dict[str, Any] = data if isinstance(data, dict) else {}
-            atlas = IdentityAtlas(**raw)
+            atlas_raw: dict[str, Any] = data if isinstance(data, dict) else {}
+            atlas = IdentityAtlas(**atlas_raw)
 
             # ── Atlas completeness validation ──────────────────────
             is_complete, completeness_warnings, scores = validate_atlas_completeness(atlas)
@@ -401,16 +434,25 @@ def run_pilot(config: RunConfig) -> RunManifest:
                 (intermediate / "s1_basic.json").write_text(json.dumps(s1.transformed))
                 _record(StageName.GENERATE_S1, StageStatus.PASSED, metadata={"rows": s1.row_count})
 
-                s2 = transform_s2_privacy(records)
+                # Load market/sector references if provided
+                market_ref: list[OhlcvRecord] | None = None
+                sector_ref: list[OhlcvRecord] | None = None
+                if config.market_reference_path and config.market_reference_path.exists():
+                    mdata = json.loads(config.market_reference_path.read_text())
+                    market_ref = [OhlcvRecord(**r) for r in mdata.get("records", [])]
+                if config.sector_reference_path and config.sector_reference_path.exists():
+                    sdata = json.loads(config.sector_reference_path.read_text())
+                    sector_ref = [OhlcvRecord(**r) for r in sdata.get("records", [])]
+
+                s2 = transform_s2_privacy(records, market_reference=market_ref, sector_reference=sector_ref)
                 s2_warnings = list(s2.warnings)
-                if not config.market_reference_path and not config.sector_reference_path:
-                    s2_warnings.append("S2_NO_REFERENCE: incomplete S2 variant")
-                transformed_variants["s2_privacy"] = s2.transformed
-                (intermediate / "s2_privacy.json").write_text(json.dumps(s2.transformed))
+                variant_key = "s2_privacy" if s2.s2_status == "complete" else "s2_incomplete"
+                transformed_variants[variant_key] = s2.transformed
+                (intermediate / f"{variant_key}.json").write_text(json.dumps(s2.transformed))
                 _record(
                     StageName.GENERATE_S2,
-                    StageStatus.PASSED,
-                    metadata={"rows": s2.row_count},
+                    StageStatus.PASSED if s2.s2_status == "complete" else StageStatus.REVIEW_REQUIRED,
+                    metadata={"rows": s2.row_count, "s2_status": s2.s2_status},
                     warnings=s2_warnings,
                 )
 
@@ -418,17 +460,19 @@ def run_pilot(config: RunConfig) -> RunManifest:
             else:
                 _record(
                     StageName.GENERATE_S0,
-                    StageStatus.SKIPPED_NOT_CONFIGURED,
+                    StageStatus.FAILED,
                     metadata={"reason": "no price records"},
+                    errors=["prices.json contains no records"],
                 )
         except Exception as exc:
             _record(StageName.GENERATE_S0, StageStatus.FAILED, errors=[str(exc)])
     else:
         for s in [StageName.GENERATE_S0, StageName.GENERATE_S1, StageName.GENERATE_S2]:
             _record(
-                s, StageStatus.SKIPPED_NOT_CONFIGURED, metadata={"reason": "prices.json not found"}
+                s, StageStatus.FAILED, metadata={"reason": "prices.json not found"},
+                errors=["prices.json not found"],
             )
-        _record(StageName.VALIDATE_STRUCTURED, StageStatus.SKIPPED_NOT_CONFIGURED)
+        _record(StageName.VALIDATE_STRUCTURED, StageStatus.FAILED, errors=["prices.json not found"])
 
     # ── Stage 11: Text attacks ────────────────────────────────────
     text_attack_results: list[dict[str, Any]] = []
@@ -495,17 +539,26 @@ def run_pilot(config: RunConfig) -> RunManifest:
                         candidate_returns,
                         transform_variant=variant_name,
                     )
+                    total = len(candidate_returns)
+                    rank = int(ranking.metrics.get("true_source_rank", -1))
+                    percentile = (1.0 - (rank / total)) * 100 if rank > 0 and total > 0 else 0.0
                     structured_attack_results.append(
                         {
                             "variant": variant_name,
                             "universe_size": ranking.metrics.get("candidate_universe_size", 0),
-                            "true_source_rank": ranking.metrics.get("true_source_rank", -1),
+                            "eligible_candidates": total,
+                            "true_source_rank": rank,
+                            "percentile_rank": round(percentile, 2),
+                            "top_1": rank == 1,
+                            "top_5": rank > 0 and rank <= 5,
+                            "top_10": rank > 0 and rank <= 10,
+                            "top_candidate_score": round(ranking.metrics.get("top_candidate_score", 0.0), 6),
                             "in_top_k": ranking.metrics.get("in_top_k", False),
                             "attack_hash": ranking.attack_hash,
                         }
                     )
                     if variant_name == "s1_basic":
-                        structured_rank = int(ranking.metrics.get("true_source_rank", -1))
+                        structured_rank = rank
 
             (intermediate / "structured_attacks.json").write_text(
                 json.dumps(structured_attack_results, indent=2)
@@ -513,19 +566,21 @@ def run_pilot(config: RunConfig) -> RunManifest:
             _record(
                 StageName.STRUCTURED_ATTACKS,
                 StageStatus.PASSED,
-                metadata={"variants_tested": len(structured_attack_results)},
+                metadata={"variants_tested": len(structured_attack_results), "results": structured_attack_results},
             )
         except Exception as exc:
             _record(StageName.STRUCTURED_ATTACKS, StageStatus.FAILED, errors=[str(exc)])
     else:
         _record(
             StageName.STRUCTURED_ATTACKS,
-            StageStatus.SKIPPED_NOT_CONFIGURED,
+            StageStatus.FAILED,
             metadata={"reason": "no structured variants or no candidate universe"},
+            errors=["Missing structured variants or candidate universe"],
         )
 
     # ── Stage 13: Utility evaluation ───────────────────────────────
     utility_results: dict[str, Any] = {}
+    structured_utility_results: dict[str, Any] = {}
     if masked_docs:
         try:
             for doc_id, masked_text in masked_docs.items():
@@ -547,6 +602,47 @@ def run_pilot(config: RunConfig) -> RunManifest:
                 StageName.UTILITY,
                 StageStatus.PASSED,
                 metadata={"documents_evaluated": len(utility_results)},
+            )
+        except Exception as exc:
+            _record(StageName.UTILITY, StageStatus.FAILED, errors=[str(exc)])
+
+    # Structured utility per variant
+    if prices_path.exists() and transformed_variants:
+        try:
+            from fenrix_synthetic.utility.structured import evaluate_structured_utility
+            data = json.loads(prices_path.read_text())
+            source_records = [OhlcvRecord(**r) for r in data.get("records", [])]
+            source_prices = [r.close for r in source_records]
+            source_returns = []
+            for i in range(1, len(source_prices)):
+                if source_prices[i - 1] > 0:
+                    source_returns.append(math.log(source_prices[i] / source_prices[i - 1]))
+
+            for variant_name, variant_data in transformed_variants.items():
+                if variant_name == "s0_control":
+                    continue  # S0 is non-releasable control, skip utility
+                vr = variant_data.get("close", [])
+                if vr and len(vr) > 1:
+                    masked_returns = []
+                    for i in range(1, len(vr)):
+                        if vr[i - 1] > 0:
+                            masked_returns.append(math.log(vr[i] / vr[i - 1]))
+                    su = evaluate_structured_utility(
+                        source_returns, masked_returns, source_prices, vr, variant=variant_name
+                    )
+                    structured_utility_results[variant_name] = {
+                        "variant": variant_name,
+                        "return_sign_agreement": round(su.return_sign_agreement, 4),
+                        "rank_correlation": round(su.rank_correlation, 4),
+                        "volatility_distortion": round(su.volatility_distortion, 4),
+                        "max_drawdown_distortion": round(su.max_drawdown_distortion, 4),
+                        "momentum_agreement": round(su.momentum_agreement, 4),
+                        "ma_crossover_agreement": round(su.ma_crossover_agreement, 4),
+                        "overall_utility": round(su.overall_utility, 4),
+                        "ohlc_valid": su.ohlc_valid,
+                    }
+            (intermediate / "structured_utility.json").write_text(
+                json.dumps(structured_utility_results, indent=2)
             )
         except Exception as exc:
             _record(StageName.UTILITY, StageStatus.FAILED, errors=[str(exc)])
@@ -710,20 +806,34 @@ def run_pilot(config: RunConfig) -> RunManifest:
     manifest_path = intermediate / "run_manifest.json"
     manifest.completed_at = datetime.now(UTC).isoformat()
     manifest.stages = stages
-    manifest.overall_status = (
-        "completed"
-        if all(
-            s.status
-            in (
-                StageStatus.PASSED,
-                StageStatus.SKIPPED_NOT_CONFIGURED,
-                StageStatus.SKIPPED_OPTIONAL,
-                StageStatus.BLOCKED_UPSTREAM,
-            )
-            for s in stages
-        )
-        else "failed"
+
+    # Required stages that must not be SKIPPED_NOT_CONFIGURED
+    required_stages = {
+        StageName.VALIDATE_BOUNDARY,
+        StageName.VALIDATE_MANIFEST,
+        StageName.COMPILE_ATLAS,
+        StageName.NORMALIZE_UNSTRUCTURED,
+        StageName.MASK_UNSTRUCTURED,
+        StageName.VALIDATE_MASKING,
+        StageName.GENERATE_S0,
+        StageName.GENERATE_S1,
+        StageName.GENERATE_S2,
+        StageName.VALIDATE_STRUCTURED,
+        StageName.TEXT_ATTACKS,
+        StageName.STRUCTURED_ATTACKS,
+        StageName.UTILITY,
+        StageName.DETERMINISM,
+        StageName.EVIDENCE_MANIFEST,
+        StageName.ASSESS_RELEASE,
+        StageName.FINALIZE,
+    }
+
+    any_failed = any(s.status in (StageStatus.FAILED, StageStatus.ERROR) for s in stages)
+    any_required_skipped = any(
+        s.status == StageStatus.SKIPPED_NOT_CONFIGURED and s.stage in required_stages
+        for s in stages
     )
+    manifest.overall_status = "failed" if (any_failed or any_required_skipped) else "completed"
     manifest.evidence_hashes = {"evidence_manifest": evidence_hash[:16]}
     manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
     _record(

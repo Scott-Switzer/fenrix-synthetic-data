@@ -115,7 +115,7 @@ class TestPatternsForAlias:
         assert alias is not None
         patterns = get_patterns_for_alias(alias, sample_registry)
         assert len(patterns) >= 1
-        ptype, pat, repl, _ = patterns[0]
+        ptype, pat, repl, _, _flags = patterns[0]
         assert ptype == "literal"
         assert repl == entity.assigned_pseudonym
 
