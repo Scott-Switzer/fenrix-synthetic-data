@@ -1350,14 +1350,15 @@ class TestRealGlinerPackageContract:
         )
 
     def test_discover_protocol_does_not_import_gliner(self) -> None:
-        """Importing discovery provider stream does not transitively import gliner."""
+        """Cold-importing discovery.protocol must not transitively import gliner."""
         import sys
 
-        gliner_pre = "gliner" in sys.modules
-        # Cold-import the discovery package and confirm gliner is not loaded.
-        if not gliner_pre:
-            from fenrix_synthetic.discovery import protocol  # noqa: F401
-        assert True
+        if "gliner" in sys.modules:
+            pytest.skip("gliner already loaded by an earlier test in this session")
+        from fenrix_synthetic.discovery import protocol  # noqa: F401
+        assert "gliner" not in sys.modules, (
+            "fenrix_synthetic.discovery.protocol transitively imported gliner"
+        )
 
 
 @pytest.mark.local_model
