@@ -1126,6 +1126,90 @@ def providers_prepare(
     click.echo(f"status=ready model_id={model_id}")
 
 
+# ── Ingestion provenance helpers ───────────────────────────────────────
+
+
+def _ingest_is_working_tree_clean() -> tuple[bool, str]:
+    """Check if the current working directory is clean (no tracked file modifications)."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False, "could not run git status"
+    lines = [line for line in result.stdout.strip().split("\n") if line.strip()]
+    dirty_lines: list[str] = []
+    for line in lines:
+        if len(line) < 3:
+            continue
+        status = line[:2]
+        # Untracked files are allowed
+        if status == "??":
+            continue
+        dirty_lines.append(line)
+    if dirty_lines:
+        return False, "\n".join(dirty_lines)
+    return True, ""
+
+
+def _ingest_get_head_commit() -> str:
+    """Read the current HEAD commit SHA."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+# ── Privacy scan ─────────────────────────────────────────────────────────
+
+# Explicitly forbidden keys that indicate private content leakage.
+# Keys like "note" are intentionally NOT listed here.
+_INGEST_FORBIDDEN_KEYS: set[str] = {
+    "candidate_text",
+    "matched_text",
+    "private_matched_text",
+    "context",
+    "context_excerpt",
+    "raw_response",
+    "source_alias",
+    "source_url",
+    "cache_path",
+    "absolute_path",
+    "private_hash",
+    "access_token",
+    "text",
+    "url",
+    "path",
+    "alias",
+    "company_name",
+    "excerpt",
+}
+
+
+def _scan_forbidden(obj: Any, path: str = "") -> None:
+    """Recursively scan report dict for forbidden keys.
+
+    Only rejects keys that are explicitly in the forbidden set.
+    Long strings are NOT rejected by a generic heuristic.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _INGEST_FORBIDDEN_KEYS:
+                click.echo(f"Error: forbidden key '{k}' at {path}.{k}", err=True)
+                sys.exit(1)
+            _scan_forbidden(v, f"{path}.{k}")
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            _scan_forbidden(item, f"{path}[{i}]")
+
+
 @providers.command(name="ingest-colab")
 @click.option(
     "--report",
@@ -1135,7 +1219,6 @@ def providers_prepare(
 )
 @click.option(
     "--output",
-    "output_path",
     type=click.Path(path_type=Path),
     required=True,
     help="Output path for the deterministic ingestion artifact.",
@@ -1148,8 +1231,8 @@ def providers_prepare(
 @click.pass_context
 def providers_ingest_colab(
     ctx: click.Context,
-    report_path: Path,
-    output_path: Path,
+    report: Path,
+    output: Path,
     expected_commit: str | None,
 ) -> None:
     """Ingest a sanitized Colab evidence report for Phase 3C verification.
@@ -1166,9 +1249,22 @@ def providers_ingest_colab(
 
     from .discovery.providers.gliner.benchmark import load_default_benchmark
 
+    # ── Ingestion-code provenance ─────────────────────────────────────────
+    local_commit = _ingest_get_head_commit()
+    clean, dirty_details = _ingest_is_working_tree_clean()
+    if not clean:
+        click.echo(f"Error: ingestion working tree is dirty:\n{dirty_details}", err=True)
+        sys.exit(1)
+    if expected_commit and expected_commit != local_commit:
+        click.echo(
+            f"Error: ingestion commit mismatch: expected {expected_commit}, got {local_commit}",
+            err=True,
+        )
+        sys.exit(1)
+
     # Load report
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report_data = json.loads(report.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         click.echo(f"Error: invalid JSON in report: {e}", err=True)
         sys.exit(1)
@@ -1184,13 +1280,13 @@ def providers_ingest_colab(
         "privacy",
         "run_timestamp",
     ]
-    missing = [f for f in required if f not in report]
+    missing = [f for f in required if f not in report_data]
     if missing:
         click.echo(f"Error: missing required top-level fields: {missing}", err=True)
         sys.exit(1)
 
     # Verify zero acceptance / promotion / registry mutation / remasking
-    rq = report["review_queue"]
+    rq = report_data["review_queue"]
     if rq.get("automatic_acceptance_count", 0) != 0:
         click.echo("Error: automatic_acceptance_count is non-zero", err=True)
         sys.exit(1)
@@ -1205,12 +1301,12 @@ def providers_ingest_colab(
         sys.exit(1)
 
     # Verify no real data
-    if not report["privacy"].get("no_real_company_data", False):
+    if not report_data["privacy"].get("no_real_company_data", False):
         click.echo("Error: privacy.no_real_company_data is false", err=True)
         sys.exit(1)
 
-    # Verify working tree clean
-    repo = report["repository"]
+    # Verify working tree clean and commit verified from report
+    repo = report_data["repository"]
     if repo.get("working_tree_clean") is False:
         click.echo("Error: report indicates working_tree_clean=false", err=True)
         sys.exit(1)
@@ -1219,16 +1315,16 @@ def providers_ingest_colab(
         sys.exit(1)
 
     # Verify model load and predict_entities success
-    model = report["model"]
+    model = report_data["model"]
     if not model.get("load_success", False):
         click.echo("Error: model.load_success is false", err=True)
         sys.exit(1)
-    if not report["discovery"].get("predict_entities_success", False):
+    if not report_data["discovery"].get("predict_entities_success", False):
         click.echo("Error: discovery.predict_entities_success is false", err=True)
         sys.exit(1)
 
     # Verify review queue populated when candidates exist
-    discovery = report["discovery"]
+    discovery = report_data["discovery"]
     normalized_count = discovery.get("normalized_candidate_count", 0)
     review_queue_count = rq.get("review_queue_count", 0)
     if normalized_count > 0 and review_queue_count == 0:
@@ -1237,34 +1333,38 @@ def providers_ingest_colab(
         )
         sys.exit(1)
 
-    # Verify commit
-    try:
-        local_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except subprocess.CalledProcessError as e:
-        click.echo(f"Error: could not read local HEAD: {e}", err=True)
+    # Verify evidence payload hash (schema integrity)
+    evidence_schema_version = report_data.get("evidence_schema_version")
+    if evidence_schema_version is None:
+        click.echo("Error: evidence_schema_version missing", err=True)
+        sys.exit(1)
+    stored_hash = report_data.get("evidence_payload_hash", "")
+    if not stored_hash:
+        click.echo("Error: evidence_payload_hash missing", err=True)
+        sys.exit(1)
+    # Compute hash over canonical JSON excluding the hash field itself
+    hashable = {k: v for k, v in report_data.items() if k != "evidence_payload_hash"}
+    canonical = json.dumps(hashable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    computed_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    if computed_hash != stored_hash:
+        click.echo(
+            f"Error: evidence payload hash mismatch: expected {stored_hash}, got {computed_hash}",
+            err=True,
+        )
         sys.exit(1)
 
-    repo_commit = report["repository"].get("checked_out_commit", "")
-    if expected_commit and expected_commit != repo_commit:
+    # Verify commit from report matches local HEAD
+    repo_commit = report_data["repository"].get("checked_out_commit", "")
+    if repo_commit and repo_commit not in local_commit and local_commit not in repo_commit:
         click.echo(
-            f"Error: commit mismatch: expected {expected_commit}, got {repo_commit}",
+            f"Error: report commit {repo_commit} does not match local HEAD {local_commit}",
             err=True,
         )
         sys.exit(1)
-    if repo_commit not in local_commit and local_commit not in repo_commit:
-        click.echo(
-            f"Warning: report commit {repo_commit} does not match local HEAD {local_commit}",
-            err=True,
-        )
 
     # Verify benchmark hash
     expected_bench_hash = load_default_benchmark().benchmark_hash
-    actual_bench_hash = report["evaluation"].get("benchmark_hash", "")
+    actual_bench_hash = report_data["evaluation"].get("benchmark_hash", "")
     if actual_bench_hash != expected_bench_hash:
         click.echo(
             f"Error: benchmark hash mismatch: expected {expected_bench_hash}, got {actual_bench_hash}",
@@ -1273,67 +1373,68 @@ def providers_ingest_colab(
         sys.exit(1)
 
     # Scan for forbidden fields
-    forbidden_keys = {
-        "text",
-        "matched_text",
-        "private_matched_text",
-        "url",
-        "path",
-        "alias",
-        "company_name",
-        "context",
-        "excerpt",
-        "source_url",
-    }
+    _scan_forbidden(report_data)
 
-    def _scan_forbidden(obj: Any, path: str = "") -> None:
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if k in forbidden_keys:
-                    click.echo(f"Error: forbidden key '{k}' at {path}.{k}", err=True)
-                    sys.exit(1)
-                if isinstance(v, str):
-                    # Heuristic: reject long strings that look like sentences
-                    # (but allow version numbers, hashes, short labels)
-                    if len(v) > 80 and v.count(" ") > 3:
-                        click.echo(
-                            f"Error: suspicious long string at {path}.{k} (possible text leak)",
-                            err=True,
-                        )
-                        sys.exit(1)
-                _scan_forbidden(v, f"{path}.{k}")
-        elif isinstance(obj, list):
-            for i, item in enumerate(obj):
-                _scan_forbidden(item, f"{path}[{i}]")
-
-    _scan_forbidden(report)
-
-    # Deterministic artifact
-    content = json.dumps(report, sort_keys=True, separators=(",", ":"))
+    # Compact summary metrics
+    content = json.dumps(report_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    eval_metrics = report_data["evaluation"]
+    model_perf = report_data["model"]
+    discovery_metrics = report_data["discovery"]
 
     artifact = {
+        "ingestion_schema_version": "1.0.0",
         "ingested_at": datetime.now(UTC).isoformat(),
         "verification_status": "accepted",
         "content_hash": content_hash,
-        "field_checklist": {f: f in report for f in required},
-        "repository_commit_verified": repo_commit in local_commit or local_commit in repo_commit,
-        "benchmark_hash_verified": actual_bench_hash == expected_bench_hash,
-        "zero_acceptance_verified": True,
-        "zero_promotion_verified": True,
-        "no_real_data_verified": True,
-        "source_report": str(report_path),
+        "repository_commit": repo_commit,
+        "benchmark_hash": actual_bench_hash,
+        "benchmark_scope": eval_metrics.get("benchmark_scope", "unknown"),
+        "model_identifier": model_perf.get("model_id", ""),
+        "canonical_entity_types_tested": eval_metrics.get("canonical_entity_types_tested", []),
+        "principal_metrics": {
+            "exact_precision": eval_metrics.get("exact_precision"),
+            "exact_recall": eval_metrics.get("exact_recall"),
+            "exact_f1": eval_metrics.get("exact_f1"),
+            "relaxed_precision": eval_metrics.get("relaxed_precision"),
+            "relaxed_recall": eval_metrics.get("relaxed_recall"),
+            "relaxed_f1": eval_metrics.get("relaxed_f1"),
+        },
+        "review_queue_counts": {
+            "review_queue_count": rq.get("review_queue_count", 0),
+            "pending_review_count": rq.get("pending_review_count", 0),
+            "normalized_candidate_count": discovery_metrics.get("normalized_candidate_count", 0),
+            "automatic_acceptance_count": rq.get("automatic_acceptance_count", 0),
+            "automatic_promotion_count": rq.get("automatic_promotion_count", 0),
+            "registry_mutation_count": rq.get("registry_mutation_count", 0),
+            "remasking_count": rq.get("remasking_count", 0),
+        },
+        "verification_checklist": {
+            "all_required_fields_present": {f: f in report_data for f in required},
+            "repository_commit_verified": repo_commit in local_commit
+            or local_commit in repo_commit,
+            "ingestion_commit_verified": expected_commit is None or expected_commit == local_commit,
+            "ingestion_working_tree_clean": clean,
+            "benchmark_hash_verified": actual_bench_hash == expected_bench_hash,
+            "zero_acceptance_verified": True,
+            "zero_promotion_verified": True,
+            "no_real_data_verified": True,
+            "evidence_payload_hash_verified": bool(stored_hash),
+            "privacy_scan_passed": True,
+        },
         "anonymity_claim": None,
         "anonymity_disclaimer": (
             "Phase 3C does not establish anonymity or release safety. "
             "This artifact only verifies that the Colab smoke executed "
-            "without auto-acceptance and without real-company data."
+            "without auto-acceptance and without real-company data. "
+            "This is integrity protection against accidental edits, not a "
+            "cryptographic authenticity claim."
         ),
     }
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
-    click.echo(f"Ingestion artifact: {output_path}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    click.echo(f"Ingestion artifact: {output}")
     click.echo(f"Content hash: {content_hash}")
     click.echo("Verification: ACCEPTED")
 

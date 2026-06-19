@@ -452,7 +452,8 @@ _EVAL_SCRIPT = (
     "            'remasking_count': 0,\n"
     "        },\n"
     "        'normalized_candidate_count': len(scored),\n"
-    "        'duplicate_collapse_count': len(group_map),\n"
+    "        'duplicate_groups': len(group_map),\n"
+    "        'duplicate_candidates_removed': len(all_candidates) - len(scored),\n"
     "    }\n"
     "    with open(output_path, 'w', encoding='utf-8') as f:\n"
     "        json.dump(result, f)\n"
@@ -582,6 +583,8 @@ def _build_evidence_report(
     threshold: float,
 ) -> dict[str, Any]:
     """Build the comprehensive sanitized evidence report (Part 3)."""
+    import hashlib
+
     eval_metrics = model_perf["evaluation_metrics"]
     counters = eval_metrics.get("validation_counters", {})
     total_received = counters.get("total_received", 0)
@@ -603,8 +606,9 @@ def _build_evidence_report(
     full_bench_docs = 5  # load_default_benchmark() has 5 documents
     benchmark_scope = "full" if benchmark_docs >= full_bench_docs else "bounded"
 
-    return {
+    report = {
         "run_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "evidence_schema_version": "1.0.0",
         "environment": {
             "python_version": env_record.get("python"),
             "platform": env_record.get("platform"),
@@ -636,7 +640,8 @@ def _build_evidence_report(
             "valid_candidates": accepted,
             "malformed_output_count": malformed,
             "normalized_candidate_count": model_perf.get("normalized_candidate_count", 0),
-            "duplicate_collapse_count": model_perf.get("duplicate_collapse_count", 0),
+            "duplicate_groups": model_perf.get("duplicate_groups", 0),
+            "duplicate_candidates_removed": model_perf.get("duplicate_candidates_removed", 0),
             "pending_count": model_perf.get("review_queue", {}).get("pending_count", 0),
             "accepted_count": model_perf.get("review_queue", {}).get("accepted_count", 0),
             "rejected_count": model_perf.get("review_queue", {}).get("rejected_count", 0),
@@ -687,6 +692,12 @@ def _build_evidence_report(
             "warnings": [],
         },
     }
+
+    # Compute canonical payload hash (excludes the hash field itself)
+    canonical = json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    report["evidence_payload_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
