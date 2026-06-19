@@ -45,6 +45,7 @@ from fenrix_synthetic.discovery.schemas import (
 class TestFakeProviderModes:
     def test_fixed_mode_returns_candidates(self):
         config = FakeProviderConfig(
+            company_id="TEST-CO-001",
             mode=FakeProviderMode.FIXED,
             fixed_candidates=[
                 {
@@ -71,7 +72,7 @@ class TestFakeProviderModes:
         assert response.provider_candidates[0].private_matched_text == "Acme Corp"
 
     def test_empty_mode_returns_no_candidates(self):
-        config = FakeProviderConfig(mode=FakeProviderMode.EMPTY)
+        config = FakeProviderConfig(company_id="TEST-CO-001", mode=FakeProviderMode.EMPTY)
         provider = FakeEntityDiscoveryProvider(config)
         chunk = DiscoveryChunk(
             chunk_id="chunk-001",
@@ -85,7 +86,9 @@ class TestFakeProviderModes:
         assert len(response.provider_candidates) == 0
 
     def test_provider_failure_raises(self):
-        config = FakeProviderConfig(mode=FakeProviderMode.PROVIDER_FAILURE)
+        config = FakeProviderConfig(
+            company_id="TEST-CO-001", mode=FakeProviderMode.PROVIDER_FAILURE
+        )
         provider = FakeEntityDiscoveryProvider(config)
         chunk = DiscoveryChunk(
             chunk_id="chunk-001",
@@ -99,7 +102,7 @@ class TestFakeProviderModes:
             provider.discover(chunk, labels=["COMPANY"])
 
     def test_timeout_raises(self):
-        config = FakeProviderConfig(mode=FakeProviderMode.TIMEOUT)
+        config = FakeProviderConfig(company_id="TEST-CO-001", mode=FakeProviderMode.TIMEOUT)
         provider = FakeEntityDiscoveryProvider(config)
         chunk = DiscoveryChunk(
             chunk_id="chunk-001",
@@ -113,7 +116,7 @@ class TestFakeProviderModes:
             provider.discover(chunk, labels=["COMPANY"])
 
     def test_malformed_raises(self):
-        config = FakeProviderConfig(mode=FakeProviderMode.MALFORMED)
+        config = FakeProviderConfig(company_id="TEST-CO-001", mode=FakeProviderMode.MALFORMED)
         provider = FakeEntityDiscoveryProvider(config)
         chunk = DiscoveryChunk(
             chunk_id="chunk-001",
@@ -127,12 +130,14 @@ class TestFakeProviderModes:
             provider.discover(chunk, labels=["COMPANY"])
 
     def test_health_check_passes(self):
-        config = FakeProviderConfig()
+        config = FakeProviderConfig(company_id="TEST-CO-001")
         provider = FakeEntityDiscoveryProvider(config)
         assert provider.health_check() is True
 
     def test_health_check_fails_on_provider_failure(self):
-        config = FakeProviderConfig(mode=FakeProviderMode.PROVIDER_FAILURE)
+        config = FakeProviderConfig(
+            company_id="TEST-CO-001", mode=FakeProviderMode.PROVIDER_FAILURE
+        )
         provider = FakeEntityDiscoveryProvider(config)
         assert provider.health_check() is False
 
@@ -197,7 +202,7 @@ class TestCandidateRiskScoring:
     def test_high_confidence_company(self):
         candidate = ProviderCandidate(
             candidate_id="test-001",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corporation Inc.",
             confidence=0.95,
@@ -210,7 +215,7 @@ class TestCandidateRiskScoring:
     def test_low_confidence_misc(self):
         candidate = ProviderCandidate(
             candidate_id="test-002",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="something",
             confidence=0.2,
@@ -223,7 +228,7 @@ class TestCandidateRiskScoring:
     def test_ticker_shape_increases_risk(self):
         candidate = ProviderCandidate(
             candidate_id="test-003",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="NYSE:ABC",
             confidence=0.6,
@@ -236,7 +241,7 @@ class TestCandidateRiskScoring:
     def test_score_bounds(self):
         candidate = ProviderCandidate(
             candidate_id="test-004",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Test",
             confidence=0.5,
@@ -252,7 +257,7 @@ class TestCandidateDeduplication:
         candidates = [
             ProviderCandidate(
                 candidate_id="c1",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -262,7 +267,7 @@ class TestCandidateDeduplication:
             ),
             ProviderCandidate(
                 candidate_id="c2",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -279,7 +284,7 @@ class TestCandidateDeduplication:
         candidates = [
             ProviderCandidate(
                 candidate_id="c1",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -289,7 +294,7 @@ class TestCandidateDeduplication:
             ),
             ProviderCandidate(
                 candidate_id="c2",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -307,7 +312,7 @@ class TestCandidateDeduplication:
         candidates = [
             ProviderCandidate(
                 candidate_id="c1",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -317,7 +322,7 @@ class TestCandidateDeduplication:
             ),
             ProviderCandidate(
                 candidate_id="c2",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -333,10 +338,10 @@ class TestCandidateDeduplication:
 
 class TestReviewQueue:
     def test_add_candidate(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -346,10 +351,10 @@ class TestReviewQueue:
         assert queue.pending_count() == 1
 
     def test_accept_requires_reason(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -360,10 +365,10 @@ class TestReviewQueue:
             queue.accept("c1", "", "COMPANY", "Acme Corp", "Acme", "LITERAL")
 
     def test_accept_updates_status(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -375,10 +380,10 @@ class TestReviewQueue:
         assert queue.pending_count() == 0
 
     def test_reject_requires_reason(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -389,10 +394,10 @@ class TestReviewQueue:
             queue.reject("c1", "")
 
     def test_defer_requires_reason(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -403,10 +408,10 @@ class TestReviewQueue:
             queue.defer("c1", "")
 
     def test_review_records_tracked(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -422,10 +427,10 @@ class TestReviewQueue:
 
 class TestPromotion:
     def test_create_proposals_from_reviews(self):
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -498,7 +503,7 @@ class TestSanitizedReport:
     def test_build_sanitized_report_no_private_text(self):
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -511,7 +516,7 @@ class TestSanitizedReport:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="abc123",
             latency_ms=50.0,
@@ -557,7 +562,7 @@ class TestSanitizedReport:
         candidates = [
             ProviderCandidate(
                 candidate_id=f"candidate-{i}",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 private_matched_text=val,
                 confidence=0.8,
@@ -574,7 +579,7 @@ class TestSanitizedReport:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="abc123",
             latency_ms=50.0,
@@ -621,7 +626,7 @@ class TestSanitizedReport:
         # PROVE: Private artifacts CAN retain integrity hashes (separate from sanitized)
 
         artifact = PrivateDiscoveryArtifact(
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="abc123",
             candidates=candidates,  # Private candidates with matched_text_hash intact
@@ -643,7 +648,7 @@ class TestAggregateCandidates:
     def test_aggregate_from_single_response(self):
         candidate = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -654,7 +659,7 @@ class TestAggregateCandidates:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             chunk_id="chunk-001",
             input_hash="abc",
@@ -668,7 +673,7 @@ class TestAggregateCandidates:
     def test_aggregate_from_multiple_responses(self):
         c1 = ProviderCandidate(
             candidate_id="c1",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Acme Corp",
             confidence=0.8,
@@ -676,7 +681,7 @@ class TestAggregateCandidates:
         )
         c2 = ProviderCandidate(
             candidate_id="c2",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             private_matched_text="Beta Inc",
             confidence=0.7,
@@ -687,7 +692,7 @@ class TestAggregateCandidates:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             chunk_id="chunk-001",
             input_hash="abc",
@@ -699,7 +704,7 @@ class TestAggregateCandidates:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             chunk_id="chunk-002",
             input_hash="def",
@@ -722,6 +727,7 @@ class TestEndToEndFixture:
 
         # Run fake provider discovery
         config = FakeProviderConfig(
+            company_id="TEST-CO-001",
             mode=FakeProviderMode.FIXED,
             fixed_candidates=[
                 {
@@ -762,7 +768,7 @@ class TestEndToEndFixture:
         scored = normalizer.normalize(deduped)
 
         # Review queue
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         for c in scored:
             queue.add_candidate(c)
 
@@ -782,7 +788,7 @@ class TestEndToEndFixture:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="deterministic-test-hash",
             latency_ms=50.0,
@@ -893,7 +899,7 @@ class TestComprehensivePrivacyRegression:
         candidates = [
             ProviderCandidate(
                 candidate_id=f"candidate-{i}",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 private_matched_text=val,
                 confidence=0.8,
@@ -910,7 +916,7 @@ class TestComprehensivePrivacyRegression:
             provider_name="fake",
             model_name="fake-v0",
             model_version="1.0",
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="abc123",
             latency_ms=50.0,
@@ -939,7 +945,7 @@ class TestComprehensivePrivacyRegression:
         from fenrix_synthetic.reporting.coverage import CoverageResult
 
         coverage = CoverageResult(
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             unmasked_by_type={
                 "company": [{"text": "Acme Corp", "start": 0, "end": 9, "confidence": 0.4}]
@@ -994,7 +1000,7 @@ class TestComprehensivePrivacyRegression:
         # ── Check 9: Private artifacts retain integrity hashes ──
 
         artifact = PrivateDiscoveryArtifact(
-            company_id="C001",
+            company_id="TEST-CO-001",
             document_artifact_id="doc-001",
             input_hash="abc123",
             candidates=candidates,
@@ -1018,7 +1024,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id="c-prov-a",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1029,7 +1035,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-prov-b",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1055,7 +1061,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id="c-label-co",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1066,7 +1072,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-label-org",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1091,7 +1097,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id="c-bound-1",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1101,7 +1107,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-bound-2",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=22,
@@ -1128,7 +1134,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id=f"c-dedup-{i}",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1152,7 +1158,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id="c-low",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1161,7 +1167,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-mid",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1170,7 +1176,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-high",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1193,7 +1199,7 @@ class TestDisagreementHandling:
         candidates = [
             ProviderCandidate(
                 candidate_id="c-a",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1202,7 +1208,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-b",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1211,7 +1217,7 @@ class TestDisagreementHandling:
             ),
             ProviderCandidate(
                 candidate_id="c-c",
-                company_id="C001",
+                company_id="TEST-CO-001",
                 document_artifact_id="doc-001",
                 original_start=10,
                 original_end=20,
@@ -1259,7 +1265,7 @@ class TestPromotionRemaskingRescanning:
         from fenrix_synthetic.masking import DeterministicMasker
 
         # Step 1: Create initial registry with one known entity
-        initial_registry = EntityRegistry.create("C001", "reg-initial")
+        initial_registry = EntityRegistry.create("TEST-CO-001", "reg-initial")
         initial_registry.add_entity("ent-known", EntityType.COMPANY, "Known Company")
         initial_registry.add_alias(
             "ali-known", "ent-known", "Known Company", EntityType.COMPANY, MatchPolicy.LITERAL, 100
@@ -1298,6 +1304,7 @@ class TestPromotionRemaskingRescanning:
 
         provider = FakeEntityDiscoveryProvider(
             FakeProviderConfig(
+                company_id="TEST-CO-001",
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=[
                     {
@@ -1330,7 +1337,7 @@ class TestPromotionRemaskingRescanning:
         scored = normalizer.normalize(deduped)
 
         # Step 6: Add to review queue and accept one, reject one
-        queue = ReviewQueue("C001", "doc-001")
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
         for c in scored:
             queue.add_candidate(c)
 
@@ -1389,7 +1396,7 @@ class TestPromotionRemaskingRescanning:
             assert promotion_result.success
 
             # Step 9: Create new registry from promoted data and re-mask
-            new_reg = EntityRegistry.create("C001", "reg-promoted")
+            new_reg = EntityRegistry.create("TEST-CO-001", "reg-promoted")
             # Add the promoted entity (simulating registry update)
             new_reg.add_entity("ent-acme", EntityType.COMPANY, "Acme Corporation")
             new_reg.add_alias(
@@ -1433,7 +1440,7 @@ class TestPromotionRemaskingRescanning:
 
             # Verify artifact lineage
             assert audit_2.document_artifact_id == "doc-001"
-            assert audit_2.company_id == "C001"
+            assert audit_2.company_id == "TEST-CO-001"
             assert len(audit_2.spans) >= len(audit_1.spans)  # More spans due to promoted entity
 
             # Verify checkpoint invalidation would occur (registry hash changed)

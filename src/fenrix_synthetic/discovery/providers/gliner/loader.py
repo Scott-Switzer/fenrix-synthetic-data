@@ -135,7 +135,54 @@ def default_gliner_loader(config: Any) -> Any:
                 f"{config.device!r}: {type(e).__name__}: {e}"
             ) from e
 
-    return model
+    return GlinerFacade(model)
+
+
+class GlinerFacade:
+    """Stable interface around whatever GLiNER.from_pretrained returns.
+
+    gliner==0.2.27 exposes ``predict_entities`` on instances of the
+    concrete subclass returned by ``from_pretrained``, NOT on the
+    ``GLiNER`` class itself. ``hasattr(GLiNER, 'predict_entities')``
+    returns False at class level. This facade gives our adapter a
+    stable surface so the rest of the package does not branch on
+    upstream API churn.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._raw = model
+
+    def predict_entities(
+        self,
+        text: str,
+        labels: list[str],
+        flat_ner: bool = True,
+        threshold: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        target: Any | None = getattr(self._raw, "predict_entities", None)
+        if target is None:
+            target = getattr(self._raw, "predict", None)
+        if target is None:
+            raise GlinerModelInferenceError(
+                f"Loaded GLiNER model does not expose predict_entities or predict. Got: {type(self._raw).__name__}"
+            )
+        try:
+            # The upstream callable is typed as Any by design; the
+            # contract is documented to return ``list[dict[str, Any]]``
+            # at the adapter boundary.
+            return target(text, labels=labels, flat_ner=flat_ner, threshold=threshold)  # type: ignore[no-any-return]
+        except TypeError:
+            return target(text, labels, flat_ner, threshold)  # type: ignore[no-any-return]
+
+    def to(self, device: str) -> GlinerFacade:
+        moved = self._raw.to(device)
+        if moved is not None:
+            self._raw = moved
+        return self
+
+    @property
+    def raw(self) -> Any:
+        return self._raw
 
 
 def compute_config_hash(config: Any) -> str:
