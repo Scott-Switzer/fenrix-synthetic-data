@@ -143,6 +143,23 @@ class TestResidualDiscoveryIntegration:
         texts = [e.text for e in result]
         assert any("Canary" in t for t in texts)
 
+    def test_clean_document_baseline(self):
+        from pathlib import Path
+
+        discoverer = ResidualEntityDiscoverer()
+        doc_path = Path(__file__).parent.parent / "fixtures" / "clean_document.md"
+        text = doc_path.read_text()
+        result = discoverer.discover(text)
+        types = [e.discovery_type for e in result]
+        assert len(result) == 10
+        assert types.count("capitalized_phrase") == 8
+        assert types.count("email") == 1
+        assert types.count("url") == 1
+        for e in result:
+            assert e.confidence in (0.4, 0.6, 0.8, 0.9)
+        starts = [e.start for e in result]
+        assert starts == sorted(starts)
+
     def test_masked_canary_document_no_residual(self):
         from pathlib import Path
 
