@@ -6,6 +6,7 @@ Versioned private identity-atlas schema that supports:
 - deterministic replacement plan compilation
 - coreference preservation
 - provenance for each approved identity item
+- completeness validation by category
 """
 
 from .compiler import (
@@ -23,6 +24,10 @@ from .schemas import (
     IdentitySubType,
     MatchPolicy,
 )
+from .validation import (
+    atlas_completeness_ok,
+    validate_atlas_completeness,
+)
 
 __all__ = [
     "AtlasCategory",
@@ -34,6 +39,8 @@ __all__ = [
     "IdentitySubType",
     "MatchPolicy",
     "ReplacementPlan",
+    "atlas_completeness_ok",
     "compile_atlas",
     "compute_replacement_hash",
+    "validate_atlas_completeness",
 ]

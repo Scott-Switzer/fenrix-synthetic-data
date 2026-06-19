@@ -2003,7 +2003,14 @@ def utility_evaluate(
     "attack_results_path",
     type=click.Path(exists=True, path_type=Path),
     required=True,
-    help="Path to attack results JSON.",
+    help="Path to text attack results JSON.",
+)
+@click.option(
+    "--structured-attack-results",
+    "structured_attack_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to structured attack results JSON (optional).",
 )
 @click.option(
     "--config",
@@ -2023,6 +2030,7 @@ def utility_evaluate(
 def release_assess(
     ctx: click.Context,
     attack_results_path: Path,
+    structured_attack_path: Path | None,
     policy_path: Path,
     output_path: Path,
 ) -> None:
@@ -2039,6 +2047,16 @@ def release_assess(
     with open(policy_path) as f:
         policy = _yaml.safe_load(f) or {}
 
+    # Load structured attack results if provided
+    structured_rank: int = -1
+    if structured_attack_path and structured_attack_path.exists():
+        structured_data = json.loads(structured_attack_path.read_text())
+        for entry in structured_data if isinstance(structured_data, list) else [structured_data]:
+            rank = entry.get("true_source_rank", entry.get("structured_rank", -1))
+            if isinstance(rank, (int, float)) and rank > 0:
+                structured_rank = int(rank)
+                break
+
     def _count_hits(results: list[dict[str, Any]], attack_type: str) -> int:
         for r in results:
             if r.get("attack_type") == attack_type:
@@ -2047,7 +2065,7 @@ def release_assess(
 
     gate = evaluate_release_gate(
         text_attacks_blocked=any(r.get("is_blocked") for r in attack_data.get("results", [])),
-        structured_rank=attack_data.get("structured_rank", -1),
+        structured_rank=structured_rank,
         structured_top_k=10,
         llm_blocked=attack_data.get("llm_blocked", False),
         exact_identity_hits=_count_hits(attack_data.get("results", []), "exact_identity"),
@@ -2091,31 +2109,76 @@ def release_assess(
 
 @cli.command(name="release-export")
 @click.option(
+    "--release-id",
+    "release_id",
+    default="SYNTH_001",
+    help="Release identifier (default: SYNTH_001).",
+)
+@click.option(
     "--output",
     "output_dir",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Output directory for the release dossier.",
+    default=None,
+    help="Output directory for the release dossier. Defaults to FENRIX_PRIVATE_ROOT/exports/SYNTH_001/.",
 )
 @click.option(
-    "--company",
-    "company_id",
-    default="SYNTH_001",
-    help="Release identifier (default: SYNTH_001).",
+    "--allow-repo-export",
+    is_flag=True,
+    default=False,
+    help="EXPLICITLY allow export inside the repository. DANGEROUS. Requires gate PASS and leakage scan.",
 )
 @click.pass_context
 def release_export(
     ctx: click.Context,
-    output_dir: Path,
-    company_id: str,
+    release_id: str,
+    output_dir: Path | None,
+    allow_repo_export: bool,
 ) -> None:
-    """Generate a sanitized release dossier."""
+    """Generate a sanitized release dossier.
 
+    Defaults to FENRIX_PRIVATE_ROOT/exports/SYNTH_001/.
+    Refuses repository-contained output unless --allow-repo-export is supplied.
+    """
+
+    from .boundary import is_in_repo, resolve_private_root
     from .release import generate_dossier, validate_dossier
+
+    # Resolve output directory
+    if output_dir is None:
+        try:
+            private_root = resolve_private_root()
+            output_dir = private_root / "exports" / release_id
+        except Exception:
+            click.echo(
+                "Error: FENRIX_PRIVATE_ROOT not set. Provide --output explicitly.",
+                err=True,
+            )
+            sys.exit(1)
+
+    output_dir = output_dir.resolve()
+
+    # Reject repository export unless explicitly allowed
+    if is_in_repo(output_dir):
+        if not allow_repo_export:
+            click.echo(
+                f"Error: output directory {output_dir} is inside the repository. "
+                "Use --allow-repo-export only if the gate decision is PASS and "
+                "the output has passed a complete leakage scan.",
+                err=True,
+            )
+            sys.exit(1)
+        else:
+            click.echo(
+                "WARNING: Exporting dossier inside the repository. "
+                "This should only be done after a PASS decision and complete leakage scan. "
+                "Prefer exporting to FENRIX_PRIVATE_ROOT/exports/ instead."
+            )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     dossier_root = generate_dossier(
         dossier_root=output_dir,
-        company_id=company_id,
+        company_id=release_id,
     )
 
     valid, issues = validate_dossier(dossier_root)
@@ -2138,6 +2201,165 @@ def boundary_diag(ctx: click.Context) -> None:
 
     diag = redacted_diagnostic_command()
     click.echo(json.dumps(diag, indent=2))
+
+
+@cli.command(name="pilot-run")
+@click.option(
+    "--source-id",
+    default="SRC_001",
+    help="Source company identifier (default: SRC_001).",
+)
+@click.option(
+    "--release-id",
+    default="SYNTH_001",
+    help="Release identifier (default: SYNTH_001).",
+)
+@click.option(
+    "--private-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Private root directory (default: FENRIX_PRIVATE_ROOT env var).",
+)
+@click.option(
+    "--policy",
+    "policy_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("configs/policies/pilot_v1.yaml"),
+    help="Path to release policy YAML.",
+)
+@click.option(
+    "--candidate-universe",
+    "candidate_universe_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to candidate universe JSON.",
+)
+@click.option(
+    "--market-reference",
+    "market_reference_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to market reference data (optional).",
+)
+@click.option(
+    "--sector-reference",
+    "sector_reference_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to sector reference data (optional).",
+)
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Explicit run output root (default: derived from private root).",
+)
+@click.option("--resume/--no-resume", default=False, help="Resume from completed stages.")
+@click.option("--force", is_flag=True, default=False, help="Force rerun even if stages exist.")
+@click.option("--offline/--no-offline", default=True, help="Run offline (no network calls).")
+@click.option(
+    "--enable-llm-attacks",
+    is_flag=True,
+    default=False,
+    help="Enable LLM guessing attacks (requires provider config).",
+)
+@click.option(
+    "--provider-config",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to LLM provider config (optional).",
+)
+@click.option(
+    "--run-id",
+    default="",
+    help="Explicit run ID (default: auto-generated timestamp ID).",
+)
+@click.pass_context
+def pilot_run(
+    ctx: click.Context,
+    source_id: str,
+    release_id: str,
+    private_root: Path | None,
+    policy_path: Path,
+    candidate_universe_path: Path | None,
+    market_reference_path: Path | None,
+    sector_reference_path: Path | None,
+    output_root: Path | None,
+    resume: bool,
+    force: bool,
+    offline: bool,
+    enable_llm_attacks: bool,
+    provider_config: Path | None,
+    run_id: str,
+) -> None:
+    """Run the complete Phase 4 anonymity pilot pipeline.
+
+    Executes all 18 stages from private boundary validation through
+    release dossier export. Supports resume from completed stages.
+    Never writes private values into logs or repository paths.
+
+    Example:
+        fenrix pilot-run --source-id SRC_001 --release-id SYNTH_001
+    """
+    import os
+
+    from .pilot.orchestrator import RunConfig, run_pilot
+
+    # Resolve private root
+    if private_root is None:
+        env_root = os.environ.get("FENRIX_PRIVATE_ROOT", "")
+        if not env_root:
+            click.echo(
+                "Error: FENRIX_PRIVATE_ROOT not set. Provide --private-root.",
+                err=True,
+            )
+            sys.exit(1)
+        private_root = Path(env_root)
+
+    config = RunConfig(
+        source_id=source_id,
+        release_id=release_id,
+        private_root=private_root,
+        policy_path=policy_path,
+        candidate_universe_path=candidate_universe_path,
+        market_reference_path=market_reference_path,
+        sector_reference_path=sector_reference_path,
+        output_root=output_root,
+        resume=resume,
+        force=force,
+        offline=offline,
+        enable_llm_attacks=enable_llm_attacks,
+        provider_config_path=provider_config,
+        run_id=run_id,
+    )
+
+    try:
+        manifest = run_pilot(config)
+    except Exception as e:
+        click.echo(f"Pipeline error: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"\nPipeline complete: {manifest.overall_status}")
+    click.echo(f"  Run ID: {manifest.run_id}")
+    click.echo(f"  Stages: {len(manifest.stages)}")
+    for stage in manifest.stages:
+        marker = (
+            "✓"
+            if stage.status.value == "completed"
+            else "✗"
+            if stage.status.value == "failed"
+            else "○"
+        )
+        click.echo(f"  {marker} {stage.stage.value}: {stage.status.value}")
+        if stage.errors:
+            for err in stage.errors:
+                click.echo(f"      Error: {err}")
+        if stage.warnings:
+            for w in stage.warnings[:3]:
+                click.echo(f"      Warning: {w}")
+
+    if manifest.overall_status == "failed":
+        sys.exit(1)
 
 
 def main() -> None:  # type: ignore[no-any-return]
