@@ -259,14 +259,67 @@ fenrix-synth discover --document /tmp/output.md --audit /tmp/audit.json --output
 
 ### Privacy
 
-Coverage reports use `text_hash` (SHA-256 truncated prefix) instead of original
-text in `unmasked_by_type` to prevent private values from entering sanitized outputs.
+Coverage reports use opaque finding IDs derived from non-private fields
+(document artifact ID, entity type, start/end offsets) instead of plain-text
+hashes. No private entity text, aliases, company names, tickers, domains, or
+plain/truncated hashes of private values appear in sanitized outputs.
 
 ### Limitations
 
 Phase 3A does not establish anonymity or release safety. It provides deterministic
 evidence of coverage gaps. No reviewed real HBAN identity registry exists;
 synthetic C001 results do not prove real HBAN masking effectiveness.
+
+## Phase 3B Core — Reviewed Provider-Neutral Entity Discovery (Current)
+
+Provider-neutral discovery architecture with fake provider for deterministic
+offline testing. Includes review queue, proposal generation, validation,
+promotion, deduplication with disagreement tracking, and sanitized candidate
+summaries with opaque IDs.
+
+Does NOT include: GLiNER adapter, NVIDIA adapter, optional model dependency
+groups, explicit live smoke commands, or provider-specific live tests.
+
+### Key Modules
+
+- `src/fenrix_synthetic/discovery/` - Provider protocol, fake provider, chunking, candidate deduplication, review queue, proposal promotion, sanitized reports
+- `src/fenrix_synthetic/discovery/candidates.py` - `CandidateDeduplicator` with disagreement group tracking, `make_sanitized_summary` with opaque IDs
+- `src/fenrix_synthetic/discovery/review.py` - `ReviewQueue` with accept/reject/defer/duplicate
+- `src/fenrix_synthetic/discovery/promotion.py` - `create_proposals_from_reviews`, `promote_proposal`, `validate_proposal`
+
+### CLI Commands
+
+```bash
+# Run Phase 3B model-assisted entity discovery
+fenrix-synth discover3b --document /tmp/output.md
+
+# Write sanitized report to file
+fenrix-synth discover3b --document /tmp/output.md --output /tmp/discovery_report.json
+```
+
+### Privacy Design
+
+- **Sanitized outputs** (Phase 3A coverage reports, Phase 3B candidate summaries, sanitized discovery reports) use opaque IDs derived from non-private fields only
+- **No plain hashes of private text** appear in any sanitized output
+- **Private artifacts** (`ProviderCandidate`, `PrivateDiscoveryArtifact`, `MaskingAudit`) may retain `matched_text_hash` for internal integrity
+- **Two opaque ID schemes** (separate namespaces — not cross-referencable):
+  - Phase 3A coverage: `opaque:v2:{doc_id}:{entity_type}:{start}:{end}`
+  - Phase 3B discovery: `opaque:{candidate_id}`
+
+### Deferred to Phase 3C
+
+- GLiNER adapter
+- NVIDIA adapter
+- Optional model dependency groups
+- Explicit live smoke commands
+- Provider-specific live tests
+
+### Limitations
+
+Phase 3B Core does not establish anonymity or release safety. It provides a
+reviewed pipeline for provider-neutral entity discovery with deterministic
+offline testing. No real model execution exists — only the fake provider.
+No reviewed real HBAN identity registry exists.
 
 ## Milestone 1 - HBAN Extraction (Complete)
 

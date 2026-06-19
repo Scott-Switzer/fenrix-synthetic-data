@@ -839,6 +839,124 @@ def discover(document_path: Path, audit_path: Path | None, output_path: Path | N
             click.echo(f"    {dtype}: {count}")
 
 
+@cli.command()
+@click.option(
+    "--document", "document_path", type=click.Path(exists=True, path_type=Path), required=True
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    help="Output path for Phase 3B discovery results JSON",
+)
+@click.pass_context
+def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None) -> None:
+    """Run model-assisted entity discovery (Phase 3B).
+
+    Uses the fake provider to discover entities, then runs
+    deduplication and risk scoring.
+    """
+    from .discovery import (
+        CandidateDeduplicator,
+        CandidateNormalizer,
+        ChunkingConfig,
+        FakeEntityDiscoveryProvider,
+        FakeProviderConfig,
+        FakeProviderMode,
+        TextChunker,
+        aggregate_provider_candidates,
+        build_sanitized_report,
+        make_sanitized_summary,
+    )
+    from .storage import hash_string
+
+    text = document_path.read_text()
+    doc_id = document_path.stem
+
+    # Chunk the document
+    chunker = TextChunker(ChunkingConfig(max_chars=500, overlap_chars=50))
+    chunks = chunker.chunk(text, doc_id)
+    click.echo(f"Phase 3B discovery on {document_path.name}:")
+    click.echo(f"  Document length: {len(text)} chars")
+    click.echo(f"  Chunks: {len(chunks)}")
+
+    # Run discovery with fake provider
+    provider = FakeEntityDiscoveryProvider(
+        FakeProviderConfig(
+            mode=FakeProviderMode.FIXED,
+            fixed_candidates=[
+                {
+                    "text": "Acme Corporation",
+                    "start": 0,
+                    "end": 16,
+                    "entity_type": "COMPANY",
+                    "label": "COMPANY",
+                    "confidence": 0.85,
+                },
+                {
+                    "text": "Jane Smith",
+                    "start": 50,
+                    "end": 60,
+                    "entity_type": "PERSON",
+                    "label": "PERSON",
+                    "confidence": 0.75,
+                },
+            ],
+        )
+    )
+
+    responses = []
+    for chunk in chunks:
+        response = provider.discover(chunk, labels=["COMPANY", "PERSON", "PRODUCT"])
+        responses.append(response)
+
+    all_candidates = aggregate_provider_candidates(responses)
+    click.echo(f"  Provider candidates: {len(all_candidates)}")
+
+    # Deduplicate and score
+    deduplicator = CandidateDeduplicator()
+    deduped, group_map = deduplicator.deduplicate(all_candidates)
+    click.echo(f"  After deduplication: {len(deduped)}")
+
+    normalizer = CandidateNormalizer()
+    scored = normalizer.normalize(deduped)
+
+    # Build sanitized summaries (no private text exposed)
+    summaries = make_sanitized_summary(scored, group_map)
+    for s in summaries:
+        dup_info = ""
+        if s.duplicate_group_id and s.provider_agreement_count > 1:
+            dup_info = f" (grp={s.duplicate_group_id[:8]}...)"
+        click.echo(
+            f"    [{s.risk_band}] {s.proposed_entity_type} conf={s.confidence:.2f} id={s.opaque_id}...{dup_info}"
+        )
+
+    # Build sanitized report
+    report = build_sanitized_report(
+        candidates=scored,
+        provider_name=provider.provider_name,
+        model_name=provider.model_name,
+        model_version=provider.model_version,
+        company_id="C001",
+        document_artifact_id=doc_id,
+        input_hash=hash_string(text),
+        latency_ms=50.0,
+        token_count=100,
+        warnings=[],
+        duplicate_groups=len(group_map),
+    )
+
+    click.echo(f"  Total scored: {report.total_candidates}")
+    click.echo(f"  By risk band: {report.candidates_by_band}")
+
+    if output_path:
+        import orjson as _orjson
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(_orjson.dumps(report.to_dict(), option=_orjson.OPT_INDENT_2))
+        click.echo(f"  Written to: {output_path}")
+
+
 def main() -> None:
     """Main entry point."""
     cli()

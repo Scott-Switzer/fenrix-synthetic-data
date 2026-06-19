@@ -903,15 +903,35 @@ Deliver:
 * Pattern-based removal
 * Canary and mutation tests
 
-### Phase 3 — Entity discovery and reconstruction
+### Phase 3A — Residual discovery and coverage reporting
 
 Deliver:
 
-* Local entity model interface
-* Targeted NVIDIA escalation
-* Residual entity review
-* Reconstructed document
-* Coverage report
+* Pattern-based deterministic residual entity discovery
+* Coverage reporting with opaque finding IDs
+* Deterministic offline tests
+* No model dependencies
+
+### Phase 3B Core — Reviewed provider-neutral entity discovery
+
+Deliver:
+
+* Provider abstraction with fake provider for deterministic offline testing
+* Document chunking with configurable overlap
+* Provider candidate aggregation, deduplication, and risk scoring
+* Disagreement tracking (provider, label, boundary) with group_map
+* Review queue with accept/reject/defer/duplicate
+* Proposal generation, validation, and promotion
+* Sanitized candidate summaries with opaque IDs (no private text)
+* Promotion → remasking → rescanning workflow
+
+Deferred to Phase 3C:
+
+* GLiNER adapter
+* NVIDIA adapter
+* Optional model dependency groups
+* Explicit live smoke commands
+* Provider-specific live tests
 
 ### Phase 4 — Re-identification attacks
 
