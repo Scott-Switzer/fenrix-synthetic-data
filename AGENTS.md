@@ -9,7 +9,7 @@ The current vertical slice is HBAN.
 
 ## Current Milestone
 
-Only complete:
+Completed:
 
 1. Repository and Python package scaffold
 2. Source-reuse inventory
@@ -18,7 +18,14 @@ Only complete:
 5. HBAN SEC filing discovery, download, extraction, and checkpointing
 6. Tests and an offline fixture-based demonstration
 
-Do not proceed into masking or attacks until this milestone passes.
+Phase 2 in progress:
+
+7. Private identity registry and alias management
+8. Deterministic matching and pseudonym replacement
+9. Overlap resolution and conflict handling
+10. Metadata sanitization and report separation
+11. Independent exact residual scanning
+12. Canary and mutation testing fixtures
 
 ## Non-Negotiable Scope
 

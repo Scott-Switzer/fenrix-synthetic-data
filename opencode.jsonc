@@ -47,7 +47,8 @@
       "git checkout*": "ask",
       "git add*": "ask",
       "git commit*": "ask",
-      "git push*": "deny",
+      "git push*": "ask",
+      "gh pr create*": "ask",
 
       "python *": "allow",
       "python3 *": "allow",
@@ -60,7 +61,23 @@
       "sudo *": "deny"
     },
 
-    "external_directory": "ask",
+    "external_directory": {
+      "~/Documents/Financial System/**": "allow",
+      "~/Desktop/zion-terminal/**": "allow",
+      "~/Desktop/FIN496CAPSTONE/**": "allow",
+      "~/Documents/hermes-obsidian-orchestrator/**": "allow",
+      "~/Desktop/AI-ROUTER/**": "allow"
+    },
+
+    "edit": {
+      "*": "allow",
+      "~/Documents/Financial System/**": "deny",
+      "~/Desktop/zion-terminal/**": "deny",
+      "~/Desktop/FIN496CAPSTONE/**": "deny",
+      "~/Documents/hermes-obsidian-orchestrator/**": "deny",
+      "~/Desktop/AI-ROUTER/**": "deny"
+    },
+
     "webfetch": "ask",
     "websearch": "allow"
   }

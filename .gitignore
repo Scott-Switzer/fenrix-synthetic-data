@@ -1,0 +1,108 @@
+# Generated data directories (private, never commit)
+data/
+!data/.gitkeep
+
+# Private configuration (contains source-company mappings, secrets)
+configs/company.yaml
+configs/*.local.yaml
+
+# Environment files (secrets)
+.env
+.env.*
+*.env
+*.key
+*.secret
+*.pem
+*.p12
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Lock files (not using pipenv/poetry/uv lock)
+Pipfile.lock
+poetry.lock
+uv.lock
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# Type checking
+*.pyi
+stubs/
+
+# Logs
+*.log
+logs/
+
+# Model weights and embeddings (never commit)
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+embeddings/
+models/
+
+# Generated artifacts (never commit)
+artifacts/
+output/
+*.parquet
+*.jsonl
+*.json
+!tests/fixtures/**/*.json
+
+# Checkpoints (can be regenerated)
+.checkpoints/
+
+# Notebooks (not used in M0/M1)
+notebooks/
+*.ipynb
+
+# Private identity registries (never commit)
+private/
+private/**/*
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini

@@ -1,0 +1,16 @@
+{
+  "cik": 1234567,
+  "name": "Synthetic Test Corp (SYNTHETIC FIXTURE)",
+  "tickers": ["SYNTH"],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0001234567-24-000001"],
+      "filingDate": ["2024-11-15"],
+      "reportDate": ["2024-09-30"],
+      "form": ["10-K"],
+      "primaryDocument": ["synth-20240930.htm"],
+      "primaryDocDescription": ["Annual report for fiscal year ending 2024-09-30"]
+    },
+    "files": []
+  }
+}
