@@ -106,13 +106,24 @@ Do not copy an entire subsystem when a small utility is sufficient.
 
 Generated data directories must be ignored by Git.
 
+## CI Preservation
+
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on PRs targeting `main`.
+
+Future agents must:
+
+- Preserve CI in working order
+- Run the same checks locally before pushing: `ruff format --check`, `ruff check`, `mypy src/fenrix_synthetic`, `pytest`
+- Not bypass or weaken required checks
+- Report CI status before merging
+
 ## Required Verification
 
 Before declaring work complete:
 
-1. Run formatting and linting
-2. Run type checking
-3. Run the complete test suite
+1. Run formatting and linting (`ruff format --check`, `ruff check`)
+2. Run type checking (`mypy src/fenrix_synthetic`)
+3. Run the complete test suite (`pytest`)
 4. Run the offline HBAN fixture demonstration
 5. Inspect `git diff`
 6. Report exact commands and outcomes

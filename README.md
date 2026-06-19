@@ -183,6 +183,18 @@ HBAN entities and aliases. Do not claim HBAN masking is complete.
 
 ## Verification Commands
 
+The CI workflow runs these commands automatically. Run them locally before pushing:
+
+```bash
+# Quality
+ruff format --check && ruff check && mypy src/fenrix_synthetic
+
+# Tests
+pytest
+```
+
+### Full Verification
+
 Run these commands to verify the implementation:
 
 ```bash
@@ -338,6 +350,33 @@ No reviewed real HBAN identity registry exists.
 - Independent exact residual scanning
 - Canary and mutation testing fixtures
 - Synthetic end-to-end demonstration
+
+## CI
+
+GitHub Actions runs on PRs targeting `main` and on pushes to `main`:
+
+| Job | Checks |
+|-----|--------|
+| **Quality** | `ruff format --check`, `ruff check`, `mypy src/fenrix_synthetic` |
+| **Tests** | `pytest --collect-only`, full `pytest` suite |
+
+The CI requires no private company registry, no network access, and no model
+downloads. Model adapters (GLiNER, NVIDIA) remain deferred to Phase 3C.
+Optional dependencies are not installed.
+
+To reproduce locally:
+
+```bash
+pip install -e ".[dev]"
+ruff format --check && ruff check && mypy src/fenrix_synthetic
+pytest
+```
+
+### Branch Protection
+
+Recommended required checks for `main`:
+- `Quality (ruff + mypy)`
+- `Tests (pytest)`
 
 ## Security
 
