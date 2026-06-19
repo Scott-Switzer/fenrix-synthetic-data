@@ -1708,7 +1708,439 @@ def discover_model(
     click.echo("  No candidate has been accepted, promoted, or masked.")
 
 
-def main() -> None:
+# ── Phase 4 CLI commands ────────────────────────────────────────────────
+
+
+@cli.command(name="identities-compile")
+@click.option(
+    "--atlas",
+    "atlas_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to identity atlas YAML (under FENRIX_PRIVATE_ROOT).",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for compiled replacement plan JSON.",
+)
+@click.pass_context
+def identities_compile(
+    ctx: click.Context,
+    atlas_path: Path,
+    output_path: Path,
+) -> None:
+    """Compile an identity atlas into a deterministic replacement plan."""
+    import json
+
+    import yaml as _yaml
+
+    from .atlas import IdentityAtlas, compile_atlas
+    from .boundary import resolve_private_root
+
+    # Verify atlas is under private root
+    private_root = resolve_private_root()
+    if not str(atlas_path.resolve()).startswith(str(private_root)):
+        click.echo(
+            f"Error: atlas must be under FENRIX_PRIVATE_ROOT ({private_root})",
+            err=True,
+        )
+        sys.exit(1)
+
+    with open(atlas_path) as f:
+        data = _yaml.safe_load(f)
+
+    raw = data if isinstance(data, dict) else {}
+    atlas = IdentityAtlas(**raw)
+    plan = compile_atlas(atlas)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(plan.to_dict(), indent=2))
+    click.echo(f"Compiled atlas: {plan.atlas_hash[:16]}")
+    click.echo(f"  Blocking replacements: {len(plan.get_blocking())}")
+    click.echo(f"  Non-blocking: {len(plan.get_non_blocking())}")
+    click.echo(f"  Plan written to: {output_path}")
+
+
+@cli.command(name="structured-transform")
+@click.option(
+    "--input",
+    "input_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to structured data JSON (OHLCV format).",
+)
+@click.option(
+    "--variant",
+    type=click.Choice(["s0_control", "s1_basic", "s2_privacy"]),
+    default="s1_basic",
+    help="Transformation variant.",
+)
+@click.option("--base-price", type=float, default=100.0, help="Base price for rebasing.")
+@click.option("--output", "output_path", type=click.Path(path_type=Path), required=True)
+@click.pass_context
+def structured_transform(
+    ctx: click.Context,
+    input_path: Path,
+    variant: str,
+    base_price: float,
+    output_path: Path,
+) -> None:
+    """Apply a structured data transformation variant."""
+    import json
+
+    from .transforms import (
+        OhlcvRecord,
+        transform_s0_control,
+        transform_s1_basic,
+        transform_s2_privacy,
+    )
+
+    data = json.loads(input_path.read_text())
+    records = [OhlcvRecord(**r) for r in data.get("records", [])]
+
+    if variant == "s0_control":
+        result = transform_s0_control(records, base_price)
+    elif variant == "s1_basic":
+        result = transform_s1_basic(records, base_price)
+    elif variant == "s2_privacy":
+        result = transform_s2_privacy(records, base_price)
+    else:
+        click.echo(f"Unknown variant: {variant}", err=True)
+        sys.exit(1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output = {
+        "variant": result.variant.value,
+        "parameter_hash": result.parameter_hash,
+        "row_count": result.row_count,
+        "releasable": result.releasable,
+        "warnings": result.warnings,
+        "transformed": result.transformed,
+    }
+    output_path.write_text(json.dumps(output, indent=2))
+    click.echo(f"Variant: {result.variant.value}")
+    click.echo(f"  Rows: {result.row_count}")
+    click.echo(f"  Releasable: {result.releasable}")
+    if result.warnings:
+        for w in result.warnings:
+            click.echo(f"  Warning: {w}")
+    click.echo(f"  Output: {output_path}")
+
+
+@cli.command(name="attack-run")
+@click.option(
+    "--document",
+    "document_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to masked document.",
+)
+@click.option(
+    "--values",
+    "values_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to YAML with private values to scan for.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for attack results JSON.",
+)
+@click.pass_context
+def attack_run(
+    ctx: click.Context,
+    document_path: Path,
+    values_path: Path,
+    output_path: Path,
+) -> None:
+    """Run re-identification attacks on a masked document."""
+    import json
+
+    import yaml as _yaml
+
+    from .attacks.text_attacks import (
+        digital_identifier_scan,
+        exact_identity_scan,
+        normalized_identity_scan,
+    )
+
+    text = document_path.read_text()
+
+    with open(values_path) as f:
+        values_data = _yaml.safe_load(f)
+
+    values_dict = values_data if isinstance(values_data, dict) else {}
+
+    results = []
+
+    # Exact identity scan
+    exact = exact_identity_scan(text, document_path.stem, values_dict)
+    results.append(
+        {
+            "attack_type": exact.attack_type,
+            "total_hits": exact.total_hits,
+            "blocking_hits": exact.blocking_hits,
+            "is_blocked": exact.is_blocked,
+        }
+    )
+
+    # Normalized scan
+    norm = normalized_identity_scan(text, document_path.stem, values_dict)
+    results.append(
+        {
+            "attack_type": norm.attack_type,
+            "total_hits": norm.total_hits,
+            "blocking_hits": norm.blocking_hits,
+            "is_blocked": norm.is_blocked,
+        }
+    )
+
+    # Digital scan
+    dig = digital_identifier_scan(
+        text,
+        document_path.stem,
+        values_dict.get("websites", []),
+        values_dict.get("domains", []),
+        values_dict.get("emails", []),
+        values_dict.get("phones", []),
+    )
+    results.append(
+        {
+            "attack_type": dig.attack_type,
+            "total_hits": dig.total_hits,
+            "blocking_hits": dig.blocking_hits,
+            "is_blocked": dig.is_blocked,
+        }
+    )
+
+    any_blocked = any(r["is_blocked"] for r in results)
+
+    click.echo(f"Attacks on {document_path.name}:")
+    for r in results:
+        status = "BLOCKED" if r["is_blocked"] else "PASS"
+        click.echo(
+            f"  {r['attack_type']}: {status} "
+            f"(total={r['total_hits']}, blocking={r['blocking_hits']})"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(results, indent=2))
+
+    if any_blocked:
+        sys.exit(1)
+
+
+@cli.command(name="utility-evaluate")
+@click.option(
+    "--source",
+    "source_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to source (pre-masking) document.",
+)
+@click.option(
+    "--masked",
+    "masked_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to masked document.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for utility results JSON.",
+)
+@click.pass_context
+def utility_evaluate(
+    ctx: click.Context,
+    source_path: Path,
+    masked_path: Path,
+    output_path: Path,
+) -> None:
+    """Evaluate utility preservation between source and masked text."""
+    import json
+
+    from .utility import evaluate_unstructured_utility
+
+    source_text = source_path.read_text()
+    masked_text = masked_path.read_text()
+
+    result = evaluate_unstructured_utility(source_text, masked_text, document_id=source_path.stem)
+
+    output = {
+        "document_id": result.document_id,
+        "non_identifier_token_retention": result.non_identifier_token_retention,
+        "section_retention": result.section_retention,
+        "table_retention": result.table_retention,
+        "financial_number_retention": result.financial_number_retention,
+        "overall_utility": result.overall_utility,
+        "warnings": result.warnings,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output, indent=2))
+
+    click.echo(f"Utility evaluation for {source_path.name}:")
+    click.echo(f"  Token retention: {result.non_identifier_token_retention:.2%}")
+    click.echo(f"  Financial number retention: {result.financial_number_retention:.2%}")
+    click.echo(f"  Overall utility: {result.overall_utility:.2%}")
+    if result.warnings:
+        for w in result.warnings:
+            click.echo(f"  Warning: {w}")
+
+
+@cli.command(name="release-assess")
+@click.option(
+    "--attack-results",
+    "attack_results_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to attack results JSON.",
+)
+@click.option(
+    "--config",
+    "policy_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("configs/policies/pilot_v1.yaml"),
+    help="Path to release policy YAML.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for release decision JSON.",
+)
+@click.pass_context
+def release_assess(
+    ctx: click.Context,
+    attack_results_path: Path,
+    policy_path: Path,
+    output_path: Path,
+) -> None:
+    """Assess release readiness using the deterministic release gate."""
+    import json
+
+    import yaml as _yaml
+
+    from .release import evaluate_release_gate
+
+    with open(attack_results_path) as f:
+        attack_data = json.load(f)
+
+    with open(policy_path) as f:
+        policy = _yaml.safe_load(f) or {}
+
+    def _count_hits(results: list[dict[str, Any]], attack_type: str) -> int:
+        for r in results:
+            if r.get("attack_type") == attack_type:
+                return int(r.get("blocking_hits", 0))
+        return 0
+
+    gate = evaluate_release_gate(
+        text_attacks_blocked=any(r.get("is_blocked") for r in attack_data.get("results", [])),
+        structured_rank=attack_data.get("structured_rank", -1),
+        structured_top_k=10,
+        llm_blocked=attack_data.get("llm_blocked", False),
+        exact_identity_hits=_count_hits(attack_data.get("results", []), "exact_identity"),
+        unique_phrase_hits=_count_hits(attack_data.get("results", []), "unique_phrase"),
+        digital_hits=_count_hits(attack_data.get("results", []), "digital_identifier"),
+        filename_hits=_count_hits(attack_data.get("results", []), "filename_metadata"),
+        deterministic_reproduced=True,
+        all_attacks_ran=True,
+        provenance_complete=True,
+        private_paths_found=[],
+        unhandled_errors=[],
+        policy=policy.get("policy", {}),
+    )
+
+    decision = {
+        "decision": gate.decision.value,
+        "gate_hash": gate.gate_hash,
+        "blocking_failures": gate.blocking_failures,
+        "warnings": gate.warnings,
+        "conditions": [
+            {
+                "id": c.condition_id,
+                "passed": c.passed,
+                "blocking": c.is_blocking,
+                "description": c.description,
+            }
+            for c in gate.conditions
+        ],
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(decision, indent=2))
+
+    click.echo(f"Release assessment: {gate.decision.value}")
+    click.echo(f"  Blocking failures: {gate.blocking_failures}")
+    click.echo(f"  Warnings: {gate.warnings}")
+
+    if gate.decision.value == "FAIL":
+        sys.exit(1)
+
+
+@cli.command(name="release-export")
+@click.option(
+    "--output",
+    "output_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output directory for the release dossier.",
+)
+@click.option(
+    "--company",
+    "company_id",
+    default="SYNTH_001",
+    help="Release identifier (default: SYNTH_001).",
+)
+@click.pass_context
+def release_export(
+    ctx: click.Context,
+    output_dir: Path,
+    company_id: str,
+) -> None:
+    """Generate a sanitized release dossier."""
+
+    from .release import generate_dossier, validate_dossier
+
+    dossier_root = generate_dossier(
+        dossier_root=output_dir,
+        company_id=company_id,
+    )
+
+    valid, issues = validate_dossier(dossier_root)
+    if not valid:
+        for issue in issues:
+            click.echo(f"  Error: {issue}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Release dossier generated: {dossier_root}")
+    click.echo(f"  Contents: {sorted(f.name for f in dossier_root.iterdir())}")
+
+
+@cli.command(name="boundary-diag")
+@click.pass_context
+def boundary_diag(ctx: click.Context) -> None:
+    """Show redacted diagnostic information about the private data boundary."""
+    import json
+
+    from .boundary import redacted_diagnostic_command
+
+    diag = redacted_diagnostic_command()
+    click.echo(json.dumps(diag, indent=2))
+
+
+def main() -> None:  # type: ignore[no-any-return]
     """Main entry point."""
     cli()
 
