@@ -11,6 +11,7 @@ from .deterministic import (
     is_unsafe_short_token,
     normalize_text,
 )
+from .discovery import DiscoveredEntity, DiscoveryResult, ResidualEntityDiscoverer
 from .overlap import OverlapResolver
 from .pipeline import DeterministicMasker
 from .reconstruction import DocumentReconstructor
@@ -20,12 +21,15 @@ from .schemas import ConflictStatus, MaskingAudit, MaskingSummary, MatchResult
 __all__ = [
     "ConflictStatus",
     "DeterministicMasker",
+    "DiscoveredEntity",
+    "DiscoveryResult",
     "DocumentReconstructor",
     "MatchEntry",
     "MaskingAudit",
     "MaskingSummary",
     "MatchResult",
     "OverlapResolver",
+    "ResidualEntityDiscoverer",
     "build_accession_dashed_pattern",
     "build_cik_padded_pattern",
     "build_domain_url_pattern",

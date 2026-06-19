@@ -139,7 +139,7 @@ fenrix-synthetic-data/
 └── README.md
 ```
 
-## Phase 2 - Identity Registry and Deterministic Masking (In Progress)
+## Phase 2 - Identity Registry and Deterministic Masking (Complete)
 
 Private identity registry with typed canonical entities and aliases.
 Deterministic regex-based matching with offset tracking, overlap resolution,
@@ -227,7 +227,46 @@ pytest tests/unit/test_identity_registry.py tests/unit/test_deterministic_maskin
 
 # 14. Phase 2 integration (masking pipeline)
 pytest tests/integration/test_masking_pipeline.py
+
+# 15. Phase 3A discovery and coverage tests
+pytest tests/unit/test_residual_discovery.py tests/unit/test_coverage_report.py
 ```
+
+## Phase 3A - Residual Discovery and Coverage Reporting
+
+Pattern-based deterministic residual entity discovery. Identifies potential
+entities that survived the deterministic masking pipeline without model dependency.
+Does NOT include: GLiNER, NVIDIA provider, review queue, registry promotion,
+remasking, or post-promotion rescanning.
+
+### Key Modules
+
+- `src/fenrix_synthetic/masking/discovery.py` - `ResidualEntityDiscoverer` for pattern-based residual scanning
+- `src/fenrix_synthetic/reporting/coverage.py` - `CoverageReport` and `CoverageResult`
+
+### CLI Commands
+
+```bash
+# Run residual discovery on a document
+fenrix-synth discover --document /tmp/output.md
+
+# Run discovery with masking audit for coverage statistics
+fenrix-synth discover --document /tmp/output.md --audit /tmp/audit.json
+
+# Write coverage report to file
+fenrix-synth discover --document /tmp/output.md --audit /tmp/audit.json --output /tmp/coverage.json
+```
+
+### Privacy
+
+Coverage reports use `text_hash` (SHA-256 truncated prefix) instead of original
+text in `unmasked_by_type` to prevent private values from entering sanitized outputs.
+
+### Limitations
+
+Phase 3A does not establish anonymity or release safety. It provides deterministic
+evidence of coverage gaps. No reviewed real HBAN identity registry exists;
+synthetic C001 results do not prove real HBAN masking effectiveness.
 
 ## Milestone 1 - HBAN Extraction (Complete)
 
@@ -238,7 +277,7 @@ pytest tests/integration/test_masking_pipeline.py
 - Checkpoint resume demonstration
 - Full offline fixture-based demo
 
-## Milestone 2 - Identity Registry (In Progress)
+## Milestone 2 - Identity Registry (Complete)
 
 - Phased identity registry with typed schemas
 - Deterministic regex matching with offset tracking
