@@ -163,6 +163,8 @@ class EntityRegistry:
     def config_hash(self) -> str:
         import hashlib
 
+        import orjson
+
         sorted_entities = sorted(self.entities.values(), key=lambda e: e.entity_id)
         sorted_aliases = sorted(self.aliases.values(), key=lambda a: a.alias_id)
         data = {
@@ -187,5 +189,5 @@ class EntityRegistry:
                 for a in sorted_aliases
             ],
         }
-        raw = str(sorted(data.items()))
-        return hashlib.sha256(raw.encode()).hexdigest()
+        raw = orjson.dumps(data, option=orjson.OPT_SORT_KEYS)
+        return hashlib.sha256(raw).hexdigest()

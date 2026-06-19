@@ -291,17 +291,20 @@ class TestMaskingPipeline:
         orig = socket.socket
         blocked: list[str] = []
 
-        class BlockSocket:
+        class BlockSocket(socket.socket):
             def __init__(self, *args, **kwargs):
-                pass
+                super().__init__(socket.AF_INET, socket.SOCK_STREAM)
+                self.close()
 
-            def __getattr__(self, name):
-                def fail(*args, **kwargs):
-                    blocked.append(f"{name}({args}, {kwargs})")
+            def connect(self, *args, **kwargs):
+                blocked.append(f"connect({args}, {kwargs})")
+                raise OSError("Network blocked in test")
 
-                return fail
+            def connect_ex(self, *args, **kwargs):
+                blocked.append(f"connect_ex({args}, {kwargs})")
+                return 1
 
-        socket.socket = BlockSocket  # type: ignore
+        socket.socket = BlockSocket
         try:
             text = "Test content with no network needs"
             reg = EntityRegistry.create("C001", "reg-test-nonet")

@@ -545,8 +545,17 @@ def registry_validate(registry_path: Path, company: str) -> None:
 @click.option(
     "--registry", "registry_path", type=click.Path(exists=True, path_type=Path), required=True
 )
-def registry_inventory(registry_path: Path) -> None:
-    """List entities and aliases in an identity registry."""
+@click.option(
+    "--sanitize/--no-sanitize",
+    default=True,
+    help="Sanitize output to hide private values (default: sanitize)",
+)
+def registry_inventory(registry_path: Path, sanitize: bool) -> None:
+    """List entities and aliases in an identity registry.
+
+    By default, output is sanitized (private values hidden).
+    Use --no-sanitize to see actual values (exercise caution).
+    """
     import yaml as _yaml
 
     with open(registry_path) as f:
@@ -558,15 +567,18 @@ def registry_inventory(registry_path: Path) -> None:
 
     click.echo(f"Entities ({len(entities)}):")
     for ent in entities:
-        click.echo(
-            f"  {ent.get('entity_id')}: {ent.get('entity_type')} = {ent.get('canonical_private_value')}"
-        )
+        value = ent.get("canonical_private_value", "")
+        display = "[PRIVATE]" if sanitize and value else value
+        click.echo(f"  {ent.get('entity_id')}: {ent.get('entity_type')} = {display}")
 
     click.echo(f"\nAliases ({len(aliases)}):")
     for ali in aliases:
-        click.echo(
-            f"  {ali.get('alias_id')}: [{ali.get('match_policy')}] {ali.get('private_alias_value')}"
-        )
+        value = ali.get("private_alias_value", "")
+        display = "[PRIVATE]" if sanitize and value else value
+        click.echo(f"  {ali.get('alias_id')}: [{ali.get('match_policy')}] {display}")
+
+    if sanitize:
+        click.echo("\n(Values hidden with --sanitize; use --no-sanitize to reveal)")
 
 
 @cli.command()
@@ -582,6 +594,13 @@ def registry_inventory(registry_path: Path) -> None:
     "--bronze-artifact",
     required=True,
     help="Bronze artifact ID (e.g., bronze-C001-000123456724000001)",
+)
+@click.option(
+    "--registry",
+    "registry_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to identity registry YAML file",
 )
 @click.option(
     "--masked-output",
@@ -607,11 +626,19 @@ def mask(
     company: str,
     data_root_path: Path,
     bronze_artifact: str,
+    registry_path: Path,
     masked_output: Path,
     audit_output: Path,
     summary_output: Path,
 ) -> None:
-    """Run deterministic masking on a bronze document."""
+    """Run deterministic masking on a bronze document.
+
+    Loads an identity registry from a YAML file and applies deterministic
+    pattern-based matching and pseudonym replacement.
+    """
+    import yaml as _yaml
+
+    from .identity import EntityType, MatchPolicy
     from .identity.entity_registry import EntityRegistry
     from .masking import DeterministicMasker
 
@@ -625,20 +652,59 @@ def mask(
 
     text = text_path.read_text()
 
-    # Create a minimal registry with canary values
-    reg = EntityRegistry.create(company_id=company, registry_id=f"reg-{company}-mask")
-    from ..identity import EntityType, MatchPolicy
+    # Load registry from YAML
+    with open(registry_path) as f:
+        raw = _yaml.safe_load(f)
 
-    reg.add_entity("ent-company", EntityType.COMPANY, "Company", ["bronze"])
-    reg.add_alias(
-        "ali-company", "ent-company", "The Company", EntityType.COMPANY, MatchPolicy.LITERAL, 100
+    reg_data = raw if isinstance(raw, dict) else {}
+    reg_meta = reg_data.get("registry", {})
+    reg = EntityRegistry.create(
+        company_id=company,
+        registry_id=reg_meta.get("registry_id", f"reg-{company}-cli"),
     )
+
+    def _lookup_etype(name: str) -> EntityType:
+        for et in EntityType:
+            if et.value == name:
+                return et
+        return EntityType.COMPANY
+
+    def _lookup_mpolicy(name: str) -> MatchPolicy:
+        for mp in MatchPolicy:
+            if mp.value == name:
+                return mp
+        return MatchPolicy.LITERAL
+
+    entity_map: dict[str, str] = {}
+    for ent in reg_data.get("entities", []):
+        eid = ent.get("entity_id", "")
+        etype = _lookup_etype(ent.get("entity_type", "company"))
+        value = ent.get("canonical_private_value", "")
+        if eid and value:
+            try:
+                reg.add_entity(eid, etype, value, ent.get("source_references"))
+                entity_map[eid] = eid
+            except ValueError:
+                click.echo(f"Warning: duplicate entity '{eid}', skipping", err=True)
+
+    for ali in reg_data.get("aliases", []):
+        aid = ali.get("alias_id", "")
+        eid = ali.get("canonical_entity_id", "")
+        value = ali.get("private_alias_value", "")
+        etype = _lookup_etype(ali.get("entity_type", "company"))
+        mpolicy = _lookup_mpolicy(ali.get("match_policy", "literal"))
+        priority = ali.get("priority", 100)
+        if aid and eid and eid in reg.entities and value:
+            try:
+                reg.add_alias(aid, eid, value, etype, mpolicy, priority)
+            except ValueError:
+                click.echo(f"Warning: duplicate alias '{aid}', skipping", err=True)
 
     masker = DeterministicMasker(reg, document_artifact_id=bronze_artifact)
     config_hash = reg.config_hash()
     masked_text, _sanitized_meta, audit, summary = masker.mask_and_sanitize_metadata(
         text,
-        {"source": bronze_artifact},
+        {"source": bronze_artifact, "registry_id": reg.metadata.registry_id},
         config_hash,
     )
 

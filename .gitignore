@@ -44,6 +44,11 @@ env/
 .venv/
 .env/
 
+# Lock files (not using pipenv/poetry/uv lock)
+Pipfile.lock
+poetry.lock
+uv.lock
+
 # IDE and editor
 .idea/
 .vscode/
