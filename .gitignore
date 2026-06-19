@@ -104,7 +104,10 @@ notebooks/
 private/
 private/**/*
 
+# Sanitized evidence artifacts (never commit — generated on demand)
+evidence/
+
 # OS
 Thumbs.db
 ehthumbs.db
-Desktop.ini
+Desktop.iniScott.zip

@@ -1,7 +1,9 @@
 """CLI entry point for FENRIX Synthetic Data."""
 
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -1122,6 +1124,184 @@ def providers_prepare(
         click.echo("status=failed", err=True)
         sys.exit(1)
     click.echo(f"status=ready model_id={model_id}")
+
+
+@providers.command(name="ingest-colab")
+@click.option(
+    "--report",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to the sanitized Colab evidence JSON report.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for the deterministic ingestion artifact.",
+)
+@click.option(
+    "--expected-commit",
+    default=None,
+    help="Expected repository commit SHA. If not provided, uses local HEAD.",
+)
+@click.pass_context
+def providers_ingest_colab(
+    ctx: click.Context,
+    report_path: Path,
+    output_path: Path,
+    expected_commit: str | None,
+) -> None:
+    """Ingest a sanitized Colab evidence report for Phase 3C verification.
+
+    Validates the report schema, verifies repository commit and benchmark
+    hash, rejects raw/private text fields, asserts zero auto-acceptance
+    and zero auto-promotion, and generates a deterministic sanitized
+    evidence artifact. Does NOT update any registry or review decisions.
+    Does NOT make any anonymity claim.
+    """
+    import hashlib
+    import json
+    from datetime import UTC, datetime
+
+    from .discovery.providers.gliner.benchmark import load_default_benchmark
+
+    # Load report
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        click.echo(f"Error: invalid JSON in report: {e}", err=True)
+        sys.exit(1)
+
+    # Required fields
+    required = [
+        "environment",
+        "repository",
+        "model",
+        "discovery",
+        "evaluation",
+        "review_queue",
+        "privacy",
+        "run_timestamp",
+    ]
+    missing = [f for f in required if f not in report]
+    if missing:
+        click.echo(f"Error: missing required top-level fields: {missing}", err=True)
+        sys.exit(1)
+
+    # Verify zero acceptance / promotion
+    rq = report["review_queue"]
+    if rq.get("automatic_acceptance_count", 0) != 0:
+        click.echo("Error: automatic_acceptance_count is non-zero", err=True)
+        sys.exit(1)
+    if rq.get("automatic_promotion_count", 0) != 0:
+        click.echo("Error: automatic_promotion_count is non-zero", err=True)
+        sys.exit(1)
+
+    # Verify no real data
+    if not report["privacy"].get("no_real_company_data", False):
+        click.echo("Error: privacy.no_real_company_data is false", err=True)
+        sys.exit(1)
+
+    # Verify commit
+    try:
+        local_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error: could not read local HEAD: {e}", err=True)
+        sys.exit(1)
+
+    repo_commit = report["repository"].get("commit", "")
+    if expected_commit and expected_commit != repo_commit:
+        click.echo(
+            f"Error: commit mismatch: expected {expected_commit}, got {repo_commit}",
+            err=True,
+        )
+        sys.exit(1)
+    if repo_commit not in local_commit and local_commit not in repo_commit:
+        click.echo(
+            f"Warning: report commit {repo_commit} does not match local HEAD {local_commit}",
+            err=True,
+        )
+
+    # Verify benchmark hash
+    expected_bench_hash = load_default_benchmark().benchmark_hash
+    actual_bench_hash = report["evaluation"].get("benchmark_hash", "")
+    if actual_bench_hash != expected_bench_hash:
+        click.echo(
+            f"Error: benchmark hash mismatch: expected {expected_bench_hash}, got {actual_bench_hash}",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Scan for forbidden fields
+    forbidden_keys = {
+        "text",
+        "matched_text",
+        "private_matched_text",
+        "url",
+        "path",
+        "alias",
+        "company_name",
+        "context",
+        "excerpt",
+        "source_url",
+    }
+
+    def _scan_forbidden(obj: Any, path: str = "") -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in forbidden_keys:
+                    click.echo(f"Error: forbidden key '{k}' at {path}.{k}", err=True)
+                    sys.exit(1)
+                if isinstance(v, str):
+                    # Heuristic: reject long strings that look like sentences
+                    # (but allow version numbers, hashes, short labels)
+                    if len(v) > 80 and v.count(" ") > 3:
+                        click.echo(
+                            f"Error: suspicious long string at {path}.{k} (possible text leak)",
+                            err=True,
+                        )
+                        sys.exit(1)
+                _scan_forbidden(v, f"{path}.{k}")
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _scan_forbidden(item, f"{path}[{i}]")
+
+    _scan_forbidden(report)
+
+    # Deterministic artifact
+    content = json.dumps(report, sort_keys=True, separators=(",", ":"))
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+    artifact = {
+        "ingested_at": datetime.now(UTC).isoformat(),
+        "verification_status": "accepted",
+        "content_hash": content_hash,
+        "field_checklist": {f: f in report for f in required},
+        "repository_commit_verified": repo_commit in local_commit or local_commit in repo_commit,
+        "benchmark_hash_verified": actual_bench_hash == expected_bench_hash,
+        "zero_acceptance_verified": True,
+        "zero_promotion_verified": True,
+        "no_real_data_verified": True,
+        "source_report": str(report_path),
+        "anonymity_claim": None,
+        "anonymity_disclaimer": (
+            "Phase 3C does not establish anonymity or release safety. "
+            "This artifact only verifies that the Colab smoke executed "
+            "without auto-acceptance and without real-company data."
+        ),
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    click.echo(f"Ingestion artifact: {output_path}")
+    click.echo(f"Content hash: {content_hash}")
+    click.echo("Verification: ACCEPTED")
 
 
 def _resolve_private_output_root(

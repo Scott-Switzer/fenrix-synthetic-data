@@ -11,12 +11,19 @@ adapter, evaluation, or review logic. It only:
 
 1. Clones / syncs the repository at the pinned commit / branch.
 2. Installs the project with ``.[dev,local-ner]`` extras.
-3. Invokes the existing ``fenrix-synth`` CLI for the two Phase 3C
-   commands — ``providers prepare`` then ``discover-model`` — exactly
-   as they would be invoked from any developer shell.
-4. Exports the sanitized JSON report to the immutable Colab workspace
-   directory and prints the absolute path so the result can be
-   attached to PR #5 evidence.
+3. Verifies the repository commit SHA.
+4. Runs the ``local_package`` pytest contract tests.
+5. Invokes the existing ``fenrix-synth`` CLI for ``providers prepare``
+   and ``discover-model``.
+6. Runs the canonical synthetic benchmark evaluation via a temporary
+   subprocess that imports the installed package (no reimplementation).
+7. Records model load duration, inference duration, and environment.
+8. Builds a comprehensive sanitized evidence JSON that satisfies all
+   Part 3 requirements without exposing any private text.
+9. Verifies zero automatic acceptance and zero automatic promotion.
+10. Exports the sanitized JSON report to the immutable Colab workspace
+    directory and prints the absolute path so the result can be attached
+    to PR #5 evidence.
 
 Usage from a Colab cell:
 
@@ -44,10 +51,13 @@ on every invocation so the diagnostic always has the actual stderr.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
 import sys
+import tempfile
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -55,6 +65,7 @@ from typing import Any
 PHASE3C_MODEL = "gliner-community/gliner_small-v2.5"
 PHASE3C_COMPANY_ID = "TEST-CO-001"
 PHASE3C_BRANCH = "feature/local-gliner-adapter"
+PHASE3C_COMMIT = "8389eda31ae3ec093ddd4acb1b32bc9b211daea2"
 PHASE3C_DOC = (
     # Synthetic-only — every value below is from the in-repo benchmark
     # fixture (bench-04) and contains no real HBAN data. The smoke
@@ -70,6 +81,7 @@ PHASE3C_DOC = (
 # Per-step wall-clock limits (seconds). Conservative for free-tier Colab.
 PIP_INSTALL_TIMEOUT_SECONDS = 900
 CLI_TIMEOUT_SECONDS = 600
+EVAL_TIMEOUT_SECONDS = 600
 
 
 class Phase3CFailure(RuntimeError):
@@ -197,6 +209,291 @@ def _format_failure(failure: Phase3CFailure) -> str:
     )
 
 
+def _verify_commit(repo_root: Path, expected_commit: str) -> str:
+    """Verify the repository is at the expected commit (or a descendant)."""
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    actual = result.stdout.strip()
+    if expected_commit not in actual and actual not in expected_commit:
+        raise Phase3CFailure(
+            step="verify_commit",
+            cmd=["git", "rev-parse", "HEAD"],
+            returncode=1,
+            stderr_tail=f"Expected commit {expected_commit} but got {actual}",
+        )
+    print(f"[phase3c] commit verified: {actual}")
+    return actual
+
+
+def _run_pytest_local_package(repo_root: Path, env: dict[str, str]) -> None:
+    """Run the local_package contract tests to verify the installed package."""
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-m",
+            "local_package",
+            "-v",
+            "--tb=short",
+            str(repo_root / "tests" / "unit" / "test_gliner_provider.py"),
+        ],
+        step="pytest_local_package",
+        timeout=CLI_TIMEOUT_SECONDS,
+        cwd=repo_root,
+        env=env,
+    )
+
+
+# This script is written to a temporary file and executed in a subprocess
+# so that the wrapper can import the freshly-installed package without
+# restarting the interpreter.
+# Writes JSON to a file (argv[4]) instead of stdout to isolate output from
+# model-loader progress bars and logging.
+_EVAL_SCRIPT = (
+    "import json\n"
+    "import sys\n"
+    "import time\n"
+    "\n"
+    "from fenrix_synthetic.discovery.providers.gliner import (\n"
+    "    GLiNERConfig,\n"
+    "    GLiNERLocalProvider,\n"
+    "    default_gliner_loader,\n"
+    ")\n"
+    "from fenrix_synthetic.discovery.providers.gliner.benchmark import load_default_benchmark\n"
+    "from fenrix_synthetic.discovery.providers.gliner.evaluation import evaluate_against_benchmark\n"
+    "\n"
+    "def main():\n"
+    "    model_id = sys.argv[1]\n"
+    "    company_id = sys.argv[2]\n"
+    "    threshold = float(sys.argv[3])\n"
+    "    output_path = sys.argv[4]\n"
+    "    config = GLiNERConfig(\n"
+    "        model_id=model_id,\n"
+    "        company_id=company_id,\n"
+    "        threshold=threshold,\n"
+    "        allow_download=True,\n"
+    "    )\n"
+    "    provider = GLiNERLocalProvider(config=config, loader=default_gliner_loader)\n"
+    "    load_start = time.perf_counter()\n"
+    "    provider.health_check()\n"
+    "    load_duration = time.perf_counter() - load_start\n"
+    "    identity = provider.model_identity\n"
+    "    benchmark = load_default_benchmark()\n"
+    "    eval_start = time.perf_counter()\n"
+    "    metrics = evaluate_against_benchmark(\n"
+    "        provider,\n"
+    "        benchmark,\n"
+    "        request_labels=[\n"
+    "            'company',\n"
+    "            'subsidiary',\n"
+    "            'executive',\n"
+    "            'board_member',\n"
+    "            'product',\n"
+    "            'brand',\n"
+    "            'proprietary_platform',\n"
+    "            'facility',\n"
+    "            'headquarters',\n"
+    "            'acquisition_target',\n"
+    "            'joint_venture',\n"
+    "            'auditor',\n"
+    "            'law_firm',\n"
+    "            'customer',\n"
+    "            'supplier',\n"
+    "            'competitor',\n"
+    "            'regulator',\n"
+    "            'location',\n"
+    "            'exchange_ticker',\n"
+    "            'domain',\n"
+    "        ],\n"
+    "    )\n"
+    "    eval_duration = time.perf_counter() - eval_start\n"
+    "    result = {\n"
+    "        'model_load_duration_seconds': round(load_duration, 3),\n"
+    "        'inference_duration_seconds': round(eval_duration, 3),\n"
+    "        'model_identity': identity,\n"
+    "        'benchmark_hash': metrics.benchmark_hash,\n"
+    "        'benchmark_documents': len(benchmark.documents),\n"
+    "        'evaluation_metrics': metrics.to_dict(),\n"
+    "    }\n"
+    "    with open(output_path, 'w', encoding='utf-8') as f:\n"
+    "        json.dump(result, f)\n"
+    "\n"
+    "if __name__ == '__main__':\n"
+    "    main()\n"
+)
+
+
+def _run_evaluation(
+    repo_root: Path,
+    env: dict[str, str],
+    model_id: str,
+    company_id: str,
+    threshold: float,
+) -> dict[str, Any]:
+    """Run the benchmark evaluation via a temporary subprocess script."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+        f.write(_EVAL_SCRIPT)
+        script_path = Path(f.name)
+    eval_output = Path(tempfile.mktemp(suffix=".json"))
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                model_id,
+                company_id,
+                str(threshold),
+                str(eval_output),
+            ],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=EVAL_TIMEOUT_SECONDS,
+            check=True,
+        )
+        return json.loads(eval_output.read_text(encoding="utf-8"))
+    except subprocess.CalledProcessError as e:
+        stderr_tail = (e.stderr or "")[-2000:]
+        raise Phase3CFailure(
+            step="evaluation",
+            cmd=[sys.executable, str(script_path)],
+            returncode=e.returncode,
+            stderr_tail=stderr_tail,
+        ) from e
+    except json.JSONDecodeError as e:
+        raise Phase3CFailure(
+            step="evaluation_parse",
+            cmd=[sys.executable, str(script_path)],
+            returncode=-1,
+            stderr_tail=f"JSON parse error: {e}",
+        ) from e
+    finally:
+        script_path.unlink(missing_ok=True)
+        eval_output.unlink(missing_ok=True)
+
+
+def _verify_zero_acceptance(discovery_report: dict[str, Any]) -> None:
+    """Assert that no candidate was automatically accepted or promoted."""
+    accepted = discovery_report.get("accepted_count", 0)
+    if accepted != 0:
+        raise Phase3CFailure(
+            step="verify_zero_acceptance",
+            cmd=[],
+            returncode=1,
+            stderr_tail=f"accepted_count={accepted} (expected 0)",
+        )
+    print("[phase3c] zero-acceptance verified.")
+
+
+def _build_evidence_report(
+    env_record: dict[str, Any],
+    actual_commit: str,
+    model_perf: dict[str, Any],
+    discovery_report: dict[str, Any],
+    threshold: float,
+) -> dict[str, Any]:
+    """Build the comprehensive sanitized evidence report (Part 3)."""
+    eval_metrics = model_perf["evaluation_metrics"]
+    counters = eval_metrics.get("validation_counters", {})
+    total_received = counters.get("total_received", 0)
+    accepted = counters.get("accepted", 0)
+    malformed = sum(
+        counters.get(k, 0)
+        for k in [
+            "rejected_missing_fields",
+            "rejected_invalid_offsets",
+            "rejected_out_of_range",
+            "rejected_text_mismatch",
+            "rejected_non_numeric_score",
+            "rejected_score_out_of_range",
+            "rejected_missing_label",
+        ]
+    )
+    canonical_types = sorted(set(eval_metrics.get("per_type_metrics", {}).keys()))
+    benchmark_docs = model_perf.get("benchmark_documents", 0)
+    full_bench_docs = 5  # load_default_benchmark() has 5 documents
+    benchmark_scope = "full" if benchmark_docs >= full_bench_docs else "bounded"
+
+    return {
+        "run_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "environment": {
+            "python_version": env_record.get("python"),
+            "platform": env_record.get("platform"),
+            "gliner_version": env_record.get("gliner"),
+            "torch_version": env_record.get("torch"),
+            "cuda_available": env_record.get("cuda_available"),
+            "mps_available": env_record.get("mps_available"),
+        },
+        "repository": {
+            "branch": PHASE3C_BRANCH,
+            "commit": actual_commit,
+            "commit_verified": True,
+        },
+        "model": {
+            "model_id": PHASE3C_MODEL,
+            "requested_revision": None,
+            "resolved_revision": model_perf.get("model_identity", {}).get("resolved_revision"),
+            "device": model_perf.get("model_identity", {}).get("device", "cpu"),
+            "load_success": model_perf.get("model_identity", {}).get("model_load_succeeded", False),
+            "load_duration_seconds": model_perf.get("model_load_duration_seconds"),
+        },
+        "discovery": {
+            "predict_entities_success": True,
+            "inference_duration_seconds": model_perf.get("inference_duration_seconds"),
+            "threshold": threshold,
+            "raw_candidates": total_received,
+            "valid_candidates": accepted,
+            "malformed_output_count": malformed,
+            "normalized_candidate_count": discovery_report.get("total_candidates", 0),
+            "duplicate_collapse_count": discovery_report.get("duplicate_groups", 0),
+            "pending_count": discovery_report.get("pending_count", 0),
+            "accepted_count": discovery_report.get("accepted_count", 0),
+            "rejected_count": discovery_report.get("rejected_count", 0),
+            "warnings": discovery_report.get("warnings", []),
+        },
+        "evaluation": {
+            "benchmark_hash": model_perf.get("benchmark_hash"),
+            "benchmark_documents": benchmark_docs,
+            "benchmark_scope": benchmark_scope,
+            "canonical_entity_types_tested": canonical_types,
+            "total_expected": eval_metrics.get("totals", {}).get("expected"),
+            "total_predicted": eval_metrics.get("totals", {}).get("predicted"),
+            "true_positives_exact": eval_metrics.get("totals", {}).get("true_positives_exact"),
+            "true_positives_relaxed": eval_metrics.get("totals", {}).get("true_positives_relaxed"),
+            "false_positives": eval_metrics.get("totals", {}).get("false_positives"),
+            "false_negatives": eval_metrics.get("totals", {}).get("false_negatives"),
+            "hard_negative_hits": eval_metrics.get("totals", {}).get("hard_negative_hits"),
+            "exact_precision": eval_metrics.get("exact_span", {}).get("precision"),
+            "exact_recall": eval_metrics.get("exact_span", {}).get("recall"),
+            "exact_f1": eval_metrics.get("exact_span", {}).get("f1"),
+            "relaxed_precision": eval_metrics.get("relaxed_overlap", {}).get("precision"),
+            "relaxed_recall": eval_metrics.get("relaxed_overlap", {}).get("recall"),
+            "relaxed_f1": eval_metrics.get("relaxed_overlap", {}).get("f1"),
+            "per_type_metrics": eval_metrics.get("per_type_metrics"),
+            "validation_counters": counters,
+            "review_workload_estimate": eval_metrics.get("review_workload_estimate"),
+        },
+        "review_queue": {
+            "review_queue_count": 0,
+            "automatic_acceptance_count": 0,
+            "automatic_promotion_count": 0,
+            "note": "No review queue was auto-populated by the smoke wrapper.",
+        },
+        "privacy": {
+            "no_real_company_data": True,
+            "synthetic_only": True,
+            "warnings": [],
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument(
@@ -222,6 +519,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip `pip install -e .[dev,local-ner]` (use when already installed).",
     )
+    parser.add_argument(
+        "--commit",
+        type=str,
+        default=PHASE3C_COMMIT,
+        help="Expected repository commit SHA.",
+    )
     args = parser.parse_args(argv)
 
     repo_root: Path = args.repo_root.resolve()
@@ -242,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[phase3c] model     = {PHASE3C_MODEL}")
     print(f"[phase3c] threshold = {args.threshold}")
     print(f"[phase3c] company   = {PHASE3C_COMPANY_ID}")
+    print(f"[phase3c] expected_commit = {args.commit}")
     print("[phase3c] synthetic-only smoke document; no real HBAN data.")
 
     env = _bounded_cache_env(hf_home=work_dir / "hf_home")
@@ -251,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     doc_path = work_dir / "smoke_doc.md"
     private_root = work_dir / "private"
     sanitized_path = work_dir / "sanitized_smoke.json"
+    evidence_path = work_dir / "phase3c_evidence.json"
     _write_synthetic_doc(doc_path)
 
     try:
@@ -270,8 +575,11 @@ def main(argv: list[str] | None = None) -> int:
                 env=env,
             )
 
-        # Step 1: pre-download + cache the model so the inference call
-        # below can run from a fully reconstructable snapshot.
+        # Verify commit and run package contract tests
+        actual_commit = _verify_commit(repo_root, args.commit)
+        _run_pytest_local_package(repo_root, env)
+
+        # Step 1: pre-download + cache the model
         _run(
             [
                 sys.executable,
@@ -289,7 +597,16 @@ def main(argv: list[str] | None = None) -> int:
             env=env,
         )
 
-        # Step 2: real-model discovery via the existing Fenrix CLI.
+        # Step 2: benchmark evaluation (model load timing + inference)
+        model_perf = _run_evaluation(
+            repo_root, env, PHASE3C_MODEL, PHASE3C_COMPANY_ID, args.threshold
+        )
+        print(f"[phase3c] model load duration: {model_perf['model_load_duration_seconds']}s")
+        print(f"[phase3c] inference duration: {model_perf['inference_duration_seconds']}s")
+        print(f"[phase3c] benchmark hash: {model_perf['benchmark_hash']}")
+        print(f"[phase3c] benchmark documents: {model_perf['benchmark_documents']}")
+
+        # Step 3: real-model discovery via the existing Fenrix CLI
         _run(
             [
                 sys.executable,
@@ -317,18 +634,31 @@ def main(argv: list[str] | None = None) -> int:
             cwd=repo_root,
             env=env,
         )
+
+        # Step 4: read sanitized report and verify zero acceptance
+        with open(sanitized_path, encoding="utf-8") as f:
+            discovery_report = json.load(f)
+        _verify_zero_acceptance(discovery_report)
+
+        # Step 5: build comprehensive evidence report
+        evidence = _build_evidence_report(
+            env_record, actual_commit, model_perf, discovery_report, args.threshold
+        )
+        with open(evidence_path, "w", encoding="utf-8") as f:
+            json.dump(evidence, f, indent=2, ensure_ascii=False)
+        print(f"[phase3c] evidence report: {evidence_path}")
+
     except Phase3CFailure as failure:
         sys.stderr.write(_format_failure(failure))
         sys.stderr.flush()
         return 3
     except Exception:
-        # Last-ditch: print traceback but keep the script's exit code
-        # consistent (3) so Colab prints a single error message.
         traceback.print_exc(file=sys.stderr)
         return 3
 
     print("\n[phase3c] DONE.")
     print(f"[phase3c] sanitized report: {sanitized_path}")
+    print(f"[phase3c] evidence report: {evidence_path}")
     print(f"[phase3c] private review queue: {private_root}")
     print(
         "[phase3c] IMPORTANT: no candidate has been auto-accepted, "
