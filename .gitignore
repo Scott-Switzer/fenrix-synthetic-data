@@ -93,6 +93,10 @@ output/
 notebooks/
 *.ipynb
 
+# Private identity registries (never commit)
+private/
+private/**/*
+
 # OS
 Thumbs.db
 ehthumbs.db

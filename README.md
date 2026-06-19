@@ -139,9 +139,51 @@ fenrix-synthetic-data/
 └── README.md
 ```
 
+## Phase 2 - Identity Registry and Deterministic Masking (In Progress)
+
+Private identity registry with typed canonical entities and aliases.
+Deterministic regex-based matching with offset tracking, overlap resolution,
+and stable pseudonym replacement.
+
+### Key Modules
+
+- `src/fenrix_synthetic/identity/` - `EntityRegistry`, `PseudonymGenerator`, typed schemas
+- `src/fenrix_synthetic/masking/` - `DeterministicMasker`, `OverlapResolver`, `DocumentReconstructor`
+- `src/fenrix_synthetic/attacks/` - `ExactResidualScanner` for independent leak detection
+
+### CLI Commands
+
+```bash
+# Validate an identity registry YAML file
+fenrix-synth registry-validate --registry configs/examples/company_identity.example.yaml --company C001
+
+# List entities and aliases
+fenrix-synth registry-inventory --registry configs/examples/company_identity.example.yaml
+
+# Run deterministic masking on a bronze document
+fenrix-synth mask --company C001 --data-root /tmp/c001-demo --bronze-artifact bronze-C001-000123456724000001 --masked-output /tmp/output.md --audit-output /tmp/audit.json --summary-output /tmp/summary.json
+
+# Run exact residual scan
+fenrix-synth scan --document /tmp/output.md --values scan-values.yaml
+```
+
+### Synthetic Demonstration
+
+The test suite demonstrates the full pipeline with synthetic canary values:
+
+- `tests/fixtures/canary_document.md` - Deliberately leaky document for scanner validation
+- `tests/fixtures/clean_document.md` - Clean document proving zero false positives
+- `tests/integration/test_masking_pipeline.py` - End-to-end synthetic pipeline verification
+
+### C001 Status
+
+⚠️ **Synthetic only.** The C001 implementation is demonstrated with canary values.
+Actual HBAN masking requires a reviewed private registry populated with real
+HBAN entities and aliases. Do not claim HBAN masking is complete.
+
 ## Verification Commands
 
-Run these commands to verify the M0 implementation:
+Run these commands to verify the implementation:
 
 ```bash
 # 1. Package installs in clean environment
@@ -179,17 +221,31 @@ ruff format --check && ruff check && mypy src/fenrix_synthetic
 
 # 12. All tests pass
 pytest
+
+# 13. Phase 2 identity and masking tests
+pytest tests/unit/test_identity_registry.py tests/unit/test_deterministic_masking.py tests/unit/test_overlap_resolution.py tests/unit/test_reconstruction.py tests/unit/test_sanitizer.py tests/unit/test_exact_residual.py
+
+# 14. Phase 2 integration (masking pipeline)
+pytest tests/integration/test_masking_pipeline.py
 ```
 
-## Milestone 1 - Next Steps
+## Milestone 1 - HBAN Extraction (Complete)
 
-HBAN extraction vertical slice:
 - SEC adapter interface with fixture loader
 - One filing download/hash verification
 - HTML extraction and boilerplate removal
 - Raw and bronze manifest writing
 - Checkpoint resume demonstration
 - Full offline fixture-based demo
+
+## Milestone 2 - Identity Registry (In Progress)
+
+- Phased identity registry with typed schemas
+- Deterministic regex matching with offset tracking
+- Overlap resolution and stable pseudonym replacement
+- Independent exact residual scanning
+- Canary and mutation testing fixtures
+- Synthetic end-to-end demonstration
 
 ## Security
 

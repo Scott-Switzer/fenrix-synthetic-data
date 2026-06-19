@@ -13,12 +13,15 @@ class ArtifactType(StrEnum):
 
 
 class StageName(StrEnum):
-    """Pipeline stage names for M0+M1."""
+    """Pipeline stage names."""
 
     DISCOVER = "discover"
     INGEST = "ingest"
     EXTRACT = "extract"
     MANIFEST = "manifest"
+    REGISTRY = "registry"
+    MASK = "mask"
+    SCAN = "scan"
 
 
 class StageStatus(StrEnum):

@@ -1,0 +1,77 @@
+# Example company identity registry (private, never commit real values)
+#
+# This is a FICTIONAL example using canary values.
+# Never replace these with real company identities.
+#
+# Real registries belong in private/companies/C*.identity.yaml
+# and are covered by .gitignore.
+
+registry:
+  registry_id: "C001-example"
+  schema_version: "1.0.0"
+  company_id: "C001"
+  pseudonym_policy_version: "1.0.0"
+  private_classification: "private"
+
+entities:
+  - entity_id: "ent-001"
+    entity_type: "company"
+    canonical_private_value: "Canary Holdings Corporation"
+    assigned_pseudonym: ""
+    source_references: ["example-fixture"]
+  - entity_id: "ent-002"
+    entity_type: "ticker"
+    canonical_private_value: "CHC"
+    assigned_pseudonym: ""
+    source_references: ["example-fixture"]
+  - entity_id: "ent-003"
+    entity_type: "cik"
+    canonical_private_value: "0000999999"
+    assigned_pseudonym: ""
+    source_references: ["example-fixture"]
+  - entity_id: "ent-004"
+    entity_type: "executive"
+    canonical_private_value: "Eleanor Testperson"
+    assigned_pseudonym: ""
+  - entity_id: "ent-005"
+    entity_type: "company_domain"
+    canonical_private_value: "canary-test.invalid"
+    assigned_pseudonym: ""
+
+aliases:
+  - alias_id: "ali-001"
+    canonical_entity_id: "ent-001"
+    private_alias_value: "Canary Holdings Corporation"
+    entity_type: "company"
+    match_policy: "literal"
+    priority: 100
+  - alias_id: "ali-002"
+    canonical_entity_id: "ent-002"
+    private_alias_value: "CHC"
+    entity_type: "ticker"
+    match_policy: "ticker_exact"
+    priority: 200
+  - alias_id: "ali-003"
+    canonical_entity_id: "ent-003"
+    private_alias_value: "0000999999"
+    entity_type: "cik"
+    match_policy: "cik_padded"
+    priority: 200
+  - alias_id: "ali-004"
+    canonical_entity_id: "ent-001"
+    private_alias_value: "Canary Holdings"
+    entity_type: "company"
+    match_policy: "literal"
+    priority: 150
+  - alias_id: "ali-005"
+    canonical_entity_id: "ent-004"
+    private_alias_value: "Eleanor Testperson"
+    entity_type: "executive"
+    match_policy: "literal"
+    priority: 100
+  - alias_id: "ali-006"
+    canonical_entity_id: "ent-005"
+    private_alias_value: "canary-test.invalid"
+    entity_type: "company_domain"
+    match_policy: "domain_full"
+    priority: 100

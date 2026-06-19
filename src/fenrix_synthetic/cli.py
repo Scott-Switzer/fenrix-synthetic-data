@@ -494,6 +494,208 @@ def hash_json(ctx: click.Context, json_input: str) -> None:
     click.echo(result)
 
 
+@cli.command(name="registry-validate")
+@click.option(
+    "--registry", "registry_path", type=click.Path(exists=True, path_type=Path), required=True
+)
+@click.option("--company", required=True)
+def registry_validate(registry_path: Path, company: str) -> None:
+    """Validate an identity registry YAML file."""
+    import yaml as _yaml
+
+    with open(registry_path) as f:
+        data = _yaml.safe_load(f)
+
+    raw = data if isinstance(data, dict) else {}
+    entities = raw.get("entities", [])
+    aliases = raw.get("aliases", [])
+    errors: list[str] = []
+
+    entity_ids = set()
+    for i, ent in enumerate(entities):
+        eid = ent.get("entity_id", "")
+        if not eid:
+            errors.append(f"entities[{i}]: missing entity_id")
+        elif eid in entity_ids:
+            errors.append(f"entities[{i}]: duplicate entity_id '{eid}'")
+        entity_ids.add(eid)
+
+    alias_ids = set()
+    for i, ali in enumerate(aliases):
+        aid = ali.get("alias_id", "")
+        if not aid:
+            errors.append(f"aliases[{i}]: missing alias_id")
+        elif aid in alias_ids:
+            errors.append(f"aliases[{i}]: duplicate alias_id '{aid}'")
+        alias_ids.add(aid)
+        eid = ali.get("canonical_entity_id", "")
+        if eid and eid not in entity_ids:
+            errors.append(f"aliases[{i}]: references unknown entity '{eid}'")
+
+    if errors:
+        for err in errors:
+            click.echo(f"  ERROR: {err}", err=True)
+        click.echo(f"Validation FAILED ({len(errors)} errors)")
+        sys.exit(1)
+    else:
+        click.echo(f"Registry valid: {len(entities)} entities, {len(aliases)} aliases")
+
+
+@cli.command(name="registry-inventory")
+@click.option(
+    "--registry", "registry_path", type=click.Path(exists=True, path_type=Path), required=True
+)
+def registry_inventory(registry_path: Path) -> None:
+    """List entities and aliases in an identity registry."""
+    import yaml as _yaml
+
+    with open(registry_path) as f:
+        data = _yaml.safe_load(f)
+
+    raw = data if isinstance(data, dict) else {}
+    entities = raw.get("entities", [])
+    aliases = raw.get("aliases", [])
+
+    click.echo(f"Entities ({len(entities)}):")
+    for ent in entities:
+        click.echo(
+            f"  {ent.get('entity_id')}: {ent.get('entity_type')} = {ent.get('canonical_private_value')}"
+        )
+
+    click.echo(f"\nAliases ({len(aliases)}):")
+    for ali in aliases:
+        click.echo(
+            f"  {ali.get('alias_id')}: [{ali.get('match_policy')}] {ali.get('private_alias_value')}"
+        )
+
+
+@cli.command()
+@click.option("--company", required=True, help="Company ID")
+@click.option(
+    "--data-root",
+    "data_root_path",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Data root directory",
+)
+@click.option(
+    "--bronze-artifact",
+    required=True,
+    help="Bronze artifact ID (e.g., bronze-C001-000123456724000001)",
+)
+@click.option(
+    "--masked-output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for masked text",
+)
+@click.option(
+    "--audit-output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for private audit JSON",
+)
+@click.option(
+    "--summary-output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output path for sanitized summary JSON",
+)
+@click.pass_context
+def mask(
+    ctx: click.Context,
+    company: str,
+    data_root_path: Path,
+    bronze_artifact: str,
+    masked_output: Path,
+    audit_output: Path,
+    summary_output: Path,
+) -> None:
+    """Run deterministic masking on a bronze document."""
+    from .identity.entity_registry import EntityRegistry
+    from .masking import DeterministicMasker
+
+    # Load bronze document
+    bronze_dir = data_root_path / "bronze" / company
+    text_path = bronze_dir / f"{bronze_artifact.replace('bronze-', '')}.md"
+
+    if not text_path.exists():
+        click.echo(f"Error: bronze text not found: {text_path}", err=True)
+        sys.exit(1)
+
+    text = text_path.read_text()
+
+    # Create a minimal registry with canary values
+    reg = EntityRegistry.create(company_id=company, registry_id=f"reg-{company}-mask")
+    from ..identity import EntityType, MatchPolicy
+
+    reg.add_entity("ent-company", EntityType.COMPANY, "Company", ["bronze"])
+    reg.add_alias(
+        "ali-company", "ent-company", "The Company", EntityType.COMPANY, MatchPolicy.LITERAL, 100
+    )
+
+    masker = DeterministicMasker(reg, document_artifact_id=bronze_artifact)
+    config_hash = reg.config_hash()
+    masked_text, _sanitized_meta, audit, summary = masker.mask_and_sanitize_metadata(
+        text,
+        {"source": bronze_artifact},
+        config_hash,
+    )
+
+    masked_output.parent.mkdir(parents=True, exist_ok=True)
+    masked_output.write_text(masked_text)
+
+    audit_output.parent.mkdir(parents=True, exist_ok=True)
+    audit_output.write_text(audit.model_dump_json(indent=2))
+
+    summary_output.parent.mkdir(parents=True, exist_ok=True)
+    summary_output.write_text(summary.model_dump_json(indent=2))
+
+    click.echo(f"Masked document: {masked_output}")
+    click.echo(f"Private audit: {audit_output}")
+    click.echo(f"Sanitized summary: {summary_output}")
+    click.echo(f"Matches: {summary.match_count}, Replacements: {summary.replacement_count}")
+
+
+@cli.command()
+@click.option(
+    "--document", "document_path", type=click.Path(exists=True, path_type=Path), required=True
+)
+@click.option(
+    "--values",
+    "values_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="YAML file with values to scan for",
+)
+def scan(document_path: Path, values_path: Path) -> None:
+    """Run exact residual scan on a document."""
+    import yaml as _yaml
+
+    from .attacks import ExactResidualScanner
+
+    text = document_path.read_text()
+
+    with open(values_path) as f:
+        values_data = _yaml.safe_load(f)
+
+    scanner = ExactResidualScanner()
+    result = scanner.scan_text(text, values_data)
+
+    click.echo(f"Scan results for {document_path.name}:")
+    click.echo(f"  Total hits: {result.total_hits}")
+    click.echo(f"  Blocking hits: {result.blocking_hits}")
+    click.echo(f"  Allowed hits: {result.allowed_hits}")
+    click.echo(f"  Blocked: {result.is_blocked}")
+
+    if result.is_blocked:
+        click.echo("  Blocking values found:")
+        for htype, hits in result.hits_by_type.items():
+            for hit in hits:
+                click.echo(f"    [{htype}] {hit.value}")
+        sys.exit(1)
+
+
 def main() -> None:
     """Main entry point."""
     cli()
