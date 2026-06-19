@@ -957,6 +957,376 @@ def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None
         click.echo(f"  Written to: {output_path}")
 
 
+@cli.group()
+def providers() -> None:
+    """Discover and operate discovery providers."""
+
+
+@providers.command(name="list")
+def providers_list() -> None:
+    """List available discovery providers and their dependencies."""
+    from .discovery import FakeEntityDiscoveryProvider
+    from .discovery.providers.gliner import is_gliner_available
+
+    click.echo("Discovery providers:")
+    click.echo(f"  fake: available ({FakeEntityDiscoveryProvider.__module__})")
+    if is_gliner_available():
+        click.echo(
+            "  gliner_local: available (gliner installed; "
+            "ensure model cache or use 'providers prepare')"
+        )
+    else:
+        click.echo("  gliner_local: unavailable (install with pip install -e '.[local-ner]')")
+
+
+@providers.command(name="health")
+@click.option("--provider", "provider_name", default="gliner_local")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to provider config YAML (optional)",
+)
+def providers_health(provider_name: str, config_path: Path | None) -> None:
+    """Check discovery provider health and dependency status.
+
+    For gliner_local: distinguishes missing dependency, download disabled,
+    model unavailable, and healthy cached model.
+    """
+    if provider_name != "gliner_local":
+        click.echo(f"Unknown provider: {provider_name}", err=True)
+        sys.exit(2)
+
+    from .discovery.providers.gliner import (
+        GLiNERConfig,
+        GLiNERLocalProvider,
+        GlinerModelLoadError,
+        OptionalDependencyError,
+        default_gliner_loader,
+        is_gliner_available,
+    )
+
+    if not is_gliner_available():
+        click.echo("status=dependency-missing")
+        click.echo("detail=gliner is not installed")
+        sys.exit(0)
+
+    config = GLiNERConfig(
+        model_id="urchade/gliner_small-v2.5",
+        allow_download=False,
+    )
+
+    try:
+        provider = GLiNERLocalProvider(config=config, loader=default_gliner_loader)
+        ok = provider.health_check()
+    except OptionalDependencyError as e:
+        click.echo("status=dependency-missing")
+        click.echo(f"detail={e}")
+        sys.exit(0)
+    except GlinerModelLoadError as e:
+        click.echo("status=model-unavailable-locally")
+        click.echo(f"detail={e}")
+        sys.exit(0)
+    except (RuntimeError, ValueError, TypeError, OSError) as e:
+        # Programming / data errors that are not valid load results — surface
+        # as load-failure without swallowing unrelated bugs into provider errors.
+        click.echo(f"status=load-failure: {type(e).__name__}: {e}", err=True)
+        sys.exit(1)
+
+    if ok:
+        click.echo("status=healthy")
+        click.echo(f"model_id={provider.model_name}")
+        click.echo(f"config_hash={provider.config_hash}")
+    else:
+        click.echo("status=load-failure")
+        sys.exit(1)
+
+
+@providers.command(name="prepare")
+@click.option("--provider", "provider_name", default="gliner_local")
+@click.option(
+    "--model",
+    "model_id",
+    default="urchade/gliner_small-v2.5",
+    help="Hugging Face model identifier",
+)
+@click.option("--allow-download", is_flag=True, default=False)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Local cache directory for model weights (gitignored)",
+)
+def providers_prepare(
+    provider_name: str,
+    model_id: str,
+    allow_download: bool,
+    cache_dir: Path | None,
+) -> None:
+    """Acquire/adopt provider model weights (explicit opt-in only)."""
+    if provider_name != "gliner_local":
+        click.echo(f"Unknown provider: {provider_name}", err=True)
+        sys.exit(2)
+    if not allow_download:
+        click.echo(
+            "Refusing to acquire model without --allow-download. "
+            "Pre-existing local weights remain usable.",
+            err=True,
+        )
+        sys.exit(2)
+    from .discovery.providers.gliner import (
+        GLiNERConfig,
+        GlinerModelLoadError,
+        OptionalDependencyError,
+        default_gliner_loader,
+    )
+
+    config = GLiNERConfig(
+        model_id=model_id,
+        allow_download=True,
+        cache_dir=str(cache_dir) if cache_dir else None,
+    )
+    try:
+        model = default_gliner_loader(config)
+    except OptionalDependencyError as e:
+        click.echo(f"dependency-missing: {e}", err=True)
+        sys.exit(1)
+    except GlinerModelLoadError as e:
+        click.echo(f"load-failure: {e}", err=True)
+        sys.exit(1)
+    if model is None:
+        click.echo("status=failed", err=True)
+        sys.exit(1)
+    click.echo(f"status=ready model_id={model_id}")
+
+
+def _resolve_private_output_root(
+    private_output_root: Path | None,
+    data_root: Path,
+) -> Path:
+    """Resolve a private output directory. Guard against tracked directories."""
+    import subprocess
+
+    target = private_output_root or (data_root / "private" / "gliner")
+    target = target.resolve()
+    target.mkdir(parents=True, exist_ok=True)
+
+    repo_root = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        or "."
+    ).resolve()
+    target_in_repo = (target.resolve()).is_relative_to(repo_root)
+    if target_in_repo:
+        try:
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", str(target.relative_to(repo_root))],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if tracked.returncode == 0:
+                click.echo(
+                    f"Error: --private-output-root {target} is inside the repository and tracked by git. "
+                    "Refusing to write private artifacts into a tracked path.",
+                    err=True,
+                )
+                sys.exit(2)
+        except (subprocess.SubprocessError, OSError):
+            pass
+    return target
+
+
+@cli.command(name="discover-model")
+@click.option(
+    "--provider",
+    "provider_name",
+    default="gliner_local",
+    help="Discovery provider name (only gliner_local in Phase 3C)",
+)
+@click.option(
+    "--document",
+    "document_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Synthetic or private input document",
+)
+@click.option(
+    "--labels-config",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("configs/entity_labels.yaml"),
+    help="Path to entity-labels mapping YAML",
+)
+@click.option(
+    "--provider-config",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to provider-specific config (optional YAML)",
+)
+@click.option(
+    "--private-output-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Gitignored root under which private artifacts are written",
+)
+@click.option("--threshold", default=0.50, type=float)
+@click.option("--model", "model_id", default="urchade/gliner_small-v2.5")
+@click.option("--allow-download", is_flag=True, default=False)
+@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None)
+@click.option("--no-private-write", is_flag=True, default=False)
+@click.pass_context
+def discover_model(
+    ctx: click.Context,
+    provider_name: str,
+    document_path: Path,
+    labels_config: Path,
+    provider_config: Path | None,
+    private_output_root: Path | None,
+    threshold: float,
+    model_id: str,
+    allow_download: bool,
+    output_path: Path | None,
+    no_private_write: bool,
+) -> None:
+    """Run model-aided entity discovery (Phase 3C).
+
+    Imports the GLiNER provider explicitly only inside this command; the rest
+    of the CLI does not require gliner. The result is a private
+    ProviderCandidate set plus an aggregate SanitizedDiscoveryReport.
+    """
+    if provider_name != "gliner_local":
+        click.echo(f"Unknown provider: {provider_name}", err=True)
+        sys.exit(2)
+
+    from .discovery import (
+        CandidateDeduplicator,
+        CandidateNormalizer,
+        ChunkingConfig,
+        TextChunker,
+        aggregate_provider_candidates,
+        build_sanitized_report,
+        make_sanitized_summary,
+    )
+    from .discovery.providers.gliner import (
+        GLiNERConfig,
+        OptionalDependencyError,
+        default_gliner_loader,
+        is_gliner_available,
+    )
+    from .discovery.providers.gliner.mapping import load_label_mapping
+    from .discovery.providers.gliner.provider import GLiNERLocalProvider
+    from .storage import hash_string
+
+    if not is_gliner_available():
+        click.echo(
+            "Error: gliner is not installed. Run: pip install -e '.[local-ner]'",
+            err=True,
+        )
+        sys.exit(1)
+
+    text = document_path.read_text()
+    doc_id = document_path.stem
+    chunker = TextChunker(ChunkingConfig(max_chars=2000, overlap_chars=150))
+    chunks = chunker.chunk(text, doc_id)
+    click.echo(f"Phase 3C discovery on {document_path.name}:")
+    click.echo(f"  Document length: {len(text)} chars")
+    click.echo(f"  Chunks: {len(chunks)}")
+
+    config = GLiNERConfig(
+        model_id=model_id,
+        threshold=threshold,
+        allow_download=allow_download,
+    )
+
+    try:
+        provider = GLiNERLocalProvider(
+            config=config,
+            loader=default_gliner_loader,
+            label_mapping=load_label_mapping(labels_config),
+        )
+    except OptionalDependencyError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    health = provider.health_check()
+    click.echo(f"  Provider health: {'healthy' if health else 'unhealthy'}")
+
+    responses = []
+    for chunk in chunks:
+        responses.append(provider.discover(chunk, labels=["company", "subsidiary", "executive"]))
+
+    all_candidates = aggregate_provider_candidates(responses)
+    click.echo(f"  Raw candidates: {len(all_candidates)}")
+
+    deduplicator = CandidateDeduplicator()
+    deduped, group_map = deduplicator.deduplicate(all_candidates)
+    normalizer = CandidateNormalizer()
+    scored = normalizer.normalize(deduped)
+    click.echo(f"  After dedup: {len(deduped)}; groups: {len(group_map)}")
+
+    summaries = make_sanitized_summary(scored, group_map)
+    click.echo(f"  Sanitized summaries: {len(summaries)}")
+    for s in summaries[:5]:
+        click.echo(
+            f"    [{s.risk_band}] {s.proposed_entity_type} "
+            f"conf={s.confidence:.2f} opaque_id={s.opaque_id[:8]}..."
+        )
+
+    report = build_sanitized_report(
+        candidates=scored,
+        provider_name=provider.provider_name,
+        model_name=provider.model_name,
+        model_version=provider.model_version,
+        company_id="C001",
+        document_artifact_id=doc_id,
+        input_hash=hash_string(text),
+        latency_ms=50.0,
+        token_count=None,
+        warnings=[],
+        duplicate_groups=len(group_map),
+    )
+
+    if not no_private_write:
+        data_root = ctx.obj["data_root"]
+        resolved = _resolve_private_output_root(private_output_root, Path(data_root))
+        safe_path = resolved / f"{doc_id}_private.json"
+        import orjson as _orjson
+
+        private_payload = {
+            "candidates": [c.__dict__ for c in all_candidates],
+            "model_identity": provider.model_identity,
+            "config_hash": provider.config_hash,
+            "threshold": threshold,
+            "labels_config": str(labels_config),
+            "input_hash": report.input_hash,
+            "document_artifact_id": doc_id,
+            "company_id": "C001",
+            "raw_count": len(all_candidates),
+            "deduped_count": len(deduped),
+        }
+        safe_path.write_bytes(
+            _orjson.dumps(private_payload, default=str, option=_orjson.OPT_INDENT_2)
+        )
+        click.echo(f"  Private artifact: {safe_path}")
+
+    if output_path:
+        import orjson as _orjson
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(_orjson.dumps(report.to_dict(), option=_orjson.OPT_INDENT_2))
+        click.echo(f"  Sanitized report: {output_path}")
+
+    click.echo(f"  total_candidates={report.total_candidates} bands={report.candidates_by_band}")
+    click.echo("  No candidate has been accepted, promoted, or masked.")
+
+
 def main() -> None:
     """Main entry point."""
     cli()

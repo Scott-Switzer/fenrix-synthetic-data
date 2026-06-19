@@ -333,6 +333,70 @@ reviewed pipeline for provider-neutral entity discovery with deterministic
 offline testing. No real model execution exists — only the fake provider.
 No reviewed real HBAN identity registry exists.
 
+## Phase 3C — Optional Local GLiNER Discovery Adapter
+
+Adds an optional adapter around the open-source `gliner==0.2.27` zero-shot
+NER model. The adapter conforms to the existing `EntityDiscoveryProvider`
+protocol so it slots into the Phase 3B pipeline (chunker → candidate
+normalizer → deduplicator → risk scorer → review queue → sanitized report).
+
+### Optional Dependency Boundary
+
+GLiNER is **not** in the default install. Install explicitly with:
+
+```bash
+pip install -e ".[local-ner]"
+```
+
+Default CI and default tests do not install or require GLiNER. The
+`pytest-socket` blocker and the new `local_model` marker ensure CI never
+downloads model weights.
+
+### Provider CLI
+
+```bash
+fenrix-synth providers list
+fenrix-synth providers health --provider gliner_local
+fenrix-synth providers prepare --provider gliner_local \
+    --model urchade/gliner_small-v2.5 --allow-download
+fenrix-synth discover-model --provider gliner_local \
+    --document <path> --labels-config configs/entity_labels.yaml \
+    --private-output-root <gitignored-path>
+```
+
+The `prepare` step is the only acquisition path. `discover model` writes a
+sanitized report and, on request, a private artifact under the explicit
+gitignored output root. The CLI refuses to write private data into a
+directory tracked by git.
+
+### Privacy Boundary
+
+- Provider output goes into the existing `ReviewQueue` with `pending`
+  status. No automatic acceptance.
+- Sanitized reports use the same opaque IDs as Phase 3B.
+- Private artifacts retain `matched_text_hash` for integrity but never
+  publish into sanitized output.
+- Model cache paths, weights, private text, and absolute host paths do
+  not appear in sanitized output.
+
+### Synthetic Benchmark
+
+`src/fenrix_synthetic/discovery/providers/gliner/benchmark.py` carries a
+committed, versioned, hashed benchmark of synthetic entities only. No
+real HBAN facts appear. Evaluation precision / recall / F1 (exact-span
+and relaxed-overlap), per-type metrics, hard-negative hits, and
+threshold sweep over `[0.30, 0.40, 0.50, 0.60, 0.70]` are recorded but
+do not feed CI.
+
+### Limitations
+
+Phase 3C does **not** establish anonymity or release safety. Model
+confidence is not calibrated leakage probability. Threshold selection
+remains provisional. Local smoke is synthetic-only; no C001/HBAN
+document is ever sent to a model in this milestone.
+
+## Milestone 1 - HBAN Extraction (Complete)
+
 ## Milestone 1 - HBAN Extraction (Complete)
 
 - SEC adapter interface with fixture loader
