@@ -760,6 +760,85 @@ def scan(document_path: Path, values_path: Path) -> None:
         sys.exit(1)
 
 
+@cli.command()
+@click.option(
+    "--document", "document_path", type=click.Path(exists=True, path_type=Path), required=True
+)
+@click.option(
+    "--audit",
+    "audit_path",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to masking audit JSON (enables coverage computation)",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    help="Output path for discovery results JSON",
+)
+def discover(document_path: Path, audit_path: Path | None, output_path: Path | None) -> None:
+    """Run residual entity discovery on a document.
+
+    Uses pattern-based heuristics to find potential entities that may
+    have survived the deterministic masking pipeline.
+
+    When --audit is provided, computes coverage statistics by comparing
+    discovered entities against the masking audit's accepted spans.
+    """
+    from .masking.discovery import ResidualEntityDiscoverer
+    from .masking.schemas import MaskingAudit
+    from .reporting.coverage import CoverageReport
+
+    text = document_path.read_text()
+    discoverer = ResidualEntityDiscoverer()
+
+    known_pseudonyms: set[str] = set()
+    accepted_spans: list[tuple[int, int]] = []
+
+    if audit_path:
+        audit_data = MaskingAudit.model_validate_json(audit_path.read_text())
+        for span in audit_data.spans:
+            if span.conflict_status.value == "accepted":
+                accepted_spans.append((span.original_start, span.original_end))
+        known_pseudonyms = discoverer.extract_pseudonyms_from_audit(audit_data)
+
+    discovered = discoverer.discover(text, known_pseudonyms)
+
+    click.echo(f"Discovery results for {document_path.name}:")
+    click.echo(f"  Total entities found: {len(discovered)}")
+
+    if audit_path and accepted_spans:
+        report = CoverageReport()
+        coverage = report.compute(
+            discovered,
+            accepted_spans,
+            company_id=audit_data.company_id,
+            document_artifact_id=audit_data.document_artifact_id,
+        )
+        click.echo(f"  Masked: {coverage.total_masked}")
+        click.echo(f"  Unmasked: {coverage.total_unmasked}")
+        click.echo(f"  Coverage: {coverage.coverage_pct}%")
+        click.echo(f"  High-confidence unmasked: {coverage.high_confidence_unmasked}")
+
+        if coverage.warnings:
+            for w in coverage.warnings:
+                click.echo(f"  Warning: {w}")
+
+        if output_path:
+            import orjson as _orjson
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(_orjson.dumps(coverage.to_dict(), option=_orjson.OPT_INDENT_2))
+            click.echo(f"  Written to: {output_path}")
+    else:
+        click.echo("  (pass --audit for coverage statistics)")
+        by_type: dict[str, int] = {}
+        for e in discovered:
+            by_type[e.discovery_type] = by_type.get(e.discovery_type, 0) + 1
+        for dtype, count in sorted(by_type.items()):
+            click.echo(f"    {dtype}: {count}")
+
+
 def main() -> None:
     """Main entry point."""
     cli()
