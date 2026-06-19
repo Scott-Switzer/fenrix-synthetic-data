@@ -1,9 +1,33 @@
 """GLiNERLocalProvider implementation.
 
-Conforms to the EntityDiscoveryProvider protocol defined in
-fenrix_synthetic.discovery.protocol. The model is loaded through an
-injectable `GlinerModelLoader`. Tests pass a fake loader; production
-passes `default_gliner_loader`.
+Conforms to the EntityDiscoveryProvider protocol. The model is loaded
+through an injectable ``GlinerModelLoader``. Tests pass a fake loader;
+production passes ``default_gliner_loader``.
+
+Determinism:
+
+* ``request_id`` is a sha256 over provider inputs (never random).
+* ``labels_requested`` preserves first-seen order.
+* Candidate IDs are derived in ``validation.derive_candidate_id`` from
+  public fields only. The matched private text is never an input.
+
+Privacy:
+
+* ``raw_response_hash`` records provider-output fingerprints using only
+  redacted metadata (counts, ids, hashes). It is NEVER derived from
+  the produced response text, because that text contains the matched
+  private span.
+* Quarantine samples and raw provider output are private artifacts.
+  They are not exposed in the sanitized DiscoveryReport.
+* Cache paths are never written to the sanitized payload.
+
+Timeout safety:
+
+* The fake / theatre ``model_load_timeout_seconds`` field has been
+  removed from the configuration. Python cannot safely interrupt an
+  in-process torch call (no signals on worker threads; SIGALRM
+  requires the main thread). The provider does not raise a phantom
+  ``TimeoutError`` from a wall-clock value.
 """
 
 from __future__ import annotations
@@ -11,8 +35,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import uuid
-from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from typing import Any
 
@@ -20,7 +42,6 @@ from ...protocol import (
     EntityDiscoveryProvider,
     ProviderConfigurationError,
     ProviderResponseError,
-    ProviderTimeoutError,
     ProviderUnavailableError,
 )
 from ...schemas import (
@@ -46,14 +67,67 @@ def _safe_package_version(package_name: str) -> str | None:
         return None
 
 
-class GLiNERLocalProvider(EntityDiscoveryProvider):
-    """Optional local GLiNER entity-discovery provider.
+def derive_request_id(
+    *,
+    document_artifact_id: str,
+    chunk_id: str,
+    config_hash: str,
+    threshold: float,
+    company_id: str,
+    provider_name: str,
+    labels_requested: list[str],
+) -> str:
+    """Deterministic 24-char request id derived from public inputs."""
+    payload = (
+        f"{document_artifact_id}|{chunk_id}|{config_hash}|"
+        f"{threshold}|{company_id}|{provider_name}|"
+        f"{','.join(labels_requested)}"
+    )
+    return "req-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
-    The provider does not import the gliner package at construction time.
-    The package is loaded only through the explicit loader on the first
-    `health_check()` call or on the first `discover()` call. Tests inject
-    a fake loader that returns a fake model.
+
+def _stable_dedup(items: list[str]) -> list[str]:
+    """Stable first-seen order deduplication."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _raw_response_redaction_hash(
+    raw_entities: list[dict[str, Any]] | None,
+    *,
+    document_artifact_id: str,
+    chunk_id: str,
+    config_hash: str,
+    company_id: str,
+    provider_name: str,
+) -> str:
+    """Hash ONLY redacted metadata about the provider output.
+
+    The raw entities themselves can contain matched private text, so
+    they are NEVER hashed directly. The fingerprint enables replay
+    detection on counts and ids only.
     """
+    redaction = {
+        "document_artifact_id": document_artifact_id,
+        "chunk_id": chunk_id,
+        "config_hash": config_hash,
+        "company_id": company_id,
+        "provider_name": provider_name,
+        "raw_output_count": len(raw_entities or []),
+    }
+    return hashlib.sha256(
+        json.dumps(redaction, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+class GLiNERLocalProvider(EntityDiscoveryProvider):
+    """Optional local GLiNER entity-discovery provider."""
 
     def __init__(
         self,
@@ -61,12 +135,13 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
         loader: GlinerModelLoader | None = None,
         label_mapping: EntityLabelMapping | None = None,
     ) -> None:
+        if config.company_id == "":
+            raise ValueError("GLiNERLocalProvider requires a non-empty config.company_id")
         self._config = config
         self._loader = loader
         self._model: Any = None
         self._label_mapping = label_mapping or default_label_mapping()
         self._model_identity_record: dict[str, Any] = {}
-        self._load_timestamp: datetime | None = None
 
     @property
     def provider_name(self) -> str:
@@ -139,10 +214,6 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
                 flat_ner=True,
                 threshold=self._config.threshold,
             )
-        except TimeoutError as e:
-            raise ProviderTimeoutError(
-                f"GLiNER predict_entities exceeded {self._config.model_load_timeout_seconds}s"
-            ) from e
         except (OSError, ValueError, RuntimeError, TypeError) as e:
             # GLiNER / torch surface these exception types for genuine
             # model-level failures (tokenization, tensor shapes, OOM). Do
@@ -160,15 +231,29 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
             provider_name=self.provider_name,
             model_name=self.model_name,
             model_version=self.model_version,
-            label_mapping=self._label_mapping,
             config_hash=self.config_hash,
+            adapter_policy_version=self._config.adapter_policy_version,
+            label_mapping=self._label_mapping,
         )
 
-        labels_requested = list({*labels, *gliner_labels})
-        request_id = f"req-{uuid.uuid4().hex[:8]}"
-        raw_hash = hashlib.sha256(
-            json.dumps(raw_entities or [], sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()[:16]
+        labels_requested = _stable_dedup([*labels, *gliner_labels])
+        request_id = derive_request_id(
+            document_artifact_id=chunk.document_artifact_id,
+            chunk_id=chunk.chunk_id,
+            config_hash=self.config_hash,
+            threshold=self._config.threshold,
+            company_id=self._config.company_id,
+            provider_name=self.provider_name,
+            labels_requested=labels_requested,
+        )
+        raw_hash = _raw_response_redaction_hash(
+            raw_entities,
+            document_artifact_id=chunk.document_artifact_id,
+            chunk_id=chunk.chunk_id,
+            config_hash=self.config_hash,
+            company_id=self._config.company_id,
+            provider_name=self.provider_name,
+        )
 
         warnings = list(result.warnings)
         warnings.extend(
@@ -179,8 +264,6 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
                 f"device={self._config.device}",
             ]
         )
-        for c in result.counters.to_dict().items():
-            warnings.append(f"validation:{c[0]}={c[1]}")
 
         return EntityDiscoveryResponse(
             request_id=request_id,
@@ -198,6 +281,7 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
             warnings=warnings,
             raw_response_hash=raw_hash,
             provider_config_hash=self.config_hash,
+            validation_counters=result.counters,
         )
 
     def dispose(self) -> None:
@@ -212,7 +296,7 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
         for requested in labels:
             gliner_label = inverse.get(requested, requested)
             gliner_labels.append(gliner_label)
-        return list(dict.fromkeys(gliner_labels))
+        return _stable_dedup(gliner_labels)
 
     def _ensure_loaded(self) -> Any:
         if self._model is not None:
@@ -231,15 +315,11 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
             "adapter_policy_version": self._config.adapter_policy_version,
             "config_hash": self.config_hash,
             "resolved_revision": None,
-            "model_load_timestamp": None,
             "model_load_succeeded": False,
         }
         model = self._loader(self._config)
         self._model = model
-        timestamp = datetime.now(UTC).isoformat()
-        self._model_identity_record["model_load_timestamp"] = timestamp
         self._model_identity_record["model_load_succeeded"] = True
-        self._load_timestamp = datetime.fromisoformat(timestamp)
-        if hasattr(model, "id_to_name") and isinstance(model.id_to_name, str):
+        if hasattr(model, "id_to_name") and isinstance(getattr(model, "id_to_name", None), str):
             self._model_identity_record["resolved_revision"] = model.id_to_name
         return self._model

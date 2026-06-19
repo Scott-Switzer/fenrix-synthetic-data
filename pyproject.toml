@@ -50,9 +50,9 @@ local-ner = [
 console_scripts = { fenrix-synth = "fenrix_synthetic.cli:main" }
 
 [project.urls]
-Homepage = "https://github.com/fenrix/fenrix-synthetic-data"
-Repository = "https://github.com/fenrix/fenrix-synthetic-data"
-Issues = "https://github.com/fenrix/fenrix-synthetic-data/issues"
+Homepage = "https://github.com/Scott-Switzer/fenrix-synthetic-data"
+Repository = "https://github.com/Scott-Switzer/fenrix-synthetic-data"
+Issues = "https://github.com/Scott-Switzer/fenrix-synthetic-data/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -107,4 +107,5 @@ filterwarnings = [
 ]
 markers = [
     "local_model: tests that require an installed GLiNER/torch model and locally-cached weights",
+    "local_package: tests that require the gliner package to be installed but do not download weights",
 ] 

@@ -40,6 +40,7 @@ class ExpectedEntity:
     end: int
     blocking: bool = True
     notes: str = ""
+    include_in_scoring: bool = True
 
 
 @dataclass

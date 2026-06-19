@@ -844,13 +844,21 @@ def discover(document_path: Path, audit_path: Path | None, output_path: Path | N
     "--document", "document_path", type=click.Path(exists=True, path_type=Path), required=True
 )
 @click.option(
+    "--company",
+    "company_id",
+    required=True,
+    help="Company ID (REQUIRED, never defaults). Example: TEST-CO-001.",
+)
+@click.option(
     "--output",
     "output_path",
     type=click.Path(path_type=Path),
     help="Output path for Phase 3B discovery results JSON",
 )
 @click.pass_context
-def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None) -> None:
+def discover3b(
+    ctx: click.Context, document_path: Path, company_id: str, output_path: Path | None
+) -> None:
     """Run model-assisted entity discovery (Phase 3B).
 
     Uses the fake provider to discover entities, then runs
@@ -937,7 +945,7 @@ def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None
         provider_name=provider.provider_name,
         model_name=provider.model_name,
         model_version=provider.model_version,
-        company_id="C001",
+        company_id=company_id,
         document_artifact_id=doc_id,
         input_hash=hash_string(text),
         latency_ms=50.0,
@@ -988,7 +996,13 @@ def providers_list() -> None:
     default=None,
     help="Path to provider config YAML (optional)",
 )
-def providers_health(provider_name: str, config_path: Path | None) -> None:
+@click.option(
+    "--company",
+    "company_id",
+    default="provider-health-check",
+    help="Synthetic company tag for health-checking; never real C001/HBAN.",
+)
+def providers_health(provider_name: str, config_path: Path | None, company_id: str) -> None:
     """Check discovery provider health and dependency status.
 
     For gliner_local: distinguishes missing dependency, download disabled,
@@ -1014,6 +1028,7 @@ def providers_health(provider_name: str, config_path: Path | None) -> None:
 
     config = GLiNERConfig(
         model_id="urchade/gliner_small-v2.5",
+        company_id=company_id,
         allow_download=False,
     )
 
@@ -1058,11 +1073,18 @@ def providers_health(provider_name: str, config_path: Path | None) -> None:
     default=None,
     help="Local cache directory for model weights (gitignored)",
 )
+@click.option(
+    "--company",
+    "company_id",
+    default="provider-prepare-check",
+    help="Synthetic company tag; never real C001/HBAN.",
+)
 def providers_prepare(
     provider_name: str,
     model_id: str,
     allow_download: bool,
     cache_dir: Path | None,
+    company_id: str,
 ) -> None:
     """Acquire/adopt provider model weights (explicit opt-in only)."""
     if provider_name != "gliner_local":
@@ -1084,6 +1106,7 @@ def providers_prepare(
 
     config = GLiNERConfig(
         model_id=model_id,
+        company_id=company_id,
         allow_download=True,
         cache_dir=str(cache_dir) if cache_dir else None,
     )
@@ -1152,6 +1175,12 @@ def _resolve_private_output_root(
     help="Discovery provider name (only gliner_local in Phase 3C)",
 )
 @click.option(
+    "--company",
+    "company_id",
+    required=True,
+    help="Company ID — REQUIRED, never defaults. Example: TEST-CO-001.",
+)
+@click.option(
     "--document",
     "document_path",
     type=click.Path(exists=True, path_type=Path),
@@ -1185,6 +1214,7 @@ def _resolve_private_output_root(
 def discover_model(
     ctx: click.Context,
     provider_name: str,
+    company_id: str,
     document_path: Path,
     labels_config: Path,
     provider_config: Path | None,
@@ -1200,6 +1230,10 @@ def discover_model(
     Imports the GLiNER provider explicitly only inside this command; the rest
     of the CLI does not require gliner. The result is a private
     ProviderCandidate set plus an aggregate SanitizedDiscoveryReport.
+
+    --company is REQUIRED. There is no default; supplying a real source
+    company ID via this command is an operator error and must not happen
+    silently under any code path.
     """
     if provider_name != "gliner_local":
         click.echo(f"Unknown provider: {provider_name}", err=True)
@@ -1239,8 +1273,13 @@ def discover_model(
     click.echo(f"  Document length: {len(text)} chars")
     click.echo(f"  Chunks: {len(chunks)}")
 
+    if not company_id or not isinstance(company_id, str):
+        click.echo("Error: --company must be a non-empty identifier", err=True)
+        sys.exit(2)
+
     config = GLiNERConfig(
         model_id=model_id,
+        company_id=company_id,
         threshold=threshold,
         allow_download=allow_download,
     )
@@ -1284,7 +1323,7 @@ def discover_model(
         provider_name=provider.provider_name,
         model_name=provider.model_name,
         model_version=provider.model_version,
-        company_id="C001",
+        company_id=company_id,
         document_artifact_id=doc_id,
         input_hash=hash_string(text),
         latency_ms=50.0,
@@ -1307,7 +1346,7 @@ def discover_model(
             "labels_config": str(labels_config),
             "input_hash": report.input_hash,
             "document_artifact_id": doc_id,
-            "company_id": "C001",
+            "company_id": company_id,
             "raw_count": len(all_candidates),
             "deduped_count": len(deduped),
         }
