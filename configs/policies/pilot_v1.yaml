@@ -1,0 +1,107 @@
+# FENRIX Synthetic Data — Pilot Policy v1
+# Phase 4 Anonymity Pilot for SRC_001 → SYNTH_001
+# Private: contains only synthetic/reference identifiers
+
+policy:
+  version: "pilot_v1"
+  effective_date: "2026-06-19"
+
+  source_identifier: "SRC_001"
+  release_identifier: "SYNTH_001"
+
+  # Private data root (via FENRIX_PRIVATE_ROOT env var)
+  private_root_required: true
+
+  # Identity atlas configuration
+  identity_atlas:
+    schema_version: "1.0.0"
+    required_categories:
+      - issuer           # legal names, former names, tickers, CIK, EIN, LEI
+      - people           # executives, directors, founders
+      - organizations    # subsidiaries, auditors, regulators, counterparties
+      - products         # brands, service names, program names
+      - locations        # headquarters, offices, identifying cities/states
+      - digital          # websites, domains, email domains, social handles, phones
+      - semantic_fingerprints  # acquisitions, legal proceedings, distinctive events
+
+  # Pseudonym format
+  pseudonyms:
+    policy_version: "1.0.0"
+    format: "[{ENTITY_TYPE}]"  # typed placeholders like [ISSUER], [EXECUTIVE_01]
+    counter_per_type: true
+    deterministic: true
+
+  # GLiNER integration
+  gliner:
+    review_only: true            # No auto-acceptance
+    no_registry_mutation: true   # No automatic registry updates
+    no_auto_remasking: true      # No automatic remasking
+    candidates_enter_review: true
+
+  # Structured transformation variants
+  structured_variants:
+    s0_control:
+      description: "Non-releasable attack control — exact source returns preserved"
+      releasable: false
+      relative_days: true
+      price_rebased: true
+    s1_basic:
+      description: "Rebased prices, normalized volume, removed absolute shares"
+      releasable: true
+      relative_days: true
+      price_rebased: true
+      volume_percentile: true
+      remove_market_cap: true
+      generalize_corporate_actions: true
+    s2_privacy:
+      description: "Log returns, residual removal, winsorization, pseudo-price reconstruction"
+      releasable: true
+      log_returns: true
+      residual_removal: true
+      winsorization: true
+      pseudo_price_reconstruction: true
+      rolling_volume_transform: true
+
+  # Attack thresholds
+  attack_thresholds:
+    # Structured: source must not rank in the top K of candidate universe
+    structured_ranking_k: 10
+    # LLM: confidence above this threshold triggers REVIEW_REQUIRED
+    llm_confidence_threshold: 0.7
+    # Text: zero tolerance for fingerprint hits
+    unique_phrase_hits: 0
+    semantic_fingerprint_hits: 0
+    # Exact identity scan: zero blocking hits
+    exact_identity_blocking_hits: 0
+
+  # Utility metrics
+  utility:
+    unstructured:
+      min_token_retention: 0.85
+      min_section_retention: 0.80
+      min_table_retention: 0.75
+      min_financial_number_retention: 0.90
+    structured:
+      min_return_sign_agreement: 0.60
+      min_rank_correlation: 0.50
+      max_volatility_distortion: 0.30
+      max_drawdown_distortion: 0.25
+
+  # Release dossier structure
+  release_dossier:
+    root: "release/SYNTH_001"
+    required_files:
+      - README.md
+      - manifest.json
+      - privacy_report.json
+      - utility_report.json
+      - attack_summary.json
+      - transformation_summary.json
+      - release_decision.json
+      - checksums.json
+    forbidden_content:
+      - source_company_identity
+      - raw_source_data
+      - private_paths
+      - private_replacement_map
+      - unredacted_attack_guesses

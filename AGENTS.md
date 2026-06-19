@@ -42,6 +42,14 @@ Phase 3B Core (in progress):
 20. Privacy regression: no plain hashes or private values in sanitized outputs
 21. Promotion → remasking → rescanning workflow
 
+Phase 3C (in progress):
+
+22. Optional local GLiNER adapter behind `local-ner` extra
+23. Provider CLI: `providers list|health|prepare`, `discover-model`
+24. Synthetic-only benchmark with hashed versioning
+25. Bounded threshold sweep (0.30–0.70)
+26. Decision records 022–029 covering explicit download, synthetic smoke, review gating, reproducibility, provisional threshold, CI exclusion of model execution
+
 Deferred to Phase 3C:
 
 - GLiNER adapter

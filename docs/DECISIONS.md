@@ -346,7 +346,16 @@ These schemes use different namespaces and are not cross-referenceable.
 
 ---
 
-## Decision 018: Synthetic C001 Status
+## Decision 022: Local GLiNER Precedes NVIDIA
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Phase 3C begins a model-aided discovery tier above Phase 3A/3B. Hosted NVIDIA inference requires credentials, network egress, and represents uncontrolled third-party risk. A local open-source model (GLiNER) can run offline and inside the same trust boundary as the rest of the project.
+
+**Decision**: Phase 3C implements an optional local GLiNER adapter. NVIDIA hosted inference is not implemented in this branch and is intentionally left for a later milestone after the local integration proves out.
+
+**Rationale**: Local execution has no credentials, no network, and reproducible identity. Hosted inference would require secret management, an explicit threat model for the third party, and additional privacy controls that are outside this milestone.
 
 **Date**: 2026-06-18
 **Status**: Accepted
@@ -356,3 +365,107 @@ These schemes use different namespaces and are not cross-referenceable.
 **Decision**: The C001 implementation is demonstrated with synthetic canary values only. Actual C001 deterministic masking requires a reviewed private registry populated with real HBAN entities and aliases. Do not claim HBAN masking is complete.
 
 **Rationale**: Claiming masking without a reviewed registry would be misleading. The synthetic demonstration proves the pipeline works; the actual masking depends on registry population.
+
+---
+
+## Decision 022: Local GLiNER Precedes NVIDIA
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Phase 3C begins a model-aided discovery tier above Phase 3A/3B. Hosted NVIDIA inference requires credentials, network egress, and represents uncontrolled third-party risk. A local open-source model (GLiNER) can run offline and inside the same trust boundary as the rest of the project.
+
+**Decision**: Phase 3C implements an optional local GLiNER adapter. NVIDIA hosted inference is not implemented in this branch and is intentionally left for a later milestone after the local integration proves out.
+
+**Rationale**: Local execution has no credentials, no network, and reproducible identity. Hosted inference would require secret management, an explicit threat model for the third party, and additional privacy controls that are outside this milestone.
+
+---
+
+## Decision 023: GLiNER Is Optional
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: A machine-learning dependency in the default install would slow tests, force torch and transformers on every contributor, and risk leaking network calls.
+
+**Decision**: GLiNER is an `[project.optional-dependencies].local-ner` extra. The package is `gliner==0.2.27`. It is not installed by `pip install -e ".[dev]"` and not installed by CI. Importing the discovery subpackage must never trigger `import gliner`.
+
+**Rationale**: An optional dependency group keeps the default install deterministic, fast, and offline-only, while making the feature discoverable and reproducible for opt-in users.
+
+---
+
+## Decision 024: Downloads Are Explicit
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: GLiNER requires model weights. An implicit download during pipeline initialization would breach the offline-only contract and risk silent network egress on constrained environments.
+
+**Decision**: `GLiNERConfig.allow_download` defaults to `False`. The CLI exposes `fenrix providers prepare --provider gliner_local --allow-download` as the only acquisition path. The loader uses `local_files_only=True` when `allow_download=False`. No call to `from_pretrained` ever falls through to network without explicit opt-in.
+
+**Rationale**: Faithful offline-by-default requires that even the most "natural" workflow (import, configure asset, run) never accidentally fetches model weights.
+
+---
+
+## Decision 025: Synthetic Smoke Only
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Using real C001/HBAN text in a live GLiNER test would leak real entities outside the privacy boundary.
+
+**Decision**: The committed synthetic benchmark (in `gliner/benchmark.py`) contains only synthetic entities that resemble but do not match real HBAN facts. Live smoke executes against the synthetic benchmark only. No C001/HBAN document is sent to the local model in any automated path.
+
+**Rationale**: Synthetic-only execution keeps the milestone out of the privacy-hardened `data/` directories and makes the smoke reproducible across contributors.
+
+---
+
+## Decision 026: Provider Output Requires Review
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Model output is candidate evidence only. Automatic acceptance or promotion would invalidate the reviewer gate established in Phase 3B.
+
+**Decision**: GLiNER candidates enter the existing `ReviewQueue` with `review_status="pending"`. Reviewers must invoke `accept`, `reject`, `defer`, `duplicate`, or `already_registered` with a mandatory reason. Promotions pass through the same `promote_proposal` flow that requires experimental collision analysis. The CLI surfaces no automatic acceptance regardless of confidence score.
+
+**Rationale**: Confidence is not calibrated leakage probability; review is the only structural gating we trust.
+
+---
+
+## Decision 027: Model Revision Is Recorded
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Reproducibility requires more than a model name. Different commits inside a Hugging Face model id can change weights without changing the identifier.
+
+**Decision**: `model_identity` records `model_id`, requested `revision`, `device`, `adapter_policy_version`, `config_hash`, `model_load_timestamp`, `model_load_succeeded`, and `resolved_revision` (when the underlying library exposes `id_to_name`). If the library does not expose a resolved revision, that limitation is recorded explicitly: `resolved_revision=null`.
+
+**Rationale**: Bit-for-bit reproducibility is rare for ML weights; the integrity guarantees we can give are the configuration hash, the adapter policy version, the load timestamp, and whether the resolved revision matches expectations.
+
+---
+
+## Decision 028: Threshold Remains Provisional
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Picking a permanent default threshold from one benchmark risks overfitting.
+
+**Decision**: `GLiNERConfig.threshold` defaults to `0.50` and is documented as provisional. Default CI does not run the benchmark at any threshold. The CI does not select a production threshold; a sweep over `[0.30, 0.40, 0.50, 0.60, 0.70]` is available offline but does not feed CI status.
+
+**Rationale**: A threshold's quality depends on the benchmark distribution and downstream review cost; record metrics at multiple thresholds and let reviewers choose.
+
+---
+
+## Decision 029: CI Excludes Model Execution
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: CI must remain hermetic, fast, and reproducible without model weights. The `local_model` pytest marker would not be honored by default test selection if no model is downloaded.
+
+**Decision**: The pytest `local_model` marker is registered in `pyproject.toml`. Default CI runs the full suite via `pytest --disable-socket --allow-unix-socket`. The CI does not install `local-ner`, does not download weights, and does not run any `local_model` test. Live GLiNER smoke (if executed locally) uses synthetic text only and is documented but unrequired.
+
+**Rationale**: Default CI must test the adapter's offline guarantees without paying for model load latency or for GPU inference.

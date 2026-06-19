@@ -5,7 +5,7 @@ import re
 import unicodedata
 
 from ..identity import EntityRegistry
-from ..identity.schemas import Alias, MatchPolicy, MutationPolicy
+from ..identity.schemas import Alias, BoundaryPolicy, MatchPolicy, MutationPolicy
 
 
 class MatchEntry:
@@ -146,14 +146,33 @@ def is_unsafe_short_token(value: str) -> bool:
 def get_patterns_for_alias(
     alias: Alias,
     entity_registry: EntityRegistry,
-) -> list[tuple[str, str, str, int]]:
-    patterns: list[tuple[str, str, str, int]] = []
+) -> list[tuple[str, str, str, int, int]]:
+    """Build regex patterns for an alias.
+
+    Returns list of (ptype, pattern, replacement, priority, flags).
+    Flags includes re.IGNORECASE for CASE_INSENSITIVE policy.
+    Word boundaries are added for short or common tokens.
+    """
+    patterns: list[tuple[str, str, str, int, int]] = []
     value = alias.private_alias_value
     entity = entity_registry.get_entity(alias.canonical_entity_id)
     replacement = entity.assigned_pseudonym if entity else "[REDACTED]"
     priority = alias.priority
 
     match_policy = alias.match_policy
+    flags = re.IGNORECASE if match_policy == MatchPolicy.CASE_INSENSITIVE else 0
+
+    # Word-boundary guard for short/common tokens
+    needs_boundary = is_unsafe_short_token(value) or alias.boundary_policy == BoundaryPolicy.WORD
+
+    def _bounded(pattern_str: str) -> str:
+        if not needs_boundary or pattern_str.startswith(r"\b"):
+            return pattern_str
+        # Only add \b where the original value has word-char boundaries.
+        # Punctuation at start/end makes \b invalid (e.g. "Inc." ends with non-word).
+        prefix = r"\b" if value and (value[0].isalnum() or value[0] == "_") else ""
+        suffix = r"\b" if value and (value[-1].isalnum() or value[-1] == "_") else ""
+        return f"{prefix}{pattern_str}{suffix}"
 
     if match_policy in (
         MatchPolicy.LITERAL,
@@ -163,12 +182,12 @@ def get_patterns_for_alias(
         MatchPolicy.WHITESPACE_VARIANT,
         MatchPolicy.CANARY,
     ):
-        patterns.append(("literal", re.escape(value), replacement, priority))
+        patterns.append(("literal", _bounded(re.escape(value)), replacement, priority, flags))
 
     if match_policy == MatchPolicy.TICKER_EXACT:
-        patterns.append(("ticker", re.escape(value.upper()), replacement, priority))
+        patterns.append(("ticker", _bounded(re.escape(value.upper())), replacement, priority, flags))
         patterns.append(
-            ("ticker_exchange", build_ticker_exchange_pattern(value), replacement, priority + 10)
+            ("ticker_exchange", build_ticker_exchange_pattern(value), replacement, priority + 10, flags)
         )
         patterns.append(
             (
@@ -176,39 +195,40 @@ def get_patterns_for_alias(
                 build_ticker_parenthesized_pattern(value),
                 replacement,
                 priority + 5,
+                flags,
             )
         )
 
     if match_policy == MatchPolicy.TICKER_WITH_EXCHANGE:
         patterns.append(
-            ("ticker_exchange", build_ticker_exchange_pattern(value), replacement, priority)
+            ("ticker_exchange", build_ticker_exchange_pattern(value), replacement, priority, flags)
         )
 
     if match_policy == MatchPolicy.CIK_PADDED:
-        patterns.append(("cik_padded", build_cik_padded_pattern(value), replacement, priority))
+        patterns.append(("cik_padded", build_cik_padded_pattern(value), replacement, priority, flags))
 
     if match_policy == MatchPolicy.ACCESSION_DASHED:
-        patterns.append(("accession", build_accession_dashed_pattern(value), replacement, priority))
+        patterns.append(("accession", build_accession_dashed_pattern(value), replacement, priority, flags))
 
     if match_policy == MatchPolicy.DOMAIN_FULL:
-        patterns.append(("url", build_domain_url_pattern(value), replacement, priority))
-        patterns.append(("domain", re.escape(value), replacement, priority + 5))
+        patterns.append(("url", build_domain_url_pattern(value), replacement, priority, flags))
+        patterns.append(("domain", _bounded(re.escape(value)), replacement, priority + 5, flags))
 
     if match_policy == MatchPolicy.DOMAIN_EMAIL:
-        patterns.append(("email", build_email_pattern(value), replacement, priority))
+        patterns.append(("email", build_email_pattern(value), replacement, priority, flags))
 
     if match_policy == MatchPolicy.URL_FULL:
-        patterns.append(("url", build_domain_url_pattern(value), replacement, priority))
+        patterns.append(("url", build_domain_url_pattern(value), replacement, priority, flags))
 
     if MutationPolicy.POSSESSIVE in alias.enabled_mutation_policies:
-        patterns.append(("possessive", build_possessive_pattern(value), replacement, priority + 1))
+        patterns.append(("possessive", build_possessive_pattern(value), replacement, priority + 1, flags))
 
     if MutationPolicy.DASH_VARIANT in alias.enabled_mutation_policies:
         if " " in value:
             dash_variant = value.replace(" ", "-")
-            patterns.append(("dash_variant", re.escape(dash_variant), replacement, priority + 2))
+            patterns.append(("dash_variant", _bounded(re.escape(dash_variant)), replacement, priority + 2, flags))
         if "-" in value:
             space_variant = value.replace("-", " ")
-            patterns.append(("space_variant", re.escape(space_variant), replacement, priority + 2))
+            patterns.append(("space_variant", _bounded(re.escape(space_variant)), replacement, priority + 2, flags))
 
     return patterns

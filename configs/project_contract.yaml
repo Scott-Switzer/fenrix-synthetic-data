@@ -1,0 +1,49 @@
+# FENRIX Synthetic Data — Project Contract (Machine-Readable)
+# Phase 4 Anonymity Pilot
+# Version 1.0.0
+
+contract:
+  version: "1.0.0"
+  pilot_version: "pilot_v1"
+  effective_date: "2026-06-19"
+
+  source_identifier: "SRC_001"
+  release_identifier: "SYNTH_001"
+
+  analysis_unit: "company_stock"
+  target_history_years: 7
+
+  required_data:
+    - structured_ohlcv
+    - unstructured_filings
+    - unstructured_news
+
+  non_negotiable:
+    no_committed_raw_data: true
+    no_committed_private_mappings: true
+    no_hardcoded_real_identifiers: true
+    no_automatic_model_trust: true
+    release_requires_attack_testing: true
+    trading_pipeline_blocked: true
+    synthetic_expansion_blocked: true
+
+  forbidden_fields:
+    - exact_names
+    - tickers
+    - people_names
+    - product_names
+    - location_names
+    - legal_identifiers
+    - urls
+    - metadata_fingerprints
+    - semantic_fingerprints
+
+  preserved_guarantees:
+    ruff_clean: true
+    mypy_zero_errors: true
+    pytest_offline_pass: true
+    no_live_api_in_tests: true
+    no_auto_acceptance: true
+    no_registry_mutation: true
+    no_auto_remasking: true
+    no_anonymity_claim_without_evidence: true
