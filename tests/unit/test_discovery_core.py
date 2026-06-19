@@ -1241,6 +1241,100 @@ class TestDisagreementHandling:
             )
 
 
+class TestReviewQueueIntegration:
+    """Integration tests proving candidates are submitted to review queue without auto-accept."""
+
+    def test_candidates_populate_review_queue(self):
+        """Scored candidates must be added to review queue as pending."""
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
+        candidates = [
+            ProviderCandidate(
+                candidate_id="c1",
+                company_id="TEST-CO-001",
+                document_artifact_id="doc-001",
+                private_matched_text="Acme Corp",
+                confidence=0.8,
+                proposed_entity_type="COMPANY",
+                risk_band="high",
+                review_status="pending",
+            ),
+            ProviderCandidate(
+                candidate_id="c2",
+                company_id="TEST-CO-001",
+                document_artifact_id="doc-001",
+                private_matched_text="Beta Inc",
+                confidence=0.7,
+                proposed_entity_type="COMPANY",
+                risk_band="medium",
+                review_status="pending",
+            ),
+        ]
+        for c in candidates:
+            queue.add_candidate(c)
+
+        assert len(queue.all_reviews()) == 2
+        assert queue.pending_count() == 2
+        assert queue.accepted_count() == 0
+        assert queue.rejected_count() == 0
+
+    def test_review_queue_no_auto_accept(self):
+        """Adding candidates to review queue must NOT auto-accept them."""
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
+        candidate = ProviderCandidate(
+            candidate_id="c1",
+            company_id="TEST-CO-001",
+            document_artifact_id="doc-001",
+            private_matched_text="Acme Corp",
+            confidence=0.99,
+            proposed_entity_type="COMPANY",
+            risk_band="critical",
+            review_status="pending",
+        )
+        queue.add_candidate(candidate)
+        assert queue.accepted_count() == 0
+        assert queue.pending_count() == 1
+        review = queue.get_review("c1")
+        assert review is not None
+        assert review.review_status == "pending"
+        assert review.reviewer_decision == ""
+
+    def test_private_text_not_in_sanitized_review_queue_counts(self):
+        """Sanitized evidence must contain only counts, not private text."""
+        queue = ReviewQueue("TEST-CO-001", "doc-001")
+        candidates = [
+            ProviderCandidate(
+                candidate_id="c1",
+                company_id="TEST-CO-001",
+                document_artifact_id="doc-001",
+                private_matched_text="Secret Company Name",
+                confidence=0.8,
+                proposed_entity_type="COMPANY",
+                risk_band="high",
+                review_status="pending",
+            ),
+        ]
+        for c in candidates:
+            queue.add_candidate(c)
+
+        # Sanitized evidence representation
+        evidence = {
+            "review_queue": {
+                "review_queue_count": len(queue.all_reviews()),
+                "pending_count": queue.pending_count(),
+                "accepted_count": queue.accepted_count(),
+                "rejected_count": queue.rejected_count(),
+                "automatic_acceptance_count": 0,
+                "automatic_promotion_count": 0,
+                "registry_mutation_count": 0,
+                "remasking_count": 0,
+            }
+        }
+        evidence_str = str(evidence)
+        assert "Secret Company Name" not in evidence_str
+        assert "review_queue_count" in evidence_str
+        assert evidence["review_queue"]["review_queue_count"] == 1
+
+
 class TestPromotionRemaskingRescanning:
     """End-to-end test: discovery -> review -> promotion -> remasking -> rescanning."""
 

@@ -1189,7 +1189,7 @@ def providers_ingest_colab(
         click.echo(f"Error: missing required top-level fields: {missing}", err=True)
         sys.exit(1)
 
-    # Verify zero acceptance / promotion
+    # Verify zero acceptance / promotion / registry mutation / remasking
     rq = report["review_queue"]
     if rq.get("automatic_acceptance_count", 0) != 0:
         click.echo("Error: automatic_acceptance_count is non-zero", err=True)
@@ -1197,10 +1197,44 @@ def providers_ingest_colab(
     if rq.get("automatic_promotion_count", 0) != 0:
         click.echo("Error: automatic_promotion_count is non-zero", err=True)
         sys.exit(1)
+    if rq.get("registry_mutation_count", 0) != 0:
+        click.echo("Error: registry_mutation_count is non-zero", err=True)
+        sys.exit(1)
+    if rq.get("remasking_count", 0) != 0:
+        click.echo("Error: remasking_count is non-zero", err=True)
+        sys.exit(1)
 
     # Verify no real data
     if not report["privacy"].get("no_real_company_data", False):
         click.echo("Error: privacy.no_real_company_data is false", err=True)
+        sys.exit(1)
+
+    # Verify working tree clean
+    repo = report["repository"]
+    if repo.get("working_tree_clean") is False:
+        click.echo("Error: report indicates working_tree_clean=false", err=True)
+        sys.exit(1)
+    if repo.get("commit_verified") is False:
+        click.echo("Error: report indicates commit_verified=false", err=True)
+        sys.exit(1)
+
+    # Verify model load and predict_entities success
+    model = report["model"]
+    if not model.get("load_success", False):
+        click.echo("Error: model.load_success is false", err=True)
+        sys.exit(1)
+    if not report["discovery"].get("predict_entities_success", False):
+        click.echo("Error: discovery.predict_entities_success is false", err=True)
+        sys.exit(1)
+
+    # Verify review queue populated when candidates exist
+    discovery = report["discovery"]
+    normalized_count = discovery.get("normalized_candidate_count", 0)
+    review_queue_count = rq.get("review_queue_count", 0)
+    if normalized_count > 0 and review_queue_count == 0:
+        click.echo(
+            f"Error: {normalized_count} normalized candidates but review_queue_count=0", err=True
+        )
         sys.exit(1)
 
     # Verify commit
@@ -1215,7 +1249,7 @@ def providers_ingest_colab(
         click.echo(f"Error: could not read local HEAD: {e}", err=True)
         sys.exit(1)
 
-    repo_commit = report["repository"].get("commit", "")
+    repo_commit = report["repository"].get("checked_out_commit", "")
     if expected_commit and expected_commit != repo_commit:
         click.echo(
             f"Error: commit mismatch: expected {expected_commit}, got {repo_commit}",
@@ -1498,6 +1532,13 @@ def discover_model(
             f"conf={s.confidence:.2f} opaque_id={s.opaque_id[:8]}..."
         )
 
+    # Build review queue from scored candidates (no auto-accept, no auto-promote)
+    from .discovery import ReviewQueue
+
+    queue = ReviewQueue(company_id=company_id, document_artifact_id=doc_id)
+    for c in scored:
+        queue.add_candidate(c)
+
     report = build_sanitized_report(
         candidates=scored,
         provider_name=provider.provider_name,
@@ -1529,6 +1570,13 @@ def discover_model(
             "company_id": company_id,
             "raw_count": len(all_candidates),
             "deduped_count": len(deduped),
+            "review_queue": {
+                "review_queue_count": len(queue.all_reviews()),
+                "pending_count": queue.pending_count(),
+                "accepted_count": queue.accepted_count(),
+                "rejected_count": queue.rejected_count(),
+                "review_records": [r.__dict__ for r in queue.review_records()],
+            },
         }
         safe_path.write_bytes(
             _orjson.dumps(private_payload, default=str, option=_orjson.OPT_INDENT_2)
@@ -1538,11 +1586,24 @@ def discover_model(
     if output_path:
         import orjson as _orjson
 
+        # Include review queue counts in sanitized report
+        report_dict = report.to_dict()
+        report_dict["review_queue"] = {
+            "review_queue_count": len(queue.all_reviews()),
+            "pending_count": queue.pending_count(),
+            "accepted_count": queue.accepted_count(),
+            "rejected_count": queue.rejected_count(),
+            "automatic_acceptance_count": 0,
+            "automatic_promotion_count": 0,
+            "registry_mutation_count": 0,
+            "remasking_count": 0,
+        }
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(_orjson.dumps(report.to_dict(), option=_orjson.OPT_INDENT_2))
+        output_path.write_bytes(_orjson.dumps(report_dict, option=_orjson.OPT_INDENT_2))
         click.echo(f"  Sanitized report: {output_path}")
 
     click.echo(f"  total_candidates={report.total_candidates} bands={report.candidates_by_band}")
+    click.echo(f"  review_queue_count={len(queue.all_reviews())} pending={queue.pending_count()}")
     click.echo("  No candidate has been accepted, promoted, or masked.")
 
 

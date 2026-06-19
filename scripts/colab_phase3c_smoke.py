@@ -65,7 +65,6 @@ from typing import Any
 PHASE3C_MODEL = "gliner-community/gliner_small-v2.5"
 PHASE3C_COMPANY_ID = "TEST-CO-001"
 PHASE3C_BRANCH = "feature/local-gliner-adapter"
-PHASE3C_COMMIT = "8389eda31ae3ec093ddd4acb1b32bc9b211daea2"
 PHASE3C_DOC = (
     # Synthetic-only — every value below is from the in-repo benchmark
     # fixture (bench-04) and contains no real HBAN data. The smoke
@@ -209,8 +208,8 @@ def _format_failure(failure: Phase3CFailure) -> str:
     )
 
 
-def _verify_commit(repo_root: Path, expected_commit: str) -> str:
-    """Verify the repository is at the expected commit (or a descendant)."""
+def _get_head_commit(repo_root: Path) -> str:
+    """Read the current HEAD commit SHA from git."""
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_root,
@@ -218,16 +217,104 @@ def _verify_commit(repo_root: Path, expected_commit: str) -> str:
         text=True,
         check=True,
     )
-    actual = result.stdout.strip()
-    if expected_commit not in actual and actual not in expected_commit:
+    return result.stdout.strip()
+
+
+def _is_working_tree_clean(
+    repo_root: Path, permitted_output_dir: Path | None = None
+) -> tuple[bool, str]:
+    """Check if the working tree is clean (no tracked file modifications).
+
+    Untracked files are allowed. Tracked files that are modified make the
+    tree dirty. If a permitted_output_dir is provided, any untracked files
+    inside that directory are ignored and do not make the tree dirty.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = [line for line in result.stdout.strip().split("\n") if line.strip()]
+    dirty_lines: list[str] = []
+    for line in lines:
+        # git status --porcelain format: XY filename
+        # X = index status, Y = working tree status
+        if len(line) < 3:
+            continue
+        status = line[:2]
+        path = line[3:]
+        # Tracked modifications: M, A, D, R, C in either position
+        # ?? = untracked (allowed)
+        if status == "??":
+            # Untracked file — allowed if it's in the permitted output dir
+            if permitted_output_dir is not None:
+                full_path = repo_root / path
+                try:
+                    if full_path.resolve().is_relative_to(permitted_output_dir.resolve()):
+                        continue
+                except (ValueError, OSError):
+                    pass
+            # Otherwise untracked is fine (not tracked modifications)
+            continue
+        dirty_lines.append(line)
+    if dirty_lines:
+        return False, "\n".join(dirty_lines)
+    return True, ""
+
+
+def _verify_commit(
+    repo_root: Path,
+    expected_commit: str | None,
+    permitted_output_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Verify repository provenance and working tree cleanliness.
+
+    Returns a dict with:
+        - checked_out_commit: actual HEAD SHA
+        - expected_commit: the expected SHA (if provided)
+        - commit_verified: whether expected matches actual
+        - working_tree_clean: whether tracked files are unmodified
+    """
+    actual = _get_head_commit(repo_root)
+    clean, dirty_details = _is_working_tree_clean(repo_root, permitted_output_dir)
+
+    verified = True
+    if expected_commit and expected_commit not in actual and actual not in expected_commit:
+        verified = False
+
+    if not clean:
+        verified = False
+
+    print(f"[phase3c] checked_out_commit={actual}")
+    if expected_commit:
+        print(f"[phase3c] expected_commit={expected_commit}")
+    print(f"[phase3c] commit_verified={verified}")
+    print(f"[phase3c] working_tree_clean={clean}")
+
+    if not clean:
+        raise Phase3CFailure(
+            step="verify_commit",
+            cmd=["git", "status", "--porcelain"],
+            returncode=1,
+            stderr_tail=f"Working tree is dirty (tracked modifications detected):\n{dirty_details}",
+        )
+
+    if expected_commit and not verified:
         raise Phase3CFailure(
             step="verify_commit",
             cmd=["git", "rev-parse", "HEAD"],
             returncode=1,
             stderr_tail=f"Expected commit {expected_commit} but got {actual}",
         )
-    print(f"[phase3c] commit verified: {actual}")
-    return actual
+
+    return {
+        "checked_out_commit": actual,
+        "expected_commit": expected_commit,
+        "commit_verified": verified,
+        "working_tree_clean": clean,
+    }
 
 
 def _run_pytest_local_package(repo_root: Path, env: dict[str, str]) -> None:
@@ -260,6 +347,12 @@ _EVAL_SCRIPT = (
     "import sys\n"
     "import time\n"
     "\n"
+    "from fenrix_synthetic.discovery import (\n"
+    "    CandidateDeduplicator,\n"
+    "    CandidateNormalizer,\n"
+    "    ReviewQueue,\n"
+    "    aggregate_provider_candidates,\n"
+    ")\n"
     "from fenrix_synthetic.discovery.providers.gliner import (\n"
     "    GLiNERConfig,\n"
     "    GLiNERLocalProvider,\n"
@@ -267,6 +360,7 @@ _EVAL_SCRIPT = (
     ")\n"
     "from fenrix_synthetic.discovery.providers.gliner.benchmark import load_default_benchmark\n"
     "from fenrix_synthetic.discovery.providers.gliner.evaluation import evaluate_against_benchmark\n"
+    "from fenrix_synthetic.discovery.schemas import DiscoveryChunk\n"
     "\n"
     "def main():\n"
     "    model_id = sys.argv[1]\n"
@@ -313,6 +407,33 @@ _EVAL_SCRIPT = (
     "        ],\n"
     "    )\n"
     "    eval_duration = time.perf_counter() - eval_start\n"
+    "    # Build review queue from benchmark candidates (reuse existing Phase 3B workflow)\n"
+    "    all_responses = []\n"
+    "    for doc in benchmark.documents:\n"
+    "        chunk = DiscoveryChunk(\n"
+    "            chunk_id=f'bench-chunk-{doc.document_id}-0',\n"
+    "            document_artifact_id=doc.document_id,\n"
+    "            chunk_index=0,\n"
+    "            start_offset=0,\n"
+    "            end_offset=len(doc.text),\n"
+    "            text=doc.text,\n"
+    "        )\n"
+    "        response = provider.discover(chunk, labels=[\n"
+    "            'company', 'subsidiary', 'executive', 'board_member',\n"
+    "            'product', 'brand', 'proprietary_platform', 'facility',\n"
+    "            'headquarters', 'acquisition_target', 'joint_venture',\n"
+    "            'auditor', 'law_firm', 'customer', 'supplier',\n"
+    "            'competitor', 'regulator', 'location', 'exchange_ticker', 'domain',\n"
+    "        ])\n"
+    "        all_responses.append(response)\n"
+    "    all_candidates = aggregate_provider_candidates(all_responses)\n"
+    "    deduplicator = CandidateDeduplicator()\n"
+    "    deduped, group_map = deduplicator.deduplicate(all_candidates)\n"
+    "    normalizer = CandidateNormalizer()\n"
+    "    scored = normalizer.normalize(deduped)\n"
+    "    queue = ReviewQueue(company_id=company_id, document_artifact_id='benchmark')\n"
+    "    for c in scored:\n"
+    "        queue.add_candidate(c)\n"
     "    result = {\n"
     "        'model_load_duration_seconds': round(load_duration, 3),\n"
     "        'inference_duration_seconds': round(eval_duration, 3),\n"
@@ -320,6 +441,18 @@ _EVAL_SCRIPT = (
     "        'benchmark_hash': metrics.benchmark_hash,\n"
     "        'benchmark_documents': len(benchmark.documents),\n"
     "        'evaluation_metrics': metrics.to_dict(),\n"
+    "        'review_queue': {\n"
+    "            'review_queue_count': len(queue.all_reviews()),\n"
+    "            'pending_count': queue.pending_count(),\n"
+    "            'accepted_count': queue.accepted_count(),\n"
+    "            'rejected_count': queue.rejected_count(),\n"
+    "            'automatic_acceptance_count': 0,\n"
+    "            'automatic_promotion_count': 0,\n"
+    "            'registry_mutation_count': 0,\n"
+    "            'remasking_count': 0,\n"
+    "        },\n"
+    "        'normalized_candidate_count': len(scored),\n"
+    "        'duplicate_collapse_count': len(group_map),\n"
     "    }\n"
     "    with open(output_path, 'w', encoding='utf-8') as f:\n"
     "        json.dump(result, f)\n"
@@ -392,9 +525,58 @@ def _verify_zero_acceptance(discovery_report: dict[str, Any]) -> None:
     print("[phase3c] zero-acceptance verified.")
 
 
+def _verify_review_queue_populated(review_queue: dict[str, Any], normalized_count: int) -> None:
+    """Assert that review queue is populated when candidates exist, and zero auto-accept/promote."""
+    rq_count = review_queue.get("review_queue_count", 0)
+    auto_accept = review_queue.get("automatic_acceptance_count", 0)
+    auto_promote = review_queue.get("automatic_promotion_count", 0)
+    registry_mut = review_queue.get("registry_mutation_count", 0)
+    remask = review_queue.get("remasking_count", 0)
+
+    if normalized_count > 0 and rq_count == 0:
+        raise Phase3CFailure(
+            step="verify_review_queue",
+            cmd=[],
+            returncode=1,
+            stderr_tail=(
+                f"review_queue_count={rq_count} but normalized_candidate_count={normalized_count}. "
+                "All normalized candidates must be submitted to the review queue."
+            ),
+        )
+    if auto_accept != 0:
+        raise Phase3CFailure(
+            step="verify_review_queue",
+            cmd=[],
+            returncode=1,
+            stderr_tail=f"automatic_acceptance_count={auto_accept} (expected 0)",
+        )
+    if auto_promote != 0:
+        raise Phase3CFailure(
+            step="verify_review_queue",
+            cmd=[],
+            returncode=1,
+            stderr_tail=f"automatic_promotion_count={auto_promote} (expected 0)",
+        )
+    if registry_mut != 0:
+        raise Phase3CFailure(
+            step="verify_review_queue",
+            cmd=[],
+            returncode=1,
+            stderr_tail=f"registry_mutation_count={registry_mut} (expected 0)",
+        )
+    if remask != 0:
+        raise Phase3CFailure(
+            step="verify_review_queue",
+            cmd=[],
+            returncode=1,
+            stderr_tail=f"remasking_count={remask} (expected 0)",
+        )
+    print(f"[phase3c] review-queue verified: count={rq_count}, normalized={normalized_count}")
+
+
 def _build_evidence_report(
     env_record: dict[str, Any],
-    actual_commit: str,
+    provenance: dict[str, Any],
     model_perf: dict[str, Any],
     discovery_report: dict[str, Any],
     threshold: float,
@@ -433,8 +615,10 @@ def _build_evidence_report(
         },
         "repository": {
             "branch": PHASE3C_BRANCH,
-            "commit": actual_commit,
-            "commit_verified": True,
+            "checked_out_commit": provenance.get("checked_out_commit", ""),
+            "expected_commit": provenance.get("expected_commit"),
+            "commit_verified": provenance.get("commit_verified", True),
+            "working_tree_clean": provenance.get("working_tree_clean", True),
         },
         "model": {
             "model_id": PHASE3C_MODEL,
@@ -451,11 +635,11 @@ def _build_evidence_report(
             "raw_candidates": total_received,
             "valid_candidates": accepted,
             "malformed_output_count": malformed,
-            "normalized_candidate_count": discovery_report.get("total_candidates", 0),
-            "duplicate_collapse_count": discovery_report.get("duplicate_groups", 0),
-            "pending_count": discovery_report.get("pending_count", 0),
-            "accepted_count": discovery_report.get("accepted_count", 0),
-            "rejected_count": discovery_report.get("rejected_count", 0),
+            "normalized_candidate_count": model_perf.get("normalized_candidate_count", 0),
+            "duplicate_collapse_count": model_perf.get("duplicate_collapse_count", 0),
+            "pending_count": model_perf.get("review_queue", {}).get("pending_count", 0),
+            "accepted_count": model_perf.get("review_queue", {}).get("accepted_count", 0),
+            "rejected_count": model_perf.get("review_queue", {}).get("rejected_count", 0),
             "warnings": discovery_report.get("warnings", []),
         },
         "evaluation": {
@@ -481,10 +665,21 @@ def _build_evidence_report(
             "review_workload_estimate": eval_metrics.get("review_workload_estimate"),
         },
         "review_queue": {
-            "review_queue_count": 0,
-            "automatic_acceptance_count": 0,
-            "automatic_promotion_count": 0,
-            "note": "No review queue was auto-populated by the smoke wrapper.",
+            "review_queue_count": model_perf.get("review_queue", {}).get("review_queue_count", 0),
+            "pending_review_count": model_perf.get("review_queue", {}).get("pending_count", 0),
+            "accepted_count": model_perf.get("review_queue", {}).get("accepted_count", 0),
+            "rejected_count": model_perf.get("review_queue", {}).get("rejected_count", 0),
+            "automatic_acceptance_count": model_perf.get("review_queue", {}).get(
+                "automatic_acceptance_count", 0
+            ),
+            "automatic_promotion_count": model_perf.get("review_queue", {}).get(
+                "automatic_promotion_count", 0
+            ),
+            "registry_mutation_count": model_perf.get("review_queue", {}).get(
+                "registry_mutation_count", 0
+            ),
+            "remasking_count": model_perf.get("review_queue", {}).get("remasking_count", 0),
+            "note": "All candidates are pending human review; no auto-accept, auto-promote, or remask occurred.",
         },
         "privacy": {
             "no_real_company_data": True,
@@ -520,10 +715,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip `pip install -e .[dev,local-ner]` (use when already installed).",
     )
     parser.add_argument(
-        "--commit",
+        "--expected-commit",
         type=str,
-        default=PHASE3C_COMMIT,
-        help="Expected repository commit SHA.",
+        default=None,
+        help="Expected repository commit SHA. If omitted, HEAD is recorded but not verified.",
     )
     args = parser.parse_args(argv)
 
@@ -545,7 +740,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[phase3c] model     = {PHASE3C_MODEL}")
     print(f"[phase3c] threshold = {args.threshold}")
     print(f"[phase3c] company   = {PHASE3C_COMPANY_ID}")
-    print(f"[phase3c] expected_commit = {args.commit}")
     print("[phase3c] synthetic-only smoke document; no real HBAN data.")
 
     env = _bounded_cache_env(hf_home=work_dir / "hf_home")
@@ -576,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         # Verify commit and run package contract tests
-        actual_commit = _verify_commit(repo_root, args.commit)
+        provenance = _verify_commit(repo_root, args.expected_commit, permitted_output_dir=work_dir)
         _run_pytest_local_package(repo_root, env)
 
         # Step 1: pre-download + cache the model
@@ -640,9 +834,15 @@ def main(argv: list[str] | None = None) -> int:
             discovery_report = json.load(f)
         _verify_zero_acceptance(discovery_report)
 
-        # Step 5: build comprehensive evidence report
+        # Step 5: verify review queue is populated from benchmark evaluation
+        _verify_review_queue_populated(
+            model_perf.get("review_queue", {}),
+            model_perf.get("normalized_candidate_count", 0),
+        )
+
+        # Step 6: build comprehensive evidence report
         evidence = _build_evidence_report(
-            env_record, actual_commit, model_perf, discovery_report, args.threshold
+            env_record, provenance, model_perf, discovery_report, args.threshold
         )
         with open(evidence_path, "w", encoding="utf-8") as f:
             json.dump(evidence, f, indent=2, ensure_ascii=False)
