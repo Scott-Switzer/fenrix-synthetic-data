@@ -47,7 +47,8 @@
       "git checkout*": "ask",
       "git add*": "ask",
       "git commit*": "ask",
-      "git push*": "deny",
+      "git push*": "ask",
+      "gh pr create*": "ask",
 
       "python *": "allow",
       "python3 *": "allow",
