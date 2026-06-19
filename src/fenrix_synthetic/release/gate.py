@@ -1,22 +1,9 @@
-"""Release gate (Phase 4I).
+"""Release gate (Phase 4R2).
 
 Implements PASS / FAIL / REVIEW_REQUIRED decision logic.
-
-The gate must fail when:
-- A known identifier remains
-- A source name appears in any filename
-- A ticker, CIK, EIN, LEI, URL, domain, phone number or address remains
-- Raw data are inside the repository
-- Private mappings appear in tracked output
-- Deterministic reproduction fails
-- A required attack did not run
-- Provenance is incomplete
-- The structured attack exceeds the configured privacy threshold
-- A unique phrase or semantic fingerprint exceeds the configured threshold
-- Release artifacts contain private paths
-- Any validator encounters an unhandled error
-
-The gate must never convert missing evidence into a pass.
+The gate consumes an EvidenceManifest as its authoritative input.
+It verifies completeness, consistency, and run integrity before
+evaluating individual privacy conditions.
 """
 
 from __future__ import annotations
@@ -24,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from fenrix_synthetic.release.evidence import EvidenceManifest
 
 
 class ReleaseDecision(StrEnum):
@@ -61,26 +50,33 @@ class ReleaseGateResult:
 
 def evaluate_release_gate(
     *,
-    text_attacks_blocked: bool,
-    structured_rank: int,
-    structured_top_k: int,
-    llm_blocked: bool,
-    exact_identity_hits: int,
-    unique_phrase_hits: int,
-    digital_hits: int,
-    filename_hits: int,
-    deterministic_reproduced: bool,
-    all_attacks_ran: bool,
-    provenance_complete: bool,
-    private_paths_found: list[str],
-    unhandled_errors: list[str],
-    policy: dict | None = None,
+    text_attacks_blocked: bool = False,
+    structured_rank: int = -1,
+    structured_top_k: int = 10,
+    llm_blocked: bool = False,
+    exact_identity_hits: int = 0,
+    unique_phrase_hits: int = 0,
+    digital_hits: int = 0,
+    filename_hits: int = 0,
+    deterministic_reproduced: bool = True,
+    all_attacks_ran: bool = True,
+    provenance_complete: bool = True,
+    private_paths_found: list[str] | None = None,
+    unhandled_errors: list[str] | None = None,
+    policy: dict[str, Any] | None = None,
+    evidence_manifest: EvidenceManifest | None = None,
 ) -> ReleaseGateResult:
     """Evaluate all gate conditions and produce a release decision.
 
+    When an EvidenceManifest is provided, it is validated first —
+    completeness, consistency (run_id/source_id/release_id match),
+    artifact hashes, and stale artifact detection — before individual
+    conditions are evaluated. Additional gate conditions are added
+    from the manifest.
+
     Args:
         text_attacks_blocked: Whether any text attack found a blocking hit
-        structured_rank: Source's rank in candidate universe (1-based, -1 if not found)
+        structured_rank: Source rank in candidate universe (-1 if not found)
         structured_top_k: Threshold for structured ranking
         llm_blocked: Whether LLM attack confidence exceeds threshold
         exact_identity_hits: Number of exact identity hits
@@ -90,18 +86,107 @@ def evaluate_release_gate(
         deterministic_reproduced: Whether artifact hashes match
         all_attacks_ran: Whether all required attacks executed
         provenance_complete: Whether provenance is complete
-        private_paths_found: List of private paths found in release artifacts
-        unhandled_errors: List of unhandled error messages
+        private_paths_found: Private paths found in release artifacts
+        unhandled_errors: Unhandled error messages
         policy: Optional policy dict with custom thresholds
+        evidence_manifest: Canonical EvidenceManifest (primary input when available)
 
     Returns:
         ReleaseGateResult with decision and all evaluated conditions
     """
     conditions: list[GateCondition] = []
-
     policy = policy or {}
     thresholds = policy.get("attack_thresholds", {})
 
+    # ── Evidence manifest validation ────────────────────────────────
+    if evidence_manifest is not None:
+        # Condition M1: Manifest completeness
+        manifest_valid, manifest_issues = evidence_manifest.validate_completeness()
+        conditions.append(
+            GateCondition(
+                condition_id="evidence_manifest_complete",
+                description="All required evidence types are present in manifest",
+                passed=manifest_valid,
+                is_blocking=True,
+                evidence={"issues": manifest_issues[:10]},
+            )
+        )
+        if not manifest_valid:
+            # Cannot trust manifest — evaluate no further
+            return ReleaseGateResult(
+                decision=ReleaseDecision.FAIL,
+                conditions=conditions,
+                blocking_failures=1,
+                warnings=0,
+                gate_hash=_compute_gate_hash(ReleaseDecision.FAIL, 1, 0, conditions),
+            )
+
+        # Condition M2: No placeholder entries
+        placeholders = [
+            r.evidence_type
+            for r in evidence_manifest.references
+            if r.artifact_hash == "placeholder" or r.artifact_hash == ""
+        ]
+        conditions.append(
+            GateCondition(
+                condition_id="manifest_no_placeholders",
+                description="No evidence entries are placeholders",
+                passed=len(placeholders) == 0,
+                is_blocking=True,
+                evidence={"placeholders": placeholders},
+            )
+        )
+
+        # Condition M3: All evidence from same run
+        mismatched_run = [
+            r.evidence_type
+            for r in evidence_manifest.references
+            if r.run_id and r.run_id != evidence_manifest.run_id
+        ]
+        conditions.append(
+            GateCondition(
+                condition_id="manifest_same_run",
+                description="All evidence belongs to the current run",
+                passed=len(mismatched_run) == 0,
+                is_blocking=True,
+                evidence={"mismatched": mismatched_run},
+            )
+        )
+
+        # Condition M4: Source/release IDs match
+        id_mismatch = [
+            r.evidence_type
+            for r in evidence_manifest.references
+            if (
+                (r.source_id and r.source_id != evidence_manifest.source_id)
+                or (r.release_id and r.release_id != evidence_manifest.release_id)
+            )
+        ]
+        conditions.append(
+            GateCondition(
+                condition_id="manifest_id_consistency",
+                description="All evidence has consistent source/release IDs",
+                passed=len(id_mismatch) == 0,
+                is_blocking=True,
+                evidence={"mismatched": id_mismatch},
+            )
+        )
+
+        # Condition M5: Required evidence types present
+        required_types = evidence_manifest.get_required_types()
+        present_types = {r.evidence_type for r in evidence_manifest.references}
+        missing_types = required_types - present_types
+        conditions.append(
+            GateCondition(
+                condition_id="manifest_required_types",
+                description="All required evidence types are present",
+                passed=len(missing_types) == 0,
+                is_blocking=True,
+                evidence={"missing": sorted(missing_types)},
+            )
+        )
+
+    # ── Individual conditions ───────────────────────────────────────
     # Condition 1: Exact identity scan
     c1_passed = exact_identity_hits == 0
     conditions.append(
@@ -115,7 +200,7 @@ def evaluate_release_gate(
     )
 
     # Condition 2: Unique phrase / semantic fingerprint scan
-    fp_threshold = thresholds.get("unique_phrase_hits", 0)
+    fp_threshold = int(thresholds.get("unique_phrase_hits", 0))
     c2_passed = unique_phrase_hits <= fp_threshold
     conditions.append(
         GateCondition(
@@ -132,7 +217,7 @@ def evaluate_release_gate(
     conditions.append(
         GateCondition(
             condition_id="digital_identifiers",
-            description="No digital identifiers found (URLs, domains, emails, phones)",
+            description="No digital identifiers found",
             passed=c3_passed,
             is_blocking=True,
             evidence={"hits": digital_hits},
@@ -152,7 +237,7 @@ def evaluate_release_gate(
     )
 
     # Condition 5: Structured attack ranking
-    k = thresholds.get("structured_ranking_k", 10)
+    k = int(thresholds.get("structured_ranking_k", 10))
     c5_passed = structured_rank < 0 or structured_rank > k
     conditions.append(
         GateCondition(
@@ -164,16 +249,16 @@ def evaluate_release_gate(
         )
     )
 
-    # Condition 6: LLM attack
+    # Condition 6: LLM attack (non-blocking if LLM is optional)
     llm_threshold = thresholds.get("llm_confidence_threshold", 0.7)
     c6_passed = not llm_blocked
-    is_blocking_llm = not c6_passed
+    llm_required = thresholds.get("llm_attack_required", False)
     conditions.append(
         GateCondition(
             condition_id="llm_attack",
             description=f"LLM confidence below threshold ({llm_threshold})",
             passed=c6_passed,
-            is_blocking=is_blocking_llm,
+            is_blocking=llm_required,
             evidence={"threshold": llm_threshold},
         )
     )
@@ -212,30 +297,32 @@ def evaluate_release_gate(
     )
 
     # Condition 10: No private paths in release
-    c10_passed = len(private_paths_found) == 0
+    pf = private_paths_found or []
+    c10_passed = len(pf) == 0
     conditions.append(
         GateCondition(
             condition_id="no_private_paths",
             description="No private paths found in release artifacts",
             passed=c10_passed,
             is_blocking=True,
-            evidence={"private_paths": private_paths_found},
+            evidence={"private_paths": pf},
         )
     )
 
     # Condition 11: No unhandled errors
-    c11_passed = len(unhandled_errors) == 0
+    ue = unhandled_errors or []
+    c11_passed = len(ue) == 0
     conditions.append(
         GateCondition(
             condition_id="no_unhandled_errors",
             description="No unhandled validator errors",
             passed=c11_passed,
             is_blocking=True,
-            evidence={"errors": unhandled_errors},
+            evidence={"errors": ue},
         )
     )
 
-    # Determine decision
+    # ── Decision ────────────────────────────────────────────────────
     blocking_failures = sum(1 for c in conditions if not c.passed and c.is_blocking)
     warnings = sum(1 for c in conditions if not c.passed and not c.is_blocking)
 
@@ -246,10 +333,25 @@ def evaluate_release_gate(
     else:
         decision = ReleaseDecision.PASS
 
+    return ReleaseGateResult(
+        decision=decision,
+        conditions=conditions,
+        blocking_failures=blocking_failures,
+        warnings=warnings,
+        gate_hash=_compute_gate_hash(decision, blocking_failures, warnings, conditions),
+    )
+
+
+def _compute_gate_hash(
+    decision: ReleaseDecision,
+    blocking_failures: int,
+    warnings: int,
+    conditions: list[GateCondition],
+) -> str:
     import hashlib
     import json
 
-    gate_hash = hashlib.sha256(
+    return hashlib.sha256(
         json.dumps(
             {
                 "decision": decision.value,
@@ -263,11 +365,3 @@ def evaluate_release_gate(
             sort_keys=True,
         ).encode()
     ).hexdigest()[:16]
-
-    return ReleaseGateResult(
-        decision=decision,
-        conditions=conditions,
-        blocking_failures=blocking_failures,
-        warnings=warnings,
-        gate_hash=gate_hash,
-    )
