@@ -82,6 +82,8 @@ logs/
 *.safetensors
 embeddings/
 models/
+xet/
+*.agent_harnesses.json
 
 # Generated artifacts (never commit)
 artifacts/
@@ -102,7 +104,11 @@ notebooks/
 private/
 private/**/*
 
+# Sanitized evidence artifacts (never commit — generated on demand)
+evidence/
+
 # OS
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+Scott.zip
