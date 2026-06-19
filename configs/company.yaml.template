@@ -1,0 +1,10 @@
+# Company identity configuration template
+# Copy to configs/company.yaml and fill in values
+# DO NOT COMMIT configs/company.yaml (contains private mappings)
+
+companies:
+  C001:
+    source_identity: "HBAN"  # Private source identity
+    data_root: "data"
+    raw_dir: "data/raw"
+    bronze_dir: "data/bronze"

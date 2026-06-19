@@ -1,0 +1,9 @@
+# Campaign configuration
+company_id: "C001"
+stages:
+  - "ingest"
+  - "extract"
+  - "manifest"
+resume: true
+stop_on_failure: true
+config_overrides: {}
