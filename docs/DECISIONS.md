@@ -320,6 +320,32 @@ These schemes use different namespaces and are not cross-referenceable.
 
 ---
 
+## Decision 021: GitHub Actions CI Before Phase 3C
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Phase 3B Core is merged to main. Future work (Phase 3C and beyond) needs quality gates that run automatically on PRs targeting main and on pushes to main.
+
+**Decision**: Add `.github/workflows/ci.yml` with two jobs: `quality` (ruff format check, ruff lint, mypy) and `tests` (pytest --collect-only, pytest full suite). The CI requires no network access, no private company registry, no model downloads, and no API keys.
+
+**Triggers**:
+- Pull requests targeting `main`
+- Pushes to `main`
+- Manual `workflow_dispatch`
+
+**Permissions**: `contents: read` only.
+
+**Exclusions**:
+- GLiNER, PyTorch, transformers not installed
+- NVIDIA clients not installed
+- Optional live-provider dependencies not installed
+- No secrets configured
+
+**Rationale**: Introducing CI after Phase 3B merge ensures that subsequent work (Phase 3C adapters, optional dependencies, live smoke commands) cannot silently break core quality or tests. Keeping CI fully offline-capable avoids secret management and ensures any contributor can reproduce checks locally.
+
+---
+
 ## Decision 018: Synthetic C001 Status
 
 **Date**: 2026-06-18
