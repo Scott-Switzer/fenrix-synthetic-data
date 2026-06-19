@@ -135,7 +135,7 @@ class DiscoveryReviewRecord:
 @dataclass
 class SanitizedCandidateSummary:
     candidate_id: str
-    matched_text_hash: str
+    opaque_id: str
     proposed_entity_type: str
     provider_name: str
     model_name: str

@@ -275,6 +275,51 @@ This document records significant architectural decisions made during implementa
 
 ---
 
+## Decision 019: Opaque ID Design for Sanitized Outputs
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: Decision 014 prohibits unsalted hashes of private values in sanitized outputs. Phase 3B adds provider-based entity discovery where candidates have private matched text that must never appear in sanitized reports, summaries, or JSON output.
+
+**Decision**: Replace all private-text-derived hashes with opaque identifiers derived exclusively from non-private fields. Two separate schemes serve different domains:
+
+1. **Phase 3A coverage**: `opaque:v2:{document_artifact_id}:{entity_type}:{start}:{end}` — SHA-256 truncated to 16 hex chars. Handles collision avoidance across documents and spans.
+2. **Phase 3B candidate summaries**: `opaque:{candidate_id}` — SHA-256 truncated to 16 hex chars. Derived from candidate_id, not from private matched text.
+
+These schemes use different namespaces and are not cross-referenceable.
+
+**Rationale**: Even a salted hash of a private value confirms the value's presence if the value is guessable. Opaque IDs derived from structural metadata reveal nothing about the private content while remaining deterministic.
+
+**Constraints**:
+- Never include: private entity text, aliases, company names, tickers, domains, plain/truncated hashes of private values
+- Private artifacts (ProviderCandidate, PrivateDiscoveryArtifact, MaskingAudit) may retain matched_text_hash for internal integrity
+- Sanitized outputs must never contain matched_text_hash
+
+---
+
+## Decision 020: Disagreement Tracking in Deduplication
+
+**Date**: 2026-06-19
+**Status**: Accepted
+
+**Context**: CandidateDisagreementResolver was a no-op placeholder. Provider-based entity discovery produces candidates that may disagree on entity type, label, boundaries, or confidence for the same text span.
+
+**Decision**: Eliminate the no-op `CandidateDisagreementResolver`. Implement disagreement tracking within `CandidateDeduplicator.deduplicate()` via a `group_map` that records all candidates in each disagreement group. The representative is selected by highest confidence, then earliest candidate_id. All group members have `duplicate_group_id` set.
+
+**Rationale**: A no-op resolver silently discards evidence. Group-level tracking preserves all provider responses, confidences, and labels while still producing a deduplicated candidate list. Reviewers can inspect the full disagreement evidence from the group_map.
+
+**Preserved evidence**:
+- Provider disagreement
+- Label disagreement
+- Boundary disagreement
+- All contributing confidence values
+- Selected representative
+- Deterministic selection reason (confidence, then candidate_id)
+- Duplicate group membership
+
+---
+
 ## Decision 018: Synthetic C001 Status
 
 **Date**: 2026-06-18

@@ -18,7 +18,7 @@ Completed:
 5. HBAN SEC filing discovery, download, extraction, and checkpointing
 6. Tests and an offline fixture-based demonstration
 
-Phase 2 in progress:
+Phase 2:
 
 7. Private identity registry and alias management
 8. Deterministic matching and pseudonym replacement
@@ -26,6 +26,29 @@ Phase 2 in progress:
 10. Metadata sanitization and report separation
 11. Independent exact residual scanning
 12. Canary and mutation testing fixtures
+
+Phase 3A:
+
+13. Residual entity discovery and coverage reporting
+
+Phase 3B Core (in progress):
+
+14. Reviewed provider-neutral entity discovery
+15. Fake provider for deterministic offline testing
+16. Review queue with accept/reject/defer/duplicate
+17. Proposal generation, validation, and promotion
+18. Deterministic deduplication with disagreement tracking
+19. Sanitized candidate summaries with opaque IDs
+20. Privacy regression: no plain hashes or private values in sanitized outputs
+21. Promotion → remasking → rescanning workflow
+
+Deferred to Phase 3C:
+
+- GLiNER adapter
+- NVIDIA adapter
+- Optional model dependency groups
+- Explicit live smoke commands
+- Provider-specific live tests
 
 ## Non-Negotiable Scope
 

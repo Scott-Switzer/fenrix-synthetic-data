@@ -64,19 +64,23 @@ class TestCoverageReport:
         assert d["coverage_pct"] == 60.0
         assert d["status"] == "completed"
 
-    def test_coverage_result_to_dict_hashes_unmasked_text(self):
+    def test_coverage_result_to_dict_uses_opaque_id(self):
         result = CoverageResult(
             company_id="C001",
+            document_artifact_id="doc-artifact-1",
             unmasked_by_type={
-                "capitalized_phrase": [{"text": "Acme Corp", "start": 0, "confidence": 0.4}]
+                "capitalized_phrase": [
+                    {"text": "Acme Corp", "start": 0, "end": 9, "confidence": 0.4}
+                ]
             },
         )
         d = result.to_dict()
         entry = d["unmasked_by_type"]["capitalized_phrase"][0]
-        assert "text_hash" in entry
+        assert "opaque_id" in entry
         assert "text" not in entry
-        assert isinstance(entry["text_hash"], str)
-        assert len(entry["text_hash"]) == 16
+        assert "text_hash" not in entry
+        assert isinstance(entry["opaque_id"], str)
+        assert len(entry["opaque_id"]) == 16
 
     def test_entity_type_breakdown(self):
         discovered = [

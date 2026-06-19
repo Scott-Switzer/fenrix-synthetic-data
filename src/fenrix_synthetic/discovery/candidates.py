@@ -122,11 +122,23 @@ class CandidateDeduplicator:
         self,
         candidates: list[ProviderCandidate],
     ) -> tuple[list[ProviderCandidate], dict[str, list[str]]]:
+        """Deduplicate candidates and track disagreement groups.
+
+        Returns:
+            tuple of (deduplicated candidates, group_map mapping group_id to candidate_ids)
+
+        Disagreement handling:
+            - Candidates with same span but different providers/labels/boundaries are grouped
+            - All contributing providers, confidences, and labels are preserved in group_map
+            - Representative selection: highest confidence, then earliest candidate_id
+            - No evidence loss: group_map tracks all candidates in each disagreement group
+        """
         group_map: dict[str, list[str]] = {}
         selected: list[ProviderCandidate] = []
         seen: dict[str, ProviderCandidate] = {}
 
-        sorted_candidates = sorted(candidates, key=lambda c: (-c.confidence, c.original_start))
+        # Sort by confidence (descending), then candidate_id for deterministic selection
+        sorted_candidates = sorted(candidates, key=lambda c: (-c.confidence, c.candidate_id))
 
         for c in sorted_candidates:
             key = self._span_key(c)
@@ -135,35 +147,33 @@ class CandidateDeduplicator:
                 continue
 
             if key not in seen:
-                group_map[c.candidate_id] = []
+                group_map[c.candidate_id] = [c.candidate_id]
                 seen[key] = c
                 selected.append(c)
             else:
+                # This is a disagreement - same span, different candidate
                 existing = seen[key]
                 existing_group_id = existing.duplicate_group_id or existing.candidate_id
+
+                # Update duplicate_group_id on both
                 c.duplicate_group_id = existing_group_id
-                group_map.setdefault(existing_group_id, [])
-                if c.candidate_id not in group_map[existing_group_id]:
-                    group_map[existing_group_id].append(c.candidate_id)
                 existing.duplicate_group_id = existing_group_id
+
+                # Track all candidates in the group
+                group_map.setdefault(existing_group_id, [])
                 if c.candidate_id not in group_map[existing_group_id]:
                     group_map[existing_group_id].append(c.candidate_id)
 
         return selected, group_map
 
     def _span_key(self, c: ProviderCandidate) -> str | None:
+        """Generate a key for span-based deduplication.
+
+        Returns None for invalid spans (negative start, end <= start).
+        """
         if c.original_start < 0 or c.original_end <= c.original_start:
             return None
         return f"{c.original_start}:{c.original_end}"
-
-
-class CandidateDisagreementResolver:
-    def resolve(
-        self,
-        candidates: list[ProviderCandidate],
-        group_map: dict[str, list[str]],
-    ) -> list[ProviderCandidate]:
-        return candidates
 
 
 def aggregate_provider_candidates(
@@ -179,12 +189,28 @@ def make_sanitized_summary(
     candidates: list[ProviderCandidate],
     group_map: dict[str, list[str]],
 ) -> list[SanitizedCandidateSummary]:
+    """Build sanitized summaries without private-text hashes.
+
+    Uses opaque IDs derived from candidate_id (not from private text)
+    to prevent hash-reversal attacks on private values.
+
+    NOTE: This opaque ID scheme (opaque:{candidate_id}) is distinct from
+    the Phase 3A coverage opaque ID scheme (opaque:v2:{doc_id}:{type}:{start}:{end})
+    in reporting/coverage.py. They use separate namespaces and are not
+    cross-referenceable.
+    """
+    import hashlib
+
     summaries: list[SanitizedCandidateSummary] = []
     for c in candidates:
+        # Create opaque ID from candidate_id, NOT from private text
+        # This prevents hash-reversal attacks on private matched text
+        opaque_id = hashlib.sha256(f"opaque:{c.candidate_id}".encode()).hexdigest()[:16]
+
         summaries.append(
             SanitizedCandidateSummary(
                 candidate_id=c.candidate_id,
-                matched_text_hash=c.matched_text_hash,
+                opaque_id=opaque_id,
                 proposed_entity_type=c.proposed_entity_type,
                 provider_name=c.provider_name,
                 model_name=c.model_name,

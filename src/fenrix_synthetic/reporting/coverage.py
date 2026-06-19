@@ -5,9 +5,19 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+_OPAQUE_ID_VERSION = "v2"
 
-def _hash_private_value(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+def _opaque_id(document_artifact_id: str, entity_type: str, start: int, end: int) -> str:
+    """Deterministic opaque finding ID from non-private fields only.
+
+    Derived from: version prefix, document artifact ID, entity type,
+    start offset, end offset. Never includes private text, aliases,
+    company names, tickers, domains, or hashes of private values.
+    """
+    return hashlib.sha256(
+        f"opaque:{_OPAQUE_ID_VERSION}:{document_artifact_id}:{entity_type}:{start}:{end}".encode()
+    ).hexdigest()[:16]
 
 
 @dataclass
@@ -30,8 +40,12 @@ class CoverageResult:
         for dtype, entities in self.unmasked_by_type.items():
             sanitized_unmasked[dtype] = [
                 {
-                    "text_hash": _hash_private_value(e.get("text", "")),
-                    "start": e.get("start", 0),
+                    "opaque_id": _opaque_id(
+                        self.document_artifact_id,
+                        dtype,
+                        e.get("start", 0),
+                        e.get("end", e.get("start", 0) + 1),
+                    ),
                     "confidence": e.get("confidence", 0.0),
                 }
                 for e in entities
@@ -86,6 +100,7 @@ class CoverageReport:
                     {
                         "text": entity.text[:80] if hasattr(entity, "text") else "",
                         "start": entity.start if hasattr(entity, "start") else 0,
+                        "end": entity.end if hasattr(entity, "end") else 0,
                         "confidence": entity.confidence if hasattr(entity, "confidence") else 0.0,
                     }
                 )

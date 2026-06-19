@@ -853,7 +853,7 @@ def discover(document_path: Path, audit_path: Path | None, output_path: Path | N
 def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None) -> None:
     """Run model-assisted entity discovery (Phase 3B).
 
-        Uses the fake provider to discover entities, then runs
+    Uses the fake provider to discover entities, then runs
     deduplication and risk scoring.
     """
     from .discovery import (
@@ -866,7 +866,9 @@ def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None
         TextChunker,
         aggregate_provider_candidates,
         build_sanitized_report,
+        make_sanitized_summary,
     )
+    from .storage import hash_string
 
     text = document_path.read_text()
     doc_id = document_path.stem
@@ -918,9 +920,15 @@ def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None
 
     normalizer = CandidateNormalizer()
     scored = normalizer.normalize(deduped)
-    for c in scored:
+
+    # Build sanitized summaries (no private text exposed)
+    summaries = make_sanitized_summary(scored, group_map)
+    for s in summaries:
+        dup_info = ""
+        if s.duplicate_group_id and s.provider_agreement_count > 1:
+            dup_info = f" (grp={s.duplicate_group_id[:8]}...)"
         click.echo(
-            f"    [{c.risk_band}] {c.private_matched_text[:30]}... (confidence={c.confidence})"
+            f"    [{s.risk_band}] {s.proposed_entity_type} conf={s.confidence:.2f} id={s.opaque_id}...{dup_info}"
         )
 
     # Build sanitized report
@@ -931,7 +939,7 @@ def discover3b(ctx: click.Context, document_path: Path, output_path: Path | None
         model_version=provider.model_version,
         company_id="C001",
         document_artifact_id=doc_id,
-        input_hash=hash(text) % (2**32),
+        input_hash=hash_string(text),
         latency_ms=50.0,
         token_count=100,
         warnings=[],

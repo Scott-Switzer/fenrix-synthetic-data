@@ -1,6 +1,5 @@
 from .candidates import (
     CandidateDeduplicator,
-    CandidateDisagreementResolver,
     CandidateNormalizer,
     aggregate_provider_candidates,
     compute_risk_score,
@@ -49,7 +48,6 @@ from .schemas import (
 __all__ = [
     "AmendmentProposal",
     "CandidateDeduplicator",
-    "CandidateDisagreementResolver",
     "CandidateNormalizer",
     "CandidateReview",
     "ChunkingConfig",
