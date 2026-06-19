@@ -705,7 +705,7 @@ class TestProvider:
         assert len(response.provider_candidates) == 1
         assert "rejected_span" in response.warnings
         assert response.validation_counters is not None
-        assert response.validation_counters.rejected_out_of_range == 1
+        assert response.validation_counters["rejected_out_of_range"] == 1
 
     def test_provider_uses_canonical_label_mapping(self) -> None:
         responses = [
@@ -801,7 +801,7 @@ class TestProvider:
         chunk = _build_chunk("text")
         response = provider.discover(chunk, labels=["company"])
         assert response.validation_counters is not None
-        assert response.validation_counters.rejected_invalid_offsets == 1
+        assert response.validation_counters["rejected_invalid_offsets"] == 1
         assert counters_provided(response)
 
 
@@ -1452,4 +1452,4 @@ def test_evaluation_uses_real_validation_counters() -> None:
     chunk = _build_chunk("text")
     response = provider.discover(chunk, labels=["company"])
     assert response.validation_counters is not None
-    assert response.validation_counters.total_received == 1
+    assert response.validation_counters["total_received"] == 1

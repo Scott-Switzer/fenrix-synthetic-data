@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 
 class OptionalDependencyError(ImportError):
@@ -169,10 +169,18 @@ class GlinerFacade:
         try:
             # The upstream callable is typed as Any by design; the
             # contract is documented to return ``list[dict[str, Any]]``
-            # at the adapter boundary.
-            return target(text, labels=labels, flat_ner=flat_ner, threshold=threshold)  # type: ignore[no-any-return]
+            # at the adapter boundary. ``cast`` makes that contract
+            # explicit at the type-system level without suppressing
+            # type-checker errors inline.
+            return cast(
+                list[dict[str, Any]],
+                target(text, labels=labels, flat_ner=flat_ner, threshold=threshold),
+            )
         except TypeError:
-            return target(text, labels, flat_ner, threshold)  # type: ignore[no-any-return]
+            return cast(
+                list[dict[str, Any]],
+                target(text, labels, flat_ner, threshold),
+            )
 
     def to(self, device: str) -> GlinerFacade:
         moved = self._raw.to(device)

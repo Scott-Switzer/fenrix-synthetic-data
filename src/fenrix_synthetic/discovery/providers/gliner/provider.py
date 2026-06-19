@@ -281,7 +281,7 @@ class GLiNERLocalProvider(EntityDiscoveryProvider):
             warnings=warnings,
             raw_response_hash=raw_hash,
             provider_config_hash=self.config_hash,
-            validation_counters=result.counters,
+            validation_counters=result.counters.to_dict(),
         )
 
     def dispose(self) -> None:

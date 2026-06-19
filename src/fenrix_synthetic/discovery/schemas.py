@@ -98,7 +98,7 @@ class EntityDiscoveryResponse:
     warnings: list[str] = field(default_factory=list)
     raw_response_hash: str = ""
     provider_config_hash: str = ""
-    validation_counters: Any | None = None
+    validation_counters: dict[str, int] | None = None
 
 
 @dataclass
