@@ -146,9 +146,7 @@ def scan_release_tree(
                 counts["zip_member_hits"] += zh
                 findings.append({"type": "zip_members", "path": rel, "hit_count": zh})
 
-    counts["total_hits"] = sum(
-        counts[k] for k in counts if k != "total_hits"
-    )
+    counts["total_hits"] = sum(counts[k] for k in counts if k != "total_hits")
     return {
         "counts": counts,
         "findings": findings,
@@ -179,9 +177,7 @@ def _scan_filename_for_accession(filename: str) -> bool:
     return False
 
 
-def _scan_json_for_identifiers(
-    fp: Path, private_values: set[str], ticker: str, cik: str
-) -> int:
+def _scan_json_for_identifiers(fp: Path, private_values: set[str], ticker: str, cik: str) -> int:
     """Scan JSON content (keys + values) for identifiers. Returns hit count."""
     hits = 0
     try:
@@ -323,9 +319,7 @@ def _scan_xml_for_identifiers(fp: Path, private_values: set[str]) -> int:
     return hits
 
 
-def _scan_manifest_for_identifiers(
-    fp: Path, private_values: set[str], ticker: str
-) -> int:
+def _scan_manifest_for_identifiers(fp: Path, private_values: set[str], ticker: str) -> int:
     """Scan manifest JSON for leaked company identifiers."""
     hits = 0
     try:

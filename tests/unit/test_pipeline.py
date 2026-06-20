@@ -436,7 +436,6 @@ class TestZipExport:
 
     def test_zip_export_deterministic(self, tmp_path: Path) -> None:
         """Build ZIP twice and require identical semantic content."""
-        import hashlib
         import zipfile
 
         from fenrix_synthetic.pipeline.runner import PipelineRunner, ReleaseGateResult
@@ -514,10 +513,20 @@ class TestZipExport:
         }
 
         gate = ReleaseGateResult()
+        gate.collection_status = "clean"
+        gate.privacy_status = "clean"
+        gate.format_status = "clean"
+        gate.numeric_data_status = "complete"
+        gate.coverage_status = "clean"
 
         # Build ZIP twice
         result1 = runner._create_export_bundle(gate, run_summary)
         gate2 = ReleaseGateResult()
+        gate2.collection_status = "clean"
+        gate2.privacy_status = "clean"
+        gate2.format_status = "clean"
+        gate2.numeric_data_status = "complete"
+        gate2.coverage_status = "clean"
         result2 = runner._create_export_bundle(gate2, run_summary)
 
         export1 = Path(result1["export_zip"])
@@ -568,6 +577,11 @@ class TestZipExport:
             "tickers": {"FAKE": {"status": "completed_clean"}},
         }
         gate = ReleaseGateResult()
+        gate.collection_status = "clean"
+        gate.privacy_status = "clean"
+        gate.format_status = "clean"
+        gate.numeric_data_status = "complete"
+        gate.coverage_status = "clean"
         result = runner._create_export_bundle(gate, run_summary)
         export_path = Path(result["export_zip"])
 
@@ -576,7 +590,8 @@ class TestZipExport:
             assert not any("originals" in n for n in names), f"Originals leaked: {names}"
             assert not any("private_maps" in n for n in names), f"Private maps leaked: {names}"
             assert not any(n.endswith(".env") for n in names), f".env leaked: {names}"
-            assert any("anonymized" in n for n in names), f"Anonymized missing: {names}"
+            # Files now go under release/COMPANY_<hash>/ with pseudonymous paths
+            assert any("release" in n for n in names), f"Release missing: {names}"
 
     def test_zip_export_file_count_preview(self, tmp_path: Path) -> None:
         """Export contains expected file categories."""
@@ -601,6 +616,11 @@ class TestZipExport:
             "tickers": {"FAKE": {"status": "completed_clean"}},
         }
         gate = ReleaseGateResult()
+        gate.collection_status = "clean"
+        gate.privacy_status = "clean"
+        gate.format_status = "clean"
+        gate.numeric_data_status = "complete"
+        gate.coverage_status = "clean"
         result = runner._create_export_bundle(gate, run_summary)
         export_path = Path(result["export_zip"])
         with zipfile.ZipFile(export_path, "r") as zf:

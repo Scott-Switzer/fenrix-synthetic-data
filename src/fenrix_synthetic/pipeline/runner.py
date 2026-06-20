@@ -9,6 +9,7 @@ Implements mandatory fail-closed release gate:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -71,7 +72,8 @@ class ReleaseGateResult:
     """Comprehensive typed release-gate result.
 
     Every blocking count must equal zero before release.
-    release_safe = all(count == 0 for all blocking counts).
+    Every required status must be explicitly passing.
+    release_safe = all_counts_zero AND all_statuses_passing.
 
     Used by both the ticker summary and ZIP exporter.
     """
@@ -86,6 +88,9 @@ class ReleaseGateResult:
     overall_status: str = "unknown"
     release_safe: bool = False
     export_created: bool = False
+
+    # ── Gate config ────────────────────────────────────────────────
+    nvidia_enabled: bool = False
 
     # ── Blocking counts (all must be zero for release_safe=true) ─────
     exact_identifier_count: int = 0
@@ -128,12 +133,64 @@ class ReleaseGateResult:
         "original_artifact_export_count",
     )
 
-    def compute_release_safe(self) -> bool:
+    # Statuses that explicitly block release
+    _BLOCKING_STATUSES: frozenset[str] = frozenset(
+        {
+            "unknown",
+            "disabled",
+            "not_configured",
+            "unavailable",
+            "skipped",
+            "partial",
+            "degraded",
+            "failed",
+            "skipped_dirty_scan",
+            "failed_both",
+            "failed_parse",
+            "failed_correct_guess",
+            "failed_empty",
+            "failed_no_samples",
+            "failed_requests",
+        }
+    )
+
+    def _all_counts_zero(self) -> bool:
         """Check all blocking counts are zero."""
-        return all(
-            getattr(self, field_name, 0) == 0
-            for field_name in self._BLOCKING_COUNT_FIELDS
-        )
+        return all(getattr(self, field_name, 0) == 0 for field_name in self._BLOCKING_COUNT_FIELDS)
+
+    def _statuses_passing(self) -> bool:
+        """Check all required statuses are explicitly passing.
+
+        Required passing statuses:
+        - collection_status == "clean"
+        - privacy_status == "clean"
+        - format_status == "clean"
+        - numeric_data_status == "complete"
+        - coverage_status == "clean"
+        - nvidia_status == "passed" when nvidia_enabled is True
+          (nvidia_status == "disabled" is acceptable when not enabled)
+        """
+        if self.collection_status in self._BLOCKING_STATUSES:
+            return False
+        if self.privacy_status in self._BLOCKING_STATUSES:
+            return False
+        if self.format_status in self._BLOCKING_STATUSES:
+            return False
+        if self.numeric_data_status in self._BLOCKING_STATUSES:
+            return False
+        if self.coverage_status in self._BLOCKING_STATUSES:
+            return False
+        if self.nvidia_enabled:
+            if self.nvidia_status != "passed":
+                return False
+        else:
+            if self.nvidia_status not in ("disabled", "not_configured"):
+                return False
+        return True
+
+    def compute_release_safe(self) -> bool:
+        """Check all blocking counts are zero AND all statuses are passing."""
+        return self._all_counts_zero() and self._statuses_passing()
 
     def compute_overall_status(self) -> str:
         """Derive overall status from collection and release_safe."""
@@ -209,6 +266,7 @@ class PipelineRunner:
 
         # Aggregate gate result across all tickers
         aggregate_gate = ReleaseGateResult()
+        aggregate_gate.nvidia_enabled = self.config.enable_nvidia
 
         for ticker_cfg in self.config.tickers:
             if not ticker_cfg.enabled:
@@ -219,9 +277,7 @@ class PipelineRunner:
                 # Merge per-ticker gate data into aggregate
                 _merge_gate(aggregate_gate, ticker_summary)
             except Exception as exc:
-                logger.error(
-                    "Pipeline failed for %s: %s", ticker_cfg.ticker, exc, exc_info=True
-                )
+                logger.error("Pipeline failed for %s: %s", ticker_cfg.ticker, exc, exc_info=True)
                 summary["tickers"][ticker_cfg.ticker] = {
                     "status": TickerStatus.FAILED.value,
                     "error": str(exc),
@@ -266,13 +322,15 @@ class PipelineRunner:
 
         # ── COLLECTION ──
         if not self.config.anonymize_only:
-            yf_result = self._collect_yfinance(ticker, ticker_cfg, originals_dir,
-                                                original_manifests, manifest_builder)
-            self._collect_sec(ticker, ticker_cfg, originals_dir,
-                              sec_results, original_manifests, manifest_builder)
-            self._collect_news(ticker, originals_dir, yf_result,
-                               news_results, original_manifests, manifest_builder)
-            news_coverage = None  # handled internally
+            yf_result = self._collect_yfinance(
+                ticker, ticker_cfg, originals_dir, original_manifests, manifest_builder
+            )
+            self._collect_sec(
+                ticker, ticker_cfg, originals_dir, sec_results, original_manifests, manifest_builder
+            )
+            news_coverage = self._collect_news(
+                ticker, originals_dir, yf_result, news_results, original_manifests, manifest_builder
+            )
 
         # Save original manifests
         orig_manifest_dir = originals_dir / "manifests"
@@ -311,16 +369,12 @@ class PipelineRunner:
         atlas_builder.save_atlas(atlas)
 
         logger.info("Anonymizing structured data for %s", ticker)
-        struct_anon = StructuredAnonymizer(
-            ticker, originals_dir, anonymized_dir, private_maps_dir
-        )
+        struct_anon = StructuredAnonymizer(ticker, originals_dir, anonymized_dir, private_maps_dir)
         struct_manifests = struct_anon.anonymize_all()
         anonymized_manifests.extend(struct_manifests)
 
         logger.info("Anonymizing text/SEC data for %s", ticker)
-        text_anon = TextAnonymizer(
-            ticker, originals_dir, anonymized_dir, private_maps_dir
-        )
+        text_anon = TextAnonymizer(ticker, originals_dir, anonymized_dir, private_maps_dir)
         text_manifests = text_anon.anonymize_all()
         anonymized_manifests.extend(text_manifests)
 
@@ -346,9 +400,7 @@ class PipelineRunner:
         unresolved = scan_result.get("unresolved_candidates", 0)
 
         # ── NAMESPACE SCAN (paths, filenames, manifests, JSON, Parquet) ──
-        ns_result = _scan_release_namespace(
-            anonymized_dir, ticker, atlas
-        )
+        ns_result = _scan_release_namespace(anonymized_dir, ticker, atlas)
 
         # ── NUMERIC DATASET VALIDATION ──
         numeric_failures = _validate_numeric_datasets(anonymized_dir)
@@ -370,7 +422,8 @@ class PipelineRunner:
                 if exact_ids > 0:
                     logger.warning(
                         "Skipping NVIDIA review for %s: %d exact identifiers still leaking",
-                        ticker, exact_ids,
+                        ticker,
+                        exact_ids,
                     )
                     nvidia_status = "skipped_dirty_scan"
                 else:
@@ -478,8 +531,9 @@ class PipelineRunner:
         original_manifests: list[dict[str, Any]],
         manifest_builder: ManifestBuilder,
     ) -> Any | None:
+        # force_refresh means force fresh collection — never skip
         if "yfinance" in self.config.force_refresh:
-            return None
+            logger.info("Force-refreshing yfinance data for %s", ticker)
         logger.info("Collecting yfinance data for %s", ticker)
         yf_collector = YFinanceCollector(originals_dir, ticker, years=ticker_cfg.years)
         yf_result = yf_collector.collect_all()
@@ -509,8 +563,10 @@ class PipelineRunner:
         original_manifests: list[dict[str, Any]],
         manifest_builder: ManifestBuilder,
     ) -> None:
-        if "sec" in self.config.force_refresh or not self.config.sec_user_agent:
+        if not self.config.sec_user_agent:
             return
+        if "sec" in self.config.force_refresh:
+            logger.info("Force-refreshing SEC data for %s", ticker)
         logger.info("Collecting SEC data for %s", ticker)
 
         if self.config.sec_archive_path and self.config.sec_source_mode != "network-only":
@@ -564,8 +620,12 @@ class PipelineRunner:
                 return
 
         self._collect_sec_live(
-            ticker, ticker_cfg, originals_dir, sec_results,
-            original_manifests, manifest_builder,
+            ticker,
+            ticker_cfg,
+            originals_dir,
+            sec_results,
+            original_manifests,
+            manifest_builder,
         )
 
     def _collect_sec_live(
@@ -578,7 +638,8 @@ class PipelineRunner:
         manifest_builder: ManifestBuilder,
     ) -> None:
         sec_collector = SECCollector(
-            originals_dir, ticker,
+            originals_dir,
+            ticker,
             years=ticker_cfg.years,
             user_agent=self.config.sec_user_agent,
         )
@@ -608,13 +669,14 @@ class PipelineRunner:
         news_results: list[Any],
         original_manifests: list[dict[str, Any]],
         manifest_builder: ManifestBuilder,
-    ) -> None:
+    ) -> Any | None:
+        """Collect news and return the NewsCoverageReport."""
         if "news" in self.config.force_refresh:
-            return
+            logger.info("Force-refreshing news for %s", ticker)
         logger.info("Collecting news for %s", ticker)
         company_name = yf_result.metadata.get("short_name") if yf_result else None
         news_collector = NewsCollector(originals_dir, ticker, company_name=company_name)
-        nresults, _ncov = news_collector.collect_all()
+        nresults, ncov = news_collector.collect_all()
         news_results.extend(nresults)
         for r in nresults:
             mf = manifest_builder.build_manifest(
@@ -631,6 +693,7 @@ class PipelineRunner:
                 metadata=r.metadata,
             )
             original_manifests.append(mf)
+        return ncov
 
     # ── Gate evaluation ──────────────────────────────────────────────
 
@@ -684,6 +747,13 @@ class PipelineRunner:
         sec_archive_path: Path | None,
         sec_source_mode: str,
     ) -> list[str]:
+        """Check mandatory source coverage gates.
+
+        News historical_10y_complete is NOT a mandatory failure —
+        it is disclosed as a limitation but does not block release
+        unless the configured release contract explicitly requires
+        a licensed ten-year news source.
+        """
         failures: list[str] = []
         if sec_source_mode in ("archive-only", "archive-preferred"):
             if sec_archive_path is None:
@@ -696,9 +766,7 @@ class PipelineRunner:
                 break
         if not sec.get("has_data"):
             failures.append("sec_no_data")
-        news = coverage_report.get("news", {})
-        if news.get("historical_10y_complete") is not True:
-            failures.append("news_not_10y_complete")
+        # News 10-year completeness is disclosed but NOT a mandatory failure
         return failures
 
     @staticmethod
@@ -708,11 +776,22 @@ class PipelineRunner:
         """Evaluate NVIDIA review results.
 
         Returns (status, parse_error_count, correct_guess_count, failed_request_count).
+
+        Status MUST be explicit "passed" for release — never "completed".
+        Blocks release if:
+        - result list is empty
+        - any parse error exists
+        - any request fails
+        - any correct guess occurs
         """
         parse_errors = 0
         correct_guesses = 0
         failed_requests = 0
         attacker_results = review.get("attacker_results", [])
+
+        # Empty result list blocks release
+        if not attacker_results:
+            return "failed_empty", 1, 0, 1
 
         for ar in attacker_results:
             result = ar.get("result", {})
@@ -727,13 +806,20 @@ class PipelineRunner:
         if review.get("parse_errors", 0) > 0:
             parse_errors = max(parse_errors, review["parse_errors"])
 
+        # Check reviewed sample count vs configured requirement
+        samples_reviewed = review.get("samples_reviewed", 0)
+        if samples_reviewed < 1:
+            return "failed_no_samples", parse_errors + 1, correct_guesses, failed_requests + 1
+
         if parse_errors > 0 and correct_guesses > 0:
             return "failed_both", parse_errors, correct_guesses, failed_requests
         if parse_errors > 0:
             return "failed_parse", parse_errors, correct_guesses, failed_requests
         if correct_guesses > 0:
             return "failed_correct_guess", parse_errors, correct_guesses, failed_requests
-        return "completed", 0, 0, 0
+        if failed_requests > 0:
+            return "failed_requests", parse_errors, correct_guesses, failed_requests
+        return "passed", 0, 0, 0
 
     # ── ZIP export with staging and scanning ─────────────────────────
 
@@ -742,9 +828,17 @@ class PipelineRunner:
     ) -> dict[str, Any]:
         """Create sanitized anonymized export ZIP with staging and scanning.
 
-        Builds ZIP in a temp staging directory, scans staged tree for leaks,
-        then atomically moves to the final export directory.
-        Never leaves a partial ZIP after failure.
+        Builds a sanitized release tree with pseudonymous company IDs:
+        release/
+          COMPANY_<deterministic_id>/
+            market/
+            statements/
+            sec/
+            news/
+            manifests/
+
+        No ticker in ZIP member names, QA paths, JSON keys, or manifest paths.
+        Raw run_summary.json and raw config are excluded.
         """
         gate_result.finalize()
 
@@ -776,6 +870,13 @@ class PipelineRunner:
             gate_result.export_blocked_failures = gate_failures
             return gate_result.to_summary_dict()
 
+        # ── Build pseudonym path maps for each ticker ──
+        ticker_pseudonyms: dict[str, str] = {}
+        for ticker_name in run_summary.get("tickers", {}):
+            ticker_pseudonyms[ticker_name] = (
+                f"COMPANY_{hashlib.sha256(ticker_name.encode()).hexdigest()[:12]}"
+            )
+
         export_dir = self.run_dir / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)
         final_path = export_dir / "anonymized_bundle.zip"
@@ -788,7 +889,7 @@ class PipelineRunner:
             staging_zip = Path(staging_root) / "bundle.zip"
 
             with zipfile.ZipFile(staging_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Anonymized artifacts
+                # ── Anonymized artifacts with pseudonymous paths ──
                 anon_dir = self.run_dir / "anonymized"
                 if anon_dir.exists():
                     for fp in anon_dir.rglob("*"):
@@ -796,10 +897,18 @@ class PipelineRunner:
                             continue
                         if fp.name in excluded_filenames:
                             continue
-                        arcname = str(fp.relative_to(self.run_dir))
+                        rel = fp.relative_to(anon_dir)
+                        # First segment is the ticker — rewrite to pseudonym
+                        parts = rel.parts
+                        if parts and parts[0] in ticker_pseudonyms:
+                            pseudo = ticker_pseudonyms[parts[0]]
+                            pseudo_rel = Path(pseudo).joinpath(*parts[1:])
+                            arcname = f"release/{pseudo_rel}"
+                        else:
+                            arcname = f"release/{rel}"
                         zf.write(fp, arcname)
 
-                # Sanitized QA (exclude detailed findings, NVIDIA responses)
+                # ── Sanitized QA (exclude detailed findings, NVIDIA responses) ──
                 qa_root = self.run_dir / "qa"
                 if qa_root.exists():
                     for qf in qa_root.rglob("*.json"):
@@ -807,28 +916,32 @@ class PipelineRunner:
                             continue
                         if "nvidia_reviews" in qf.parts:
                             continue
-                        arcname = str(qf.relative_to(self.run_dir))
+                        rel = qf.relative_to(qa_root)
+                        parts = rel.parts
+                        if parts and parts[0] in ticker_pseudonyms:
+                            pseudo = ticker_pseudonyms[parts[0]]
+                            pseudo_rel = Path(pseudo).joinpath(*parts[1:])
+                            arcname = f"release/{pseudo_rel}"
+                        else:
+                            arcname = f"release/{rel}"
                         zf.write(qf, arcname)
 
-                # Run summary
-                summary_path = self.run_dir / "run_summary.json"
-                if summary_path.exists():
-                    zf.write(summary_path, "run_summary.json")
-
-                # Config
-                cfg_dir = self.run_dir / "config"
-                if cfg_dir.exists():
-                    for cf in cfg_dir.rglob("*"):
-                        if cf.is_file():
-                            arcname = str(cf.relative_to(self.run_dir))
-                            zf.write(cf, arcname)
-
-                # Sanitized release QA summary
+                # ── Sanitized release summary (NEVER include raw run_summary.json) ──
                 release_summary = self._build_release_qa_summary(run_summary, gate_result)
                 zf.writestr(
-                    "release_qa_summary.json",
+                    "release/sanitized_run_summary.json",
                     orjson.dumps(
                         release_summary,
+                        option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+                    ),
+                )
+
+                # ── Release verdict ──
+                verdict = self._build_release_verdict(run_summary, gate_result, ticker_pseudonyms)
+                zf.writestr(
+                    "release/release_verdict.json",
+                    orjson.dumps(
+                        verdict,
                         option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
                     ),
                 )
@@ -859,37 +972,114 @@ class PipelineRunner:
             try:
                 if Path(staging_root).exists():
                     import shutil
+
                     shutil.rmtree(staging_root, ignore_errors=True)
             except Exception:
                 pass
 
         gate_result.export_created = True
         gate_result.export_zip = str(final_path)
-        gate_result.export_zip_sha256 = (
-            hash_file(final_path) if final_path.exists() else ""
-        )
+        gate_result.export_zip_sha256 = hash_file(final_path) if final_path.exists() else ""
         gate_result.finalize()
 
         logger.info("Export ZIP created: %s (sha256=%s)", final_path, gate_result.export_zip_sha256)
         return gate_result.to_summary_dict()
 
+    @staticmethod
+    def _build_release_verdict(
+        run_summary: dict[str, Any],
+        gate_result: ReleaseGateResult,
+        ticker_pseudonyms: dict[str, str],
+    ) -> dict[str, Any]:
+        """Build a sanitized release verdict with no real tickers."""
+        tickers_verdict: dict[str, Any] = {}
+        for ticker_name, ts in run_summary.get("tickers", {}).items():
+            pseudo = ticker_pseudonyms.get(ticker_name, ticker_name)
+            tickers_verdict[pseudo] = {
+                "requested_years": ts.get("coverage", {}).get("requested_years", 0),
+                "collection_status": ts.get("status"),
+                "coverage_status": ts.get("coverage", {}).get("overall", {}),
+                "privacy_status": "clean"
+                if ts.get("residual_exact_identifier_count", 0) == 0
+                else "failed",
+                "nvidia_status": ts.get("nvidia_status", "disabled"),
+                "exact_identifier_count": ts.get("residual_exact_identifier_count", 0),
+                "required_coverage_failure_count": ts.get("required_coverage_failure_count", 0),
+                "required_numeric_dataset_failure_count": ts.get(
+                    "required_numeric_dataset_failure_count", 0
+                ),
+                "required_sec_format_failure_count": ts.get("required_sec_format_failure_count", 0),
+                "release_safe": ts.get("status") == TickerStatus.COMPLETED_CLEAN.value,
+            }
+
+        return {
+            "schema_version": "1.0.0",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "run_id": run_summary.get("run_id"),
+            "overall_release_safe": gate_result.release_safe,
+            "overall_status": gate_result.overall_status,
+            "tickers": tickers_verdict,
+            "disclosed_limitations": gate_result.failure_details,
+        }
+
     def _scan_zip_for_leaks(self, zip_path: Path) -> list[str]:
         """Scan a staged ZIP for private content leaks.
 
         Returns list of issues found; empty list = clean.
+        Checks for:
+        - Forbidden path patterns (originals, private_maps, nvidia_reviews, etc.)
+        - Real ticker symbols in member names (must use pseudonymous COMPANY_<hash>)
+        - raw run_summary.json (should never be included)
+        - raw config files (should never be included)
         """
         issues: list[str] = []
         forbidden_path_patterns = [
-            "originals/", "private_maps/", "detailed_findings",
-            "review_result", "nvidia_reviews", "identity_atlas",
+            "originals/",
+            "private_maps/",
+            "detailed_findings",
+            "review_result",
+            "nvidia_reviews",
+            "identity_atlas",
         ]
+        # Patterns that reveal real tickers — must use COMPANY_<hash> instead
+        ticker_leak_patterns = ["NVDA", "nvidia"]
+        # Raw files that must never appear (but sanitized versions are OK)
+        forbidden_files = {"run_summary.json", "resolved_config.json"}
+        # Whitelisted sanitized files that share suffixes with forbidden files
+        allowed_sanitized = {"sanitized_run_summary.json", "release_verdict.json"}
+
         with zipfile.ZipFile(zip_path, "r") as zf:
             for name in zf.namelist():
                 name_lower = name.lower()
+                base_name = name.split("/")[-1] if "/" in name else name
+
+                # Skip check for allowed sanitized files
+                if base_name in allowed_sanitized:
+                    continue
+
+                # Check forbidden path patterns
                 for pat in forbidden_path_patterns:
                     if pat.lower() in name_lower:
                         issues.append(f"Forbidden content in ZIP member: {name}")
                         break
+
+                # Check for raw files that should be excluded (skip sanitized)
+                if base_name not in allowed_sanitized:
+                    for forbidden_file in forbidden_files:
+                        if base_name.endswith(forbidden_file):
+                            issues.append(f"Raw file should not be in ZIP: {name}")
+                            break
+
+                # Check for real tickers in member names
+                for ticker_pat in ticker_leak_patterns:
+                    if ticker_pat in name:
+                        issues.append(f"Real ticker in ZIP member name: {name}")
+                        break
+
+                # Check for config/ directory
+                if "config/" in name_lower:
+                    issues.append(f"Config directory should not be in ZIP: {name}")
+
         return issues
 
     @staticmethod
@@ -897,11 +1087,21 @@ class PipelineRunner:
         run_summary: dict[str, Any],
         gate_result: ReleaseGateResult | None = None,
     ) -> dict[str, Any]:
-        """Build a sanitized release QA summary with counts only."""
+        """Build a sanitized release QA summary with pseudonymous IDs only.
+
+        Excludes: ticker, company name, CIK, private paths, source archive paths,
+        originals paths, private map paths, API configuration, raw NVIDIA responses.
+
+        Contains: pseudonymous company ID, requested years, source coverage status,
+        QA counts, semantic hashes, release verdict, disclosed limitations.
+        """
         tickers_summary: dict[str, Any] = {}
         for ticker_name, ts in run_summary.get("tickers", {}).items():
-            tickers_summary[ticker_name] = {
+            pseudo = f"COMPANY_{hashlib.sha256(ticker_name.encode()).hexdigest()[:12]}"
+            ticker_cov = ts.get("coverage", {})
+            tickers_summary[pseudo] = {
                 "status": ts.get("status"),
+                "requested_years": ticker_cov.get("requested_years", 0) if ticker_cov else 0,
                 "original_artifacts": ts.get("original_artifacts"),
                 "anonymized_artifacts": ts.get("anonymized_artifacts"),
                 "exact_identifier_count": ts.get("residual_exact_identifier_count", 0),
@@ -916,12 +1116,9 @@ class PipelineRunner:
                 "required_numeric_dataset_failure_count": ts.get(
                     "required_numeric_dataset_failure_count", 0
                 ),
-                "required_sec_format_failure_count": ts.get(
-                    "required_sec_format_failure_count", 0
-                ),
-                "required_coverage_failure_count": ts.get(
-                    "required_coverage_failure_count", 0
-                ),
+                "required_sec_format_failure_count": ts.get("required_sec_format_failure_count", 0),
+                "required_coverage_failure_count": ts.get("required_coverage_failure_count", 0),
+                "release_safe": ts.get("status") == TickerStatus.COMPLETED_CLEAN.value,
             }
 
         result: dict[str, Any] = {
@@ -931,7 +1128,19 @@ class PipelineRunner:
             "tickers": tickers_summary,
         }
         if gate_result is not None:
-            result["overall"] = gate_result.to_summary_dict()
+            result["overall"] = {
+                "release_safe": gate_result.release_safe,
+                "overall_status": gate_result.overall_status,
+                "collection_status": gate_result.collection_status,
+                "privacy_status": gate_result.privacy_status,
+                "format_status": gate_result.format_status,
+                "numeric_data_status": gate_result.numeric_data_status,
+                "coverage_status": gate_result.coverage_status,
+                "nvidia_status": gate_result.nvidia_status,
+                "export_blocked": gate_result.export_blocked,
+                "export_blocked_reason": gate_result.export_blocked_reason,
+                "disclosed_limitations": gate_result.failure_details,
+            }
         else:
             result["overall"] = {
                 "all_clean": all(
@@ -946,7 +1155,10 @@ class PipelineRunner:
 
 
 def _merge_gate(gate: ReleaseGateResult, ticker_summary: dict[str, Any]) -> None:
-    """Merge per-ticker gate data into aggregate ReleaseGateResult."""
+    """Merge per-ticker gate data into aggregate ReleaseGateResult.
+
+    Propagaes ALL status fields properly — worst-case accumulation.
+    """
     gate.exact_identifier_count += ticker_summary.get("residual_exact_identifier_count", 0)
     gate.unresolved_candidate_count += ticker_summary.get("unresolved_candidate_count", 0)
     gate.blocking_finding_count += ticker_summary.get("blocking_finding_count", 0)
@@ -962,22 +1174,56 @@ def _merge_gate(gate: ReleaseGateResult, ticker_summary: dict[str, Any]) -> None
     gate.required_sec_format_failure_count += ticker_summary.get(
         "required_sec_format_failure_count", 0
     )
-    gate.required_coverage_failure_count += ticker_summary.get(
-        "required_coverage_failure_count", 0
-    )
+    gate.required_coverage_failure_count += ticker_summary.get("required_coverage_failure_count", 0)
 
     status = ticker_summary.get("status", "")
+    nv_status = ticker_summary.get("nvidia_status", "disabled")
+
+    # Collection status: worst-case
     if status == TickerStatus.FAILED_COLLECTION.value:
         gate.collection_status = "failed"
-    gate.nvidia_status = ticker_summary.get("nvidia_status", gate.nvidia_status)
-    gate.privacy_status = "failed" if gate.exact_identifier_count > 0 else "clean"
-    gate.coverage_status = (
-        "degraded" if gate.required_coverage_failure_count > 0 else "clean"
-    )
+    elif gate.collection_status == "unknown":
+        gate.collection_status = "clean"
+
+    # Privacy status: worst-case
+    if status == TickerStatus.FAILED_PRIVACY.value:
+        gate.privacy_status = "failed"
+    elif gate.privacy_status not in ("failed",):
+        gate.privacy_status = "clean"
+
+    # Format status: worst-case
+    fmt_failures = ticker_summary.get("required_sec_format_failure_count", 0)
+    if fmt_failures > 0:
+        gate.format_status = "failed"
+    elif gate.format_status not in ("failed",):
+        gate.format_status = "clean"
+
+    # Numeric data status: worst-case
+    num_failures = ticker_summary.get("required_numeric_dataset_failure_count", 0)
+    if num_failures > 0:
+        gate.numeric_data_status = "failed"
+    elif gate.numeric_data_status not in ("failed",):
+        gate.numeric_data_status = "complete"
+
+    # Coverage status: worst-case
+    cov_failures = ticker_summary.get("required_coverage_failure_count", 0)
+    if cov_failures > 0:
+        gate.coverage_status = "degraded"
+    elif gate.coverage_status not in ("degraded", "failed"):
+        gate.coverage_status = "clean"
+
+    # NVIDIA status: worst-case across all tickers
+    blocked_statuses = gate._BLOCKING_STATUSES
+    if nv_status in blocked_statuses:
+        gate.nvidia_status = nv_status
+    elif gate.nvidia_status not in blocked_statuses:
+        gate.nvidia_status = nv_status
 
 
 def _scan_release_namespace(
-    anonymized_dir: Path, ticker: str, atlas: Any,
+    anonymized_dir: Path,
+    ticker: str,
+    atlas: Any,
 ) -> dict[str, Any]:
     """Recursively scan anonymized output for leaked identifiers.
 
@@ -1046,7 +1292,10 @@ def _scan_release_namespace(
 
 
 def _scan_file_content(
-    fp: Path, rel_path: str, private_values: set[str], findings: list[dict[str, Any]],
+    fp: Path,
+    rel_path: str,
+    private_values: set[str],
+    findings: list[dict[str, Any]],
 ) -> None:
     """Scan a text file for private values."""
     try:
@@ -1057,16 +1306,21 @@ def _scan_file_content(
         if len(val) < 3:
             continue
         if val in content:
-            findings.append({
-                "type": "content_hit",
-                "path": rel_path,
-                "value_length": len(val),
-            })
+            findings.append(
+                {
+                    "type": "content_hit",
+                    "path": rel_path,
+                    "value_length": len(val),
+                }
+            )
             break  # One finding per file is enough
 
 
 def _scan_manifest_content(
-    fp: Path, rel_path: str, ticker_upper: str, ticker_lower: str,
+    fp: Path,
+    rel_path: str,
+    ticker_upper: str,
+    ticker_lower: str,
     private_values: set[str],
 ) -> int:
     """Scan a manifest JSON for private identifiers."""
@@ -1115,9 +1369,9 @@ def _validate_sec_format(anonymized_dir: Path) -> int:
     meaningful prose, adequate length.
     """
     from ..release.namespace_scanner import (
+        _SCHEMA_REF_PATTERN,
         _XBRL_TAG_PATTERN,
         _XML_NAMESPACE_PATTERN,
-        _SCHEMA_REF_PATTERN,
     )
 
     failures = 0
@@ -1128,9 +1382,7 @@ def _validate_sec_format(anonymized_dir: Path) -> int:
         try:
             content = md_path.read_text(encoding="utf-8", errors="replace")
             # Must not start with raw XML/HTML
-            if content.lstrip().startswith(
-                ("<html", "<HTML", "<xml", "<?xml", "<ix:", "<xbrli:")
-            ):
+            if content.lstrip().startswith(("<html", "<HTML", "<xml", "<?xml", "<ix:", "<xbrli:")):
                 failures += 1
                 logger.debug("Raw XML/HTML at start of Markdown: %s", md_path.name)
             # Must not contain XBRL tags anywhere

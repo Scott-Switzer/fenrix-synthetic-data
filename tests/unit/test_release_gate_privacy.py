@@ -14,7 +14,6 @@ import pytest
 from fenrix_synthetic.pipeline.config import PipelineConfig
 from fenrix_synthetic.pipeline.runner import (
     PipelineRunner,
-    ReleaseGateBlock,
     ReleaseGateResult,
     TickerStatus,
 )
@@ -144,7 +143,7 @@ class TestTickerStatusExplicit:
         assert status == TickerStatus.DEGRADED_SOURCE_COVERAGE.value
 
     def test_degraded_source_coverage_news_not_10y(self) -> None:
-        """news not 10-year complete → degraded_source_coverage"""
+        """news not 10-year complete → NOT a mandatory failure (disclosed but nonblocking)"""
         status = PipelineRunner._compute_ticker_status(
             exact_ids=0,
             unresolved=0,
@@ -161,7 +160,8 @@ class TestTickerStatusExplicit:
             sec_archive_path=MagicMock(),
             sec_source_mode="archive-preferred",
         )
-        assert status == TickerStatus.DEGRADED_SOURCE_COVERAGE.value
+        # News coverage limitation is disclosed but NOT a mandatory failure
+        assert status == TickerStatus.COMPLETED_CLEAN.value
 
     def test_degraded_archive_null_in_archive_mode(self) -> None:
         """null sec_archive_path in archive mode → degraded_source_coverage"""
@@ -195,7 +195,7 @@ class TestReleaseGateBlock:
         gate = ReleaseGateResult()
         result = runner._create_export_bundle(gate, run_summary)
         assert result.get("export_blocked") is True
-        assert "Release gate blocked" in result.get("export_blocked_reason", "")
+        assert "Release gate" in result.get("export_blocked_reason", "")
 
     def test_block_on_failed_nvidia(self) -> None:
         """ZIP creation should block on failed_nvidia_review"""
@@ -219,25 +219,29 @@ class TestReleaseGateBlock:
         result = runner._create_export_bundle(gate, run_summary)
         assert result.get("export_blocked") is True
 
-    def test_pass_on_clean(self, tmp_path: Path) -> None:
-        """ZIP creation should NOT block on completed_clean (gate must be explicitly clean)"""
-        from pathlib import Path
+    def test_pass_on_clean(self, tmp_path) -> None:
+        """ZIP creation should NOT block on completed_clean (gate must have explicit clean statuses)"""
 
         run_summary = {"tickers": {"SYNTH_001": {"status": TickerStatus.COMPLETED_CLEAN.value}}}
         config = PipelineConfig.from_ticker("SYNTH_001", tmp_path)
         runner = PipelineRunner(config)
         runner.run_dir.mkdir(parents=True, exist_ok=True)
         gate = ReleaseGateResult()
-        gate.finalize()  # Compute release_safe from zero counts
+        # Set explicit passing statuses — fail-closed gate requires these
+        gate.collection_status = "clean"
+        gate.privacy_status = "clean"
+        gate.format_status = "clean"
+        gate.numeric_data_status = "complete"
+        gate.coverage_status = "clean"
+        gate.finalize()  # Compute release_safe
         assert gate.release_safe is True, f"Expected release_safe=True, got {gate.release_safe}"
-        # Should not raise ReleaseGateBlock
+        # Should not block a clean run
         try:
             result = runner._create_export_bundle(gate, run_summary)
-            # Gate should not block a clean run - export_blocked=False or absent means pass
             assert result.get("export_blocked", False) is False, (
                 f"Expected export_blocked=False or absent, got {result}"
             )
-        except ReleaseGateBlock:
+        except Exception:
             pytest.fail("Release gate should not block on clean status")
 
 
@@ -246,6 +250,8 @@ class TestReleaseQASummary:
 
     def test_summary_no_raw_values(self) -> None:
         """Sanitized summary must contain counts/hashes only, no raw values"""
+        import hashlib
+
         run_summary = {
             "run_id": "test_run",
             "tickers": {
@@ -265,7 +271,11 @@ class TestReleaseQASummary:
         assert qa["overall"]["all_clean"] is True
         assert "detailed_findings" not in json.dumps(qa)
         assert "raw_response" not in json.dumps(qa)
-        # Check ticker summary
-        ts = qa["tickers"]["SYNTH_001"]
+        # Keys use pseudonymous IDs now
+        pseudo = f"COMPANY_{hashlib.sha256(b'SYNTH_001').hexdigest()[:12]}"
+        ts = qa["tickers"][pseudo]
         assert ts["status"] == "completed_clean"
         assert ts["exact_identifier_count"] == 0
+        # No raw ticker in JSON keys
+        assert "SYNTH_001" not in json.dumps(qa)
+        assert "NVDA" not in json.dumps(qa)

@@ -104,20 +104,24 @@ class StructuredAnonymizer:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(out_path, index=False)
 
-                manifests.append({
-                    "artifact_id": f"{self.ticker}_anon_{rel.stem}",
-                    "source": "numeric_dataset_export",
-                    "original_path": str(rel),
-                    "anonymized_path": str(out_path.relative_to(self.anonymized_dir.parent)),
-                    "sha256": hash_file(out_path),
-                    "row_count": len(df),
-                    "column_count": len(df.columns),
-                    "content_type": "parquet",
-                })
+                manifests.append(
+                    {
+                        "artifact_id": f"{self.ticker}_anon_{rel.stem}",
+                        "source": "numeric_dataset_export",
+                        "original_path": str(rel),
+                        "anonymized_path": str(out_path.relative_to(self.anonymized_dir.parent)),
+                        "sha256": hash_file(out_path),
+                        "row_count": len(df),
+                        "column_count": len(df.columns),
+                        "content_type": "parquet",
+                    }
+                )
 
                 logger.debug(
                     "Exported anonymized dataset: %s (%d rows, %d cols)",
-                    rel, len(df), len(df.columns),
+                    rel,
+                    len(df),
+                    len(df.columns),
                 )
             except Exception as exc:
                 logger.warning("Dataset export failed for %s: %s", orig_path, exc)
@@ -139,9 +143,7 @@ class StructuredAnonymizer:
             records = self._dataframe_to_records(df)
             if records:
                 result = transform_s3a_daily_bucketed(records)
-                out_path = (
-                    self.anonymized_dir / "supplemental_features" / "features_s3a.json"
-                )
+                out_path = self.anonymized_dir / "supplemental_features" / "features_s3a.json"
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 import orjson
 
@@ -158,20 +160,18 @@ class StructuredAnonymizer:
                     )
                 )
 
-                manifests.append({
-                    "artifact_id": f"{self.ticker}_anon_features_s3a",
-                    "source": "feature_only_transform",
-                    "original_path": str(
-                        ohlcv_path.relative_to(self.originals_dir.parent)
-                    ),
-                    "anonymized_path": str(
-                        out_path.relative_to(self.anonymized_dir.parent)
-                    ),
-                    "sha256": hash_file(out_path),
-                    "variant": result.variant.value,
-                    "row_count": result.row_count,
-                    "supplemental": True,
-                })
+                manifests.append(
+                    {
+                        "artifact_id": f"{self.ticker}_anon_features_s3a",
+                        "source": "feature_only_transform",
+                        "original_path": str(ohlcv_path.relative_to(self.originals_dir.parent)),
+                        "anonymized_path": str(out_path.relative_to(self.anonymized_dir.parent)),
+                        "sha256": hash_file(out_path),
+                        "variant": result.variant.value,
+                        "row_count": result.row_count,
+                        "supplemental": True,
+                    }
+                )
         except Exception as exc:
             logger.warning("S3A features export failed: %s", exc)
 
@@ -207,14 +207,14 @@ class StructuredAnonymizer:
             out_meta.write_bytes(
                 orjson.dumps(safe_meta, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
             )
-            manifests.append({
-                "artifact_id": f"{self.ticker}_anon_metadata",
-                "source": "sanitized_metadata",
-                "anonymized_path": str(
-                    out_meta.relative_to(self.anonymized_dir.parent)
-                ),
-                "sha256": hash_file(out_meta),
-            })
+            manifests.append(
+                {
+                    "artifact_id": f"{self.ticker}_anon_metadata",
+                    "source": "sanitized_metadata",
+                    "anonymized_path": str(out_meta.relative_to(self.anonymized_dir.parent)),
+                    "sha256": hash_file(out_meta),
+                }
+            )
         except Exception as exc:
             logger.warning("Metadata sanitization failed: %s", exc)
 
@@ -249,17 +249,36 @@ class StructuredAnonymizer:
     def _build_id_columns_set(self) -> set[str]:
         """Build set of identifying column names to anonymize."""
         return {
-            "ticker", "symbol", "Symbol",
-            "company_name", "CompanyName", "short_name", "shortName",
-            "long_name", "longName", "issuer", "Issuer",
-            "cik", "CIK", "accession", "Accession", "accessionNumber",
-            "source", "Source", "source_name", "sourceName",
-            "url", "URL", "source_url", "sourceUrl",
+            "ticker",
+            "symbol",
+            "Symbol",
+            "company_name",
+            "CompanyName",
+            "short_name",
+            "shortName",
+            "long_name",
+            "longName",
+            "issuer",
+            "Issuer",
+            "cik",
+            "CIK",
+            "accession",
+            "Accession",
+            "accessionNumber",
+            "source",
+            "Source",
+            "source_name",
+            "sourceName",
+            "url",
+            "URL",
+            "source_url",
+            "sourceUrl",
         }
 
     def _anonymize_dataframe_columns(self, df: Any, id_columns: set[str]) -> Any:
         """Replace identifying column values with pseudonyms."""
         import hashlib
+
         import pandas as pd
 
         for col in df.columns:
@@ -268,9 +287,11 @@ class StructuredAnonymizer:
                 try:
                     if df[col].dtype == object:
                         df[col] = df[col].apply(
-                            lambda x: f"PSEUDO_{hashlib.sha256(str(x).encode()).hexdigest()[:8]}"
-                            if pd.notna(x) and str(x) != ""
-                            else x
+                            lambda x: (
+                                f"PSEUDO_{hashlib.sha256(str(x).encode()).hexdigest()[:8]}"
+                                if pd.notna(x) and str(x) != ""
+                                else x
+                            )
                         )
                 except Exception:
                     pass
