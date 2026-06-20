@@ -20,6 +20,11 @@ import pytest
 
 # Import the colab wrapper script using importlib.util
 _SCRIPT_PATH = Path(__file__).parent.parent.parent / "scripts" / "colab_phase3c_smoke.py"
+if not _SCRIPT_PATH.exists():
+    pytest.skip(
+        f"Script {_SCRIPT_PATH} not found (removed from repository)",
+        allow_module_level=True,
+    )
 _spec = importlib.util.spec_from_file_location("colab_phase3c_smoke", _SCRIPT_PATH)
 _colab = importlib.util.module_from_spec(_spec)
 sys.modules["colab_phase3c_smoke"] = _colab

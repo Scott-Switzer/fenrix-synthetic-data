@@ -1,4 +1,14 @@
-"""Pipeline stages and runner for FENRIX Synthetic Data."""
+"""Pipeline orchestration for multi-company collection and anonymization."""
 
-# Placeholder for M1 implementation
-__all__ = []
+from .config import PipelineConfig, TickerConfig
+from .coverage import CoverageReporter
+from .manifests import ManifestBuilder
+from .runner import PipelineRunner
+
+__all__ = [
+    "CoverageReporter",
+    "ManifestBuilder",
+    "PipelineConfig",
+    "PipelineRunner",
+    "TickerConfig",
+]

@@ -9,6 +9,8 @@ import click
 
 from . import __version__
 from .config import CampaignConfig, load_company_config
+from .pipeline.config import PipelineConfig
+from .pipeline.runner import PipelineRunner
 from .schemas import StageName, StageStatus
 from .schemas.checkpoints import OutputArtifact, StageCheckpoint
 from .storage import get_logger, hash_file, hash_object, hash_string, setup_logging
@@ -2201,6 +2203,157 @@ def boundary_diag(ctx: click.Context) -> None:
 
     diag = redacted_diagnostic_command()
     click.echo(json.dumps(diag, indent=2))
+
+
+@cli.command(name="pipeline-run")
+@click.option("--ticker", default=None, help="Single ticker to process (e.g., NVDA)")
+@click.option(
+    "--companies-csv",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to CSV with ticker list",
+)
+@click.option("--years", default=10, type=int, help="Years of history to collect")
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output root directory (outside repository)",
+)
+@click.option("--enable-nvidia", is_flag=True, default=False, help="Enable NVIDIA review adapter")
+@click.option(
+    "--collect-only", is_flag=True, default=False, help="Collect only, skip anonymization"
+)
+@click.option(
+    "--anonymize-only", is_flag=True, default=False, help="Anonymize only, skip collection"
+)
+@click.option("--resume/--no-resume", default=True, help="Resume from checkpoints")
+@click.option(
+    "--force-refresh",
+    multiple=True,
+    default=[],
+    help="Force refresh by source (yfinance, sec, news)",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Dry run: preview without executing")
+@click.option(
+    "--sec-user-agent", default=None, envvar="SEC_USER_AGENT", help="SEC User-Agent string"
+)
+@click.pass_context
+def pipeline_run(
+    ctx: click.Context,
+    ticker: str | None,
+    companies_csv: Path | None,
+    years: int,
+    output_root: Path,
+    enable_nvidia: bool,
+    collect_only: bool,
+    anonymize_only: bool,
+    resume: bool,
+    force_refresh: tuple[str, ...],
+    dry_run: bool,
+    sec_user_agent: str | None,
+) -> None:
+    """Run the full multi-company collection and anonymization pipeline.
+
+    Example:
+        fenrix-synth pipeline-run --ticker NVDA --years 10 --output-root /data/fenrix
+    """
+    if not ticker and not companies_csv:
+        click.echo("Error: provide --ticker or --companies-csv", err=True)
+        sys.exit(1)
+
+    if ticker and companies_csv:
+        click.echo("Error: provide --ticker OR --companies-csv, not both", err=True)
+        sys.exit(1)
+
+    if collect_only and anonymize_only:
+        click.echo("Error: --collect-only and --anonymize-only are mutually exclusive", err=True)
+        sys.exit(1)
+
+    # Build config
+    if ticker:
+        config = PipelineConfig.from_ticker(
+            ticker=ticker.upper(),
+            output_root=output_root,
+            years=years,
+            collect_only=collect_only,
+            anonymize_only=anonymize_only,
+            enable_nvidia=enable_nvidia,
+            resume=resume,
+            force_refresh=set(force_refresh),
+            dry_run=dry_run,
+            sec_user_agent=sec_user_agent,
+        )
+    else:
+        assert companies_csv is not None
+        config = PipelineConfig.from_csv(
+            csv_path=companies_csv,
+            output_root=output_root,
+            years=years,
+            collect_only=collect_only,
+            anonymize_only=anonymize_only,
+            enable_nvidia=enable_nvidia,
+            resume=resume,
+            force_refresh=set(force_refresh),
+            dry_run=dry_run,
+            sec_user_agent=sec_user_agent,
+        )
+
+    click.echo(f"Pipeline run: {config.run_id}")
+    click.echo(f"  Tickers: {[t.ticker for t in config.tickers]}")
+    click.echo(f"  Output: {config.output_root}")
+    click.echo(f"  Years: {config.years}")
+    click.echo(f"  Collect only: {config.collect_only}")
+    click.echo(f"  Anonymize only: {config.anonymize_only}")
+    click.echo(f"  NVIDIA: {config.enable_nvidia}")
+    click.echo(f"  Dry run: {config.dry_run}")
+
+    if dry_run:
+        click.echo("Dry run complete. No data collected.")
+        return
+
+    runner = PipelineRunner(config)
+    summary = runner.run()
+
+    click.echo(f"\nPipeline complete: {config.run_id}")
+    for ticker_name, ticker_summary in summary.get("tickers", {}).items():
+        status = ticker_summary.get("status", "unknown")
+        click.echo(f"  {ticker_name}: {status}")
+        if "original_artifacts" in ticker_summary:
+            click.echo(f"    Original artifacts: {ticker_summary['original_artifacts']}")
+        if "anonymized_artifacts" in ticker_summary:
+            click.echo(f"    Anonymized artifacts: {ticker_summary['anonymized_artifacts']}")
+        if "residual_exact_identifier_count" in ticker_summary:
+            click.echo(
+                f"    Residual exact identifiers: {ticker_summary['residual_exact_identifier_count']}"
+            )
+        if "nvidia_status" in ticker_summary:
+            click.echo(f"    NVIDIA review: {ticker_summary['nvidia_status']}")
+
+    if "export_zip" in summary:
+        click.echo(f"  Export ZIP: {summary['export_zip']}")
+
+    # Save config copy
+    config_dir = runner.run_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    import orjson
+
+    config_path = config_dir / "resolved_config.json"
+    config_path.write_bytes(
+        orjson.dumps(config.to_dict(), option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+    )
+
+    # Save companies CSV
+    if companies_csv:
+        import shutil
+
+        shutil.copy(companies_csv, config_dir / "companies.csv")
+    else:
+        csv_path = config_dir / "companies.csv"
+        with open(csv_path, "w") as f:
+            f.write("ticker,enabled\n")
+            for t in config.tickers:
+                f.write(f"{t.ticker},{1 if t.enabled else 0}\n")
 
 
 @cli.command(name="pilot-run")
