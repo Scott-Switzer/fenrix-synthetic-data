@@ -2238,6 +2238,20 @@ def boundary_diag(ctx: click.Context) -> None:
 @click.option(
     "--sec-user-agent", default=None, envvar="SEC_USER_AGENT", help="SEC User-Agent string"
 )
+@click.option(
+    "--sec-archive",
+    "sec_archive_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to SEC filing archive (.zip, .tar.gz, or directory)",
+)
+@click.option(
+    "--sec-source",
+    "sec_source_mode",
+    type=click.Choice(["archive-only", "archive-preferred", "network-only"]),
+    default="archive-preferred",
+    help="SEC source mode: archive-only, archive-preferred, or network-only (default: archive-preferred)",
+)
 @click.pass_context
 def pipeline_run(
     ctx: click.Context,
@@ -2252,6 +2266,8 @@ def pipeline_run(
     force_refresh: tuple[str, ...],
     dry_run: bool,
     sec_user_agent: str | None,
+    sec_archive_path: Path | None,
+    sec_source_mode: str,
 ) -> None:
     """Run the full multi-company collection and anonymization pipeline.
 
@@ -2283,6 +2299,8 @@ def pipeline_run(
             force_refresh=set(force_refresh),
             dry_run=dry_run,
             sec_user_agent=sec_user_agent,
+            sec_archive_path=sec_archive_path,
+            sec_source_mode=sec_source_mode,
         )
     else:
         assert companies_csv is not None
@@ -2297,6 +2315,8 @@ def pipeline_run(
             force_refresh=set(force_refresh),
             dry_run=dry_run,
             sec_user_agent=sec_user_agent,
+            sec_archive_path=sec_archive_path,
+            sec_source_mode=sec_source_mode,
         )
 
     click.echo(f"Pipeline run: {config.run_id}")

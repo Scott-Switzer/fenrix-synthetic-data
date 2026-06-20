@@ -1089,7 +1089,12 @@ def run_pilot(config: RunConfig) -> RunManifest:
     }
     evidence_path = intermediate / "evidence_manifest.json"
     evidence_path.write_text(json.dumps(evidence_data, indent=2, sort_keys=True))
-    evidence_hash = hashlib.sha256(json.dumps(evidence_data, sort_keys=True).encode()).hexdigest()
+    # Compute semantic evidence hash excluding temporal run metadata
+    # so that rerunning with identical inputs produces the same hash.
+    evidence_hash_payload = {k: v for k, v in evidence_data.items() if k != "run_id"}
+    evidence_hash = hashlib.sha256(
+        json.dumps(evidence_hash_payload, sort_keys=True).encode()
+    ).hexdigest()
     _record(
         StageName.EVIDENCE_MANIFEST,
         StageStatus.PASSED,

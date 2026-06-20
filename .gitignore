@@ -96,9 +96,12 @@ output/
 # Checkpoints (can be regenerated)
 .checkpoints/
 
-# Notebooks (not used in M0/M1)
-notebooks/
+# Notebooks — track the primary notebook, ignore generated notebooks and checkpoints
+notebooks/*
+!notebooks/FENRIX_MultiCompany_Anonymization.ipynb
+.ipynb_checkpoints/
 *.ipynb
+!notebooks/FENRIX_MultiCompany_Anonymization.ipynb
 
 # Private identity registries (never commit)
 private/

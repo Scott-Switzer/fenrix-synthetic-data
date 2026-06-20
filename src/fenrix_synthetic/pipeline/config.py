@@ -32,6 +32,8 @@ class PipelineConfig:
     force_refresh: set[str] = field(default_factory=set)
     dry_run: bool = False
     sec_user_agent: str | None = None
+    sec_archive_path: Path | None = None
+    sec_source_mode: str = "archive-preferred"
     run_id: str = ""
 
     def __post_init__(self) -> None:
@@ -94,4 +96,6 @@ class PipelineConfig:
             "force_refresh": sorted(self.force_refresh),
             "dry_run": self.dry_run,
             "sec_user_agent_configured": self.sec_user_agent is not None,
+            "sec_archive_path": str(self.sec_archive_path) if self.sec_archive_path else None,
+            "sec_source_mode": self.sec_source_mode,
         }

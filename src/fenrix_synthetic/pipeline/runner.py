@@ -120,28 +120,84 @@ class PipelineRunner:
             # SEC
             if "sec" not in self.config.force_refresh and self.config.sec_user_agent:
                 logger.info("Collecting SEC data for %s", ticker)
-                sec_collector = SECCollector(
-                    originals_dir,
-                    ticker,
-                    years=ticker_cfg.years,
-                    user_agent=self.config.sec_user_agent,
-                )
-                sec_results = sec_collector.collect_all()
-                for r in sec_results:
-                    mf = manifest_builder.build_manifest(
-                        artifact_id=f"{ticker}_sec_{r.artifact_type}",
-                        source=r.source,
-                        source_url=None,
-                        requested_range=r.requested_range,
-                        observed_range=r.observed_range,
-                        content_type=r.content_type,
-                        relative_path=r.relative_path,
-                        byte_size=r.byte_size,
-                        sha256=r.sha256,
-                        collection_status=r.status.value,
-                        metadata=r.metadata,
+
+                # Check for archive usage
+                if self.config.sec_archive_path and self.config.sec_source_mode != "network-only":
+                    from ..collectors.sec_archive import SECArchiveCollector
+
+                    logger.info("Using SEC archive: %s", self.config.sec_archive_path)
+                    archive_collector = SECArchiveCollector(
+                        archive_path=self.config.sec_archive_path,
+                        output_dir=originals_dir,
+                        ticker=ticker,
+                        forms=["10-K", "10-Q", "8-K"],
+                        years=ticker_cfg.years,
                     )
-                    original_manifests.append(mf)
+                    # Inventory and coverage report (informational)
+                    _inv = archive_collector.inventory()
+                    logger.info(
+                        "Archive inventory: %d files for %s",
+                        len(_inv),
+                        ticker,
+                    )
+                    coverage_rep = archive_collector.coverage_report()
+                    cov_path = originals_dir / "sec" / "archive_coverage.json"
+                    cov_path.parent.mkdir(parents=True, exist_ok=True)
+                    import orjson as _orjson
+
+                    cov_path.write_bytes(
+                        _orjson.dumps(
+                            coverage_rep,
+                            option=_orjson.OPT_SORT_KEYS | _orjson.OPT_INDENT_2,
+                        )
+                    )
+
+                    # Collect from archive
+                    archive_results = archive_collector.collect()
+                    sec_results.extend(archive_results)
+                    for r in archive_results:
+                        mf = manifest_builder.build_manifest(
+                            artifact_id=f"{ticker}_sec_{r.artifact_type}",
+                            source=r.source,
+                            source_url=None,
+                            requested_range=r.requested_range,
+                            observed_range=r.observed_range,
+                            content_type=r.content_type,
+                            relative_path=r.relative_path,
+                            byte_size=r.byte_size,
+                            sha256=r.sha256,
+                            collection_status=r.status.value,
+                            metadata=r.metadata,
+                        )
+                        original_manifests.append(mf)
+
+                    # If archive-preferred, skip live SEC if archive had data
+                    if self.config.sec_source_mode == "archive-preferred" and any(
+                        r.status.value == "success" for r in archive_results
+                    ):
+                        logger.info(
+                            "Archive-preferred: skipping live SEC for %s (archive had data)",
+                            ticker,
+                        )
+                    else:
+                        # Fall through to live SEC when archive didn't have data
+                        self._collect_sec_live(
+                            ticker,
+                            ticker_cfg,
+                            originals_dir,
+                            sec_results,
+                            original_manifests,
+                            manifest_builder,
+                        )
+                else:
+                    self._collect_sec_live(
+                        ticker,
+                        ticker_cfg,
+                        originals_dir,
+                        sec_results,
+                        original_manifests,
+                        manifest_builder,
+                    )
 
             # News
             if "news" not in self.config.force_refresh:
@@ -267,6 +323,40 @@ class PipelineRunner:
             "nvidia_status": nvidia_status,
             "coverage": coverage_report,
         }
+
+    def _collect_sec_live(
+        self,
+        ticker: str,
+        ticker_cfg: TickerConfig,
+        originals_dir: Path,
+        sec_results: list[Any],
+        original_manifests: list[dict[str, Any]],
+        manifest_builder: ManifestBuilder,
+    ) -> None:
+        """Collect SEC data via live EDGAR access."""
+        sec_collector = SECCollector(
+            originals_dir,
+            ticker,
+            years=ticker_cfg.years,
+            user_agent=self.config.sec_user_agent,
+        )
+        live_results = sec_collector.collect_all()
+        sec_results.extend(live_results)
+        for r in live_results:
+            mf = manifest_builder.build_manifest(
+                artifact_id=f"{ticker}_sec_{r.artifact_type}",
+                source=r.source,
+                source_url=None,
+                requested_range=r.requested_range,
+                observed_range=r.observed_range,
+                content_type=r.content_type,
+                relative_path=r.relative_path,
+                byte_size=r.byte_size,
+                sha256=r.sha256,
+                collection_status=r.status.value,
+                metadata=r.metadata,
+            )
+            original_manifests.append(mf)
 
     def _create_export_bundle(self) -> Path:
         """Create anonymized export ZIP excluding originals and private maps."""
