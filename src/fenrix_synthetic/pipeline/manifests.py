@@ -13,12 +13,21 @@ import orjson
 class ManifestBuilder:
     """Build canonical manifests for original and anonymized artifacts."""
 
-    def __init__(self, run_id: str, ticker: str, output_root: Path) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        ticker: str,
+        output_root: Path,
+        company_pseudonym: str = "",
+    ) -> None:
         self.run_id = run_id
         self.ticker = ticker.upper()
         self.output_root = output_root
         self.schema_version = "1.0.0"
         self.parser_version = "fenrix_pipeline_v1"
+        self._company_pseudonym = (
+            company_pseudonym or f"COMP_{hashlib.sha256(ticker.upper().encode()).hexdigest()[:12]}"
+        )
 
     def build_manifest(
         self,
@@ -37,9 +46,11 @@ class ManifestBuilder:
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a canonical artifact manifest."""
+        # Sanitize paths: replace ticker with company pseudonym
+        sanitized_path = self._sanitize_path(relative_path)
         manifest: dict[str, Any] = {
-            "artifact_id": artifact_id,
-            "company_id": self.ticker,
+            "artifact_id": self._sanitize_artifact_id(artifact_id),
+            "company_id": self._company_pseudonym,
             "source": source,
             "source_url": source_url,
             "requested_date_range": requested_range,
@@ -48,7 +59,7 @@ class ManifestBuilder:
             "parser_version": self.parser_version,
             "schema_version": self.schema_version,
             "content_type": content_type,
-            "relative_output_path": relative_path,
+            "relative_output_path": sanitized_path,
             "byte_size": byte_size,
             "sha256": sha256,
             "collection_status": collection_status,
@@ -77,7 +88,7 @@ class ManifestBuilder:
         """Build the top-level run manifest."""
         return {
             "run_id": self.run_id,
-            "ticker": self.ticker,
+            "company_pseudonym": self._company_pseudonym,
             "schema_version": self.schema_version,
             "parser_version": self.parser_version,
             "generated_at": datetime.now(UTC).isoformat(),
@@ -85,6 +96,14 @@ class ManifestBuilder:
             "anonymized_manifests": anonymized_manifests,
             "qa_manifests": qa_manifests,
         }
+
+    def _sanitize_artifact_id(self, artifact_id: str) -> str:
+        """Replace the ticker in artifact IDs with the company pseudonym."""
+        return artifact_id.replace(self.ticker, self._company_pseudonym)
+
+    def _sanitize_path(self, path: str) -> str:
+        """Replace ticker in paths with company pseudonym."""
+        return path.replace(self.ticker, self._company_pseudonym)
 
     @staticmethod
     def semantic_hash(manifest: dict[str, Any]) -> str:

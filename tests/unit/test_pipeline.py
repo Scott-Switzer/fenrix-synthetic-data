@@ -54,7 +54,9 @@ class TestManifestBuilder:
             collection_status="success",
         )
         assert mf["artifact_id"] == "test_1"
-        assert mf["company_id"] == "NVDA"
+        # Company ID is pseudonymized, never the raw ticker
+        assert "NVDA" not in mf["company_id"]
+        assert mf["company_id"].startswith("COMP_")
         assert mf["collection_status"] == "success"
         assert "fetch_timestamp" in mf
 
@@ -433,17 +435,17 @@ class TestZipExport:
     """
 
     def test_zip_export_deterministic(self, tmp_path: Path) -> None:
-        """Build ZIP twice and require identical semantic hash."""
+        """Build ZIP twice and require identical semantic content."""
         import hashlib
         import zipfile
 
-        from fenrix_synthetic.pipeline.runner import PipelineRunner
+        from fenrix_synthetic.pipeline.runner import PipelineRunner, ReleaseGateResult
 
         config = PipelineConfig.from_ticker(
             "FAKE",
             tmp_path,
             years=1,
-            collect_only=True,  # Skip collection/network
+            collect_only=True,
         )
         runner = PipelineRunner(config)
         runner.run_dir.mkdir(parents=True, exist_ok=True)
@@ -488,17 +490,42 @@ class TestZipExport:
         priv_dir.mkdir(parents=True, exist_ok=True)
         (priv_dir / "identity_atlas.yaml").write_text("private: data")
 
-        # Run summary
-        (runner.run_dir / "run_summary.json").write_text('{"status":"complete"}')
+        # Run summary (with CLEAN status)
+        run_summary = {
+            "run_id": "test",
+            "tickers": {
+                "FAKE": {
+                    "status": "completed_clean",
+                    "residual_exact_identifier_count": 0,
+                    "unresolved_candidate_count": 0,
+                    "blocking_finding_count": 0,
+                    "path_identifier_count": 0,
+                    "filename_identifier_count": 0,
+                    "manifest_identifier_count": 0,
+                    "nvidia_status": "disabled",
+                    "nvidia_parse_errors": 0,
+                    "nvidia_correct_guess_count": 0,
+                    "nvidia_failed_request_count": 0,
+                    "required_numeric_dataset_failure_count": 0,
+                    "required_sec_format_failure_count": 0,
+                    "required_coverage_failure_count": 0,
+                }
+            },
+        }
+
+        gate = ReleaseGateResult()
 
         # Build ZIP twice
-        export1 = runner._create_export_bundle()
-        export2 = runner._create_export_bundle()
+        result1 = runner._create_export_bundle(gate, run_summary)
+        gate2 = ReleaseGateResult()
+        result2 = runner._create_export_bundle(gate2, run_summary)
 
+        export1 = Path(result1["export_zip"])
+        export2 = Path(result2["export_zip"])
         assert export1.exists()
         assert export2.exists()
 
-        # Compare content hashes (ZIP metadata may differ, so compare content)
+        # Compare content (ZIP metadata may differ)
         def _extract_content_map(zip_path: Path) -> dict[str, str]:
             content_map: dict[str, str] = {}
             with zipfile.ZipFile(zip_path, "r") as zf:
@@ -508,26 +535,15 @@ class TestZipExport:
 
         content1 = _extract_content_map(export1)
         content2 = _extract_content_map(export2)
-
         assert content1 == content2, "ZIP content differs between builds"
-
-        # Verify file ordering is deterministic
-        names1 = sorted(content1.keys())
-        names2 = sorted(content2.keys())
-        assert names1 == names2
-
-        # Verify checksum match
-        sha1 = hashlib.sha256(export1.read_bytes()).hexdigest()
-        sha2 = hashlib.sha256(export2.read_bytes()).hexdigest()
-        # ZIP metadata timestamps differ, so raw hash may differ.
-        # But semantic content must be identical (already verified above).
-        assert sha1 != "" and sha2 != ""
+        assert result1["release_safe"] is True
+        assert result2["release_safe"] is True
 
     def test_zip_export_excludes_originals(self, tmp_path: Path) -> None:
         """Verify originals are NOT in the export ZIP."""
         import zipfile
 
-        from fenrix_synthetic.pipeline.runner import PipelineRunner
+        from fenrix_synthetic.pipeline.runner import PipelineRunner, ReleaseGateResult
 
         config = PipelineConfig.from_ticker("FAKE", tmp_path, years=1, collect_only=True)
         runner = PipelineRunner(config)
@@ -544,11 +560,16 @@ class TestZipExport:
         (runner.run_dir / "anonymized" / "FAKE" / "public.txt").write_text("PUBLIC")
         (runner.run_dir / "qa" / "FAKE" / "report.json").parent.mkdir(parents=True, exist_ok=True)
         (runner.run_dir / "qa" / "FAKE" / "report.json").write_text("{}")
-        (runner.run_dir / "run_summary.json").write_text("{}")
         (runner.run_dir / "config" / "cfg.json").parent.mkdir(parents=True, exist_ok=True)
         (runner.run_dir / "config" / "cfg.json").write_text("{}")
 
-        export_path = runner._create_export_bundle()
+        run_summary = {
+            "run_id": "test",
+            "tickers": {"FAKE": {"status": "completed_clean"}},
+        }
+        gate = ReleaseGateResult()
+        result = runner._create_export_bundle(gate, run_summary)
+        export_path = Path(result["export_zip"])
 
         with zipfile.ZipFile(export_path, "r") as zf:
             names = zf.namelist()
@@ -561,7 +582,7 @@ class TestZipExport:
         """Export contains expected file categories."""
         import zipfile
 
-        from fenrix_synthetic.pipeline.runner import PipelineRunner
+        from fenrix_synthetic.pipeline.runner import PipelineRunner, ReleaseGateResult
 
         config = PipelineConfig.from_ticker("FAKE", tmp_path, years=1, collect_only=True)
         runner = PipelineRunner(config)
@@ -572,12 +593,16 @@ class TestZipExport:
         (runner.run_dir / "anonymized" / "FAKE" / "a.json").write_text("{}")
         (runner.run_dir / "qa" / "FAKE" / "b.json").parent.mkdir(parents=True, exist_ok=True)
         (runner.run_dir / "qa" / "FAKE" / "b.json").write_text("{}")
-        (runner.run_dir / "run_summary.json").write_text("{}")
         (runner.run_dir / "config" / "c.json").parent.mkdir(parents=True, exist_ok=True)
         (runner.run_dir / "config" / "c.json").write_text("{}")
 
-        export_path = runner._create_export_bundle()
+        run_summary = {
+            "run_id": "test",
+            "tickers": {"FAKE": {"status": "completed_clean"}},
+        }
+        gate = ReleaseGateResult()
+        result = runner._create_export_bundle(gate, run_summary)
+        export_path = Path(result["export_zip"])
         with zipfile.ZipFile(export_path, "r") as zf:
             names = zf.namelist()
-            # Should have: 1 anonymized + 1 qa + 1 summary + 1 config = 4 files
             assert len(names) >= 3, f"Expected >=3 files, got {len(names)}: {names}"

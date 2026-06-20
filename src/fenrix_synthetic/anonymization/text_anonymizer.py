@@ -1,13 +1,23 @@
-"""Text anonymizer for SEC filings and news articles."""
+"""Text anonymizer for SEC filings and news articles.
+
+Handles both flat text and XML/XBRL structure awareness.
+Anonymizes text nodes, XBRL attributes, contexts, and identifiers.
+
+New: Converts Inline-XBRL/HTML SEC filings to readable Markdown before
+anonymization, then anonymizes the Markdown representation.
+The output is genuine .md files, not renamed HTML.
+"""
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 from ..identity import EntityRegistry
 from ..masking import DeterministicMasker
+from ..release.pseudonym_paths import build_pseudonym_path_map
 from ..storage.hashing import hash_file
 
 logger = logging.getLogger(__name__)
@@ -53,18 +63,47 @@ class TextAnonymizer:
         masker = DeterministicMasker(reg)
         config_hash = reg.config_hash()
 
+        # Extract CIK and accessions for XBRL-aware processing
+        cik = self._extract_cik_from_registry(reg)
+        accessions = self._extract_accessions_from_registry(reg)
+        path_map = build_pseudonym_path_map(self.ticker, cik, accessions)
+
         for html_path in filings_dir.glob("*.html"):
             try:
-                text = html_path.read_text(encoding="utf-8", errors="replace")
+                raw_html = html_path.read_text(encoding="utf-8", errors="replace")
                 artifact_id = html_path.stem
+
+                # Step 0: Convert HTML/Inline-XBRL to readable Markdown
+                from ..extraction.converter import HtmlFilingExtractor
+
+                extractor = HtmlFilingExtractor()
+                extraction = extractor.extract(
+                    raw_html,
+                    metadata={"source": str(html_path.name)},
+                )
+                text = extraction["text"]
+
+                # Phase A: XBRL-aware structural anonymization
+                text = self._anonymize_xbrl_structure(text, cik, path_map)
+
+                # Phase B: Deterministic regex masking (flat text)
                 masked_text, _sanitized_meta, audit, summary = masker.mask_and_sanitize_metadata(
                     text,
                     {"source": str(html_path.name), "registry_id": reg.metadata.registry_id},
                     config_hash,
                 )
 
+                # Get pseudonym filename (never leak accession)
+                import hashlib
+
+                public_filename = path_map.public_filename(artifact_id)
+                if not public_filename.endswith(".md"):
+                    # Fallback: hash-based filename, never the raw accession
+                    fallback_hash = hashlib.sha256(artifact_id.encode()).hexdigest()[:12]
+                    public_filename = f"filing_{fallback_hash}.md"
+
                 # Save anonymized
-                out_path = self.anonymized_dir / "sec" / f"{artifact_id}.md"
+                out_path = self.anonymized_dir / "sec" / public_filename
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(masked_text, encoding="utf-8")
 
@@ -151,6 +190,109 @@ class TextAnonymizer:
         )
 
         return manifests
+
+    def _anonymize_xbrl_structure(self, text: str, cik: str, path_map: Any) -> str:
+        """Apply XBRL/XML-aware structural anonymization before regex masking.
+
+        Targets:
+        - EntityCentralIndexKey attributes in XBRL contexts
+        - CIK values in XBRL facts and context IDs
+        - XBRL namespace URIs containing CIKs
+        - Schema reference URLs with company identifiers
+        - Accession numbers in XBRL contexts
+        - Identifier schemes referencing CIKs
+        """
+        if not cik:
+            return text
+
+        import hashlib
+
+        clean_cik = cik.lstrip("0")
+        padded_cik = cik.zfill(10)
+        cik_pseudo = f"CIK_{hashlib.sha256(cik.encode()).hexdigest()[:12]}"
+
+        # 1. EntityCentralIndexKey attribute in XML
+        text = re.sub(
+            r'(<[^>]*?EntityCentralIndexKey[^>]*?")(\d+)("[^>]*?>)',
+            lambda m: m.group(1) + cik_pseudo + m.group(3),
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 2. Bare CIK in XML context identifiers
+        text = re.sub(
+            rf'(contextRef|cik)\s*=\s*"?{re.escape(clean_cik)}"?',
+            f'\\1="{cik_pseudo}"',
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf'(contextRef|cik)\s*=\s*"?{re.escape(padded_cik)}"?',
+            f'\\1="{cik_pseudo}"',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 3. CIK in URLs
+        text = re.sub(
+            rf"cik={re.escape(clean_cik)}",
+            f"cik={cik_pseudo}",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"cik={re.escape(padded_cik)}",
+            f"cik={cik_pseudo}",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 4. CIK in identifier elements (XBRL)
+        text = re.sub(
+            rf"(<identifier[^>]*>)\s*{re.escape(clean_cik)}\s*(</identifier>)",
+            rf"\1 {cik_pseudo} \2",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # 5. Namespace URIs containing CIK patterns
+        text = re.sub(
+            rf"/{re.escape(clean_cik)}/",
+            f"/{cik_pseudo}/",
+            text,
+        )
+        text = re.sub(
+            rf"/{re.escape(padded_cik)}/",
+            f"/{cik_pseudo}/",
+            text,
+        )
+
+        # 6. Accession numbers in XBRL contexts (dashed and non-dashed forms)
+        if path_map and hasattr(path_map, "accession_pseudonyms"):
+            for acc, pseudo in path_map.accession_pseudonyms.items():
+                clean_acc = acc.replace("-", "")
+                # Only replace if > 12 chars (to avoid false positives)
+                if len(acc) > 12:
+                    text = text.replace(acc, pseudo)
+                if len(clean_acc) > 12:
+                    text = text.replace(clean_acc, pseudo)
+
+        return text
+
+    def _extract_cik_from_registry(self, reg: EntityRegistry) -> str:
+        """Extract CIK from registry entities."""
+        for entity in reg.all_entities():
+            if entity.entity_type.value == "cik":
+                return entity.canonical_private_value
+        return ""
+
+    def _extract_accessions_from_registry(self, reg: EntityRegistry) -> list[str]:
+        """Extract accession numbers from registry entities."""
+        accessions: list[str] = []
+        for entity in reg.all_entities():
+            if entity.entity_type.value == "sec_accession_number":
+                accessions.append(entity.canonical_private_value)
+        return accessions
 
     def _load_registry(self, atlas_data: dict[str, Any]) -> EntityRegistry | None:
         from ..identity import EntityRegistry

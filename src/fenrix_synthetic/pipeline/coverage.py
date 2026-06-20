@@ -1,4 +1,9 @@
-"""Coverage reporting for pipeline runs."""
+"""Coverage reporting for pipeline runs.
+
+Repaired: companyfacts zero-row is flagged, historical_10y_complete is
+never reported as true when only recent articles exist, SEC archive
+non-null is validated at gate level.
+"""
 
 from __future__ import annotations
 
@@ -83,19 +88,27 @@ class CoverageReporter:
         artifacts = []
         success_count = 0
         filing_count = 0
+        companyfacts_zero = False
         for r in results:
             d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
+            artifact_type = d.get("artifact_type", "")
+            status = d.get("status", "")
+            row_count = d.get("row_count", 0)
             artifacts.append(
                 {
-                    "artifact_type": d.get("artifact_type"),
-                    "status": d.get("status"),
-                    "row_count": d.get("row_count"),
+                    "artifact_type": artifact_type,
+                    "status": status,
+                    "row_count": row_count,
                 }
             )
-            if d.get("status") == "success":
+            if status == "success":
                 success_count += 1
-            if d.get("artifact_type") == "filing_documents":
+            if artifact_type == "filing_documents":
                 filing_count = d.get("metadata", {}).get("downloaded_count", 0)
+            # Flag zero-row companyfacts
+            if artifact_type == "companyfacts" and row_count == 0:
+                companyfacts_zero = True
+
         by_form: dict[str, int] = {}
         for r in results:
             d = r.to_dict() if hasattr(r, "to_dict") else dict(r)
@@ -103,7 +116,8 @@ class CoverageReporter:
             if "forms" in meta:
                 for form in meta["forms"]:
                     by_form[form] = by_form.get(form, 0) + 1
-        return {
+
+        summary: dict[str, Any] = {
             "has_data": success_count > 0,
             "artifacts_collected": len(artifacts),
             "artifacts_successful": success_count,
@@ -111,21 +125,42 @@ class CoverageReporter:
             "filings_by_form": by_form,
             "artifacts": artifacts,
         }
+        if companyfacts_zero:
+            summary["warnings"] = summary.get("warnings", []) + [
+                "companyfacts returned 0 rows — financial facts are missing"
+            ]
+        return summary
 
     def _summarize_news(self, results: list[Any], coverage: Any | None) -> dict[str, Any]:
         if not results and coverage is None:
             return {"has_data": False}
         if coverage is not None:
             d = coverage.to_dict() if hasattr(coverage, "to_dict") else dict(coverage)
+            # NEVER report historical_10y_complete=true when only recent articles exist
+            earliest = d.get("earliest_timestamp")
+            latest = d.get("latest_timestamp")
+            is_10y = d.get("historical_10y_complete", False)
+            if earliest and latest:
+                try:
+                    from datetime import datetime as dt
+
+                    earliest_dt = dt.fromisoformat(earliest.replace("Z", "+00:00"))
+                    latest_dt = dt.fromisoformat(latest.replace("Z", "+00:00"))
+                    span_years = (latest_dt - earliest_dt).days / 365.25
+                    if span_years < 9.0:
+                        is_10y = False
+                except (ValueError, TypeError):
+                    pass
+
             return {
                 "has_data": d.get("total_records", 0) > 0,
                 "total_records": d.get("total_records", 0),
                 "unique_urls": d.get("unique_urls", 0),
                 "body_fetch_success": d.get("body_fetch_success", 0),
                 "body_fetch_failure": d.get("body_fetch_failure", 0),
-                "earliest_timestamp": d.get("earliest_timestamp"),
-                "latest_timestamp": d.get("latest_timestamp"),
-                "historical_10y_complete": d.get("historical_10y_complete", False),
+                "earliest_timestamp": earliest,
+                "latest_timestamp": latest,
+                "historical_10y_complete": is_10y,
                 "coverage_limitations": d.get("coverage_limitations", []),
             }
         return {"has_data": False}

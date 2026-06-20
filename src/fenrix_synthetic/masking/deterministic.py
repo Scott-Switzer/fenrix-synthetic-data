@@ -77,7 +77,27 @@ def build_ticker_parenthesized_pattern(ticker: str) -> str:
 
 def build_cik_padded_pattern(cik: str) -> str:
     clean = cik.lstrip("0")
-    return f"CIK\\s*#?\\s*0*{re.escape(clean)}\\b|\\b0*{re.escape(clean)}\\b"
+    padded = cik.zfill(10)
+    return (
+        f"CIK\\s*#?\\s*0*{re.escape(clean)}\\b"
+        f"|CIK\\s*#?\\s*{re.escape(padded)}\\b"
+        f"|\\b0*{re.escape(clean)}\\b"
+        f"|\\b{re.escape(padded)}\\b"
+    )
+
+
+def build_xbrl_cik_attribute_pattern(cik: str) -> str:
+    """Build pattern for CIK as XBRL attribute value (no word boundaries)."""
+    clean = cik.lstrip("0")
+    padded = cik.zfill(10)
+    return f"{re.escape(clean)}|{re.escape(padded)}"
+
+
+def build_cik_url_pattern(cik: str) -> str:
+    """Build pattern for CIK in URLs (cik= parameter)."""
+    clean = cik.lstrip("0")
+    padded = cik.zfill(10)
+    return f"cik={re.escape(clean)}|cik={re.escape(padded)}"
 
 
 def build_accession_dashed_pattern(accession: str) -> str:
