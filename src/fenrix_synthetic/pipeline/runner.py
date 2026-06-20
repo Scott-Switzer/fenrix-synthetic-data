@@ -150,8 +150,11 @@ class ReleaseGateResult:
         return self
 
     def to_summary_dict(self) -> dict[str, Any]:
-        """Return the canonical release gate summary dict."""
-        self.finalize()
+        """Return the canonical release gate summary dict.
+
+        Does NOT call finalize() — caller is responsible for calling
+        finalize() before to_summary_dict() if needed.
+        """
         result: dict[str, Any] = {
             "collection_status": self.collection_status,
             "privacy_status": self.privacy_status,
@@ -1108,23 +1111,48 @@ def _validate_numeric_datasets(anonymized_dir: Path) -> int:
 def _validate_sec_format(anonymized_dir: Path) -> int:
     """Validate SEC Markdown files are readable and not raw HTML/XML.
 
-    Returns count of format failures.
+    Checks: no XML/XBRL tags, no namespace declarations, no schema refs,
+    meaningful prose, adequate length.
     """
+    from ..release.namespace_scanner import (
+        _XBRL_TAG_PATTERN,
+        _XML_NAMESPACE_PATTERN,
+        _SCHEMA_REF_PATTERN,
+    )
+
     failures = 0
     sec_dir = anonymized_dir / "sec"
     if not sec_dir.exists():
         return 0
     for md_path in sec_dir.rglob("*.md"):
         try:
-            content = md_path.read_text(encoding="utf-8", errors="replace")[:500]
+            content = md_path.read_text(encoding="utf-8", errors="replace")
             # Must not start with raw XML/HTML
-            if content.lstrip().startswith(("<html", "<HTML", "<xml", "<?xml", "<ix:", "<xbrli:")):
+            if content.lstrip().startswith(
+                ("<html", "<HTML", "<xml", "<?xml", "<ix:", "<xbrli:")
+            ):
                 failures += 1
-                logger.debug("Raw XML/HTML found in Markdown: %s", md_path.name)
+                logger.debug("Raw XML/HTML at start of Markdown: %s", md_path.name)
+            # Must not contain XBRL tags anywhere
+            if _XBRL_TAG_PATTERN.search(content):
+                failures += 1
+                logger.debug("XBRL tags found in Markdown: %s", md_path.name)
+            # Must not contain XML namespace declarations
+            if _XML_NAMESPACE_PATTERN.search(content):
+                failures += 1
+                logger.debug("XML namespace in Markdown: %s", md_path.name)
+            # Must not contain schema references
+            if _SCHEMA_REF_PATTERN.search(content):
+                failures += 1
+                logger.debug("Schema reference in Markdown: %s", md_path.name)
             # Must have meaningful prose
+            text_only = re.sub(r"[\s\d\p{P}]", "", content)
+            if len(text_only.strip()) < 20:
+                failures += 1
+                logger.debug("Near-empty or numeric-only Markdown: %s", md_path.name)
             if len(content.strip()) < 50:
                 failures += 1
-                logger.debug("Near-empty Markdown: %s", md_path.name)
+                logger.debug("Too-short Markdown: %s", md_path.name)
         except Exception:
             failures += 1
     return failures
