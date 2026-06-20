@@ -2362,6 +2362,36 @@ def pilot_run(
         sys.exit(1)
 
 
+# ── Phase 5A S3 CLI commands ─────────────────────────────────────────────────
+
+try:
+    from .cli_s3 import (
+        atlas_harvest,
+        evaluate_submission,
+        s3_assess,
+        s3_attack,
+        s3_transform,
+    )
+
+    cli.add_command(s3_transform)
+    cli.add_command(s3_attack)
+    cli.add_command(s3_assess)
+    cli.add_command(evaluate_submission)
+    cli.add_command(atlas_harvest)
+except ImportError:  # pragma: no cover
+    # Phase 5A CLI surface optional for installations focused on phases < 5A
+    pass
+
+# ── Phase 5A classroom-build command ────────────────────────────────────────
+
+try:
+    from .release.classroom_build import classroom_build
+
+    cli.add_command(classroom_build)
+except ImportError:  # pragma: no cover
+    pass
+
+
 def main() -> None:  # type: ignore[no-any-return]
     """Main entry point."""
     cli()

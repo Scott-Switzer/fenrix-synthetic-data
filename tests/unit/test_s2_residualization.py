@@ -114,7 +114,9 @@ class TestS2Residualization:
         src = _make_records(100, seed=42)
         mkt = _make_records(100, seed=7)
         sec = _make_records(100, seed=13)
-        result = transform_s2_privacy(src, market_reference=mkt, sector_reference=sec, fit_window=60)
+        result = transform_s2_privacy(
+            src, market_reference=mkt, sector_reference=sec, fit_window=60
+        )
         # Residual volatility should be close to source volatility after scaling
         src_returns = []
         for i in range(1, len(src)):
@@ -126,7 +128,13 @@ class TestS2Residualization:
             if close_vals[i - 1] > 0:
                 res_returns.append(math.log(close_vals[i] / close_vals[i - 1]))
         if src_returns and res_returns:
-            src_vol = (sum((r - sum(src_returns) / len(src_returns)) ** 2 for r in src_returns) / len(src_returns)) ** 0.5
-            res_vol = (sum((r - sum(res_returns) / len(res_returns)) ** 2 for r in res_returns) / len(res_returns)) ** 0.5
+            src_vol = (
+                sum((r - sum(src_returns) / len(src_returns)) ** 2 for r in src_returns)
+                / len(src_returns)
+            ) ** 0.5
+            res_vol = (
+                sum((r - sum(res_returns) / len(res_returns)) ** 2 for r in res_returns)
+                / len(res_returns)
+            ) ** 0.5
             # After scaling, residual vol should be close to source vol
             assert abs(src_vol - res_vol) < 0.001

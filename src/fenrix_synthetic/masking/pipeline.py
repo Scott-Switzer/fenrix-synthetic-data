@@ -39,8 +39,7 @@ class DeterministicMasker:
 
         # Detect already-inserted placeholders to avoid mutating them
         placeholder_spans = [
-            (m.start(), m.end())
-            for m in re.finditer(r"\[[A-Za-z0-9_\s]+\]", text)
+            (m.start(), m.end()) for m in re.finditer(r"\[[A-Za-z0-9_\s]+\]", text)
         ]
 
         # Normalized text for whitespace-normalized matching policies
@@ -53,10 +52,14 @@ class DeterministicMasker:
                 continue
             patterns = get_patterns_for_alias(alias, registry)
             # Use normalized text when policy or mutation requires it
-            target_text = normalized_text if (
-                alias.match_policy == MatchPolicy.WHITESPACE_VARIANT
-                or MutationPolicy.WHITESPACE_NORMALIZE in alias.enabled_mutation_policies
-            ) else text
+            target_text = (
+                normalized_text
+                if (
+                    alias.match_policy == MatchPolicy.WHITESPACE_VARIANT
+                    or MutationPolicy.WHITESPACE_NORMALIZE in alias.enabled_mutation_policies
+                )
+                else text
+            )
             for ptype, pattern, replacement, priority, flags in patterns:
                 for regex_match in re.finditer(pattern, target_text, flags=flags):
                     start = regex_match.start()
@@ -64,8 +67,7 @@ class DeterministicMasker:
 
                     # Do not match inside existing placeholders
                     if any(
-                        ps[0] <= start < ps[1] or ps[0] < end <= ps[1]
-                        for ps in placeholder_spans
+                        ps[0] <= start < ps[1] or ps[0] < end <= ps[1] for ps in placeholder_spans
                     ):
                         continue
 

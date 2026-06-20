@@ -1,0 +1,26 @@
+{
+  "policy_id": "s3b-mvp-v1",
+  "variant": "s3b_weekly_features",
+  "description": "MVP Attack Policy v1 - frozen 16-attack contract for S3B classroom beta. Both generator and gate MUST consume this exact file.",
+  "required_attack_keys": [
+    "exact/all",
+    "weighted_hamming/all",
+    "dtw/all",
+    "transition/all",
+    "ngram/all",
+    "combined/all",
+    "combined/direction",
+    "combined/momentum",
+    "combined/volatility",
+    "combined/drawdown",
+    "combined/market_relative",
+    "combined/sector_relative",
+    "combined/technical_state",
+    "lagged_1/all",
+    "lagged_5/all",
+    "lagged_21/all"
+  ],
+  "fail_if_top_k": 10,
+  "review_if_top_percent": 1.0,
+  "minimum_candidate_universe": 100
+}

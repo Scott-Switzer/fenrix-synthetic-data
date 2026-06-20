@@ -44,9 +44,7 @@ class TestResumeInvalidation:
         src_dir = private_root / "sources" / "SRC_001"
         src_dir.mkdir(parents=True)
         manifest_path = src_dir / "source_manifest.yaml"
-        manifest_path.write_text(
-            "source_id: SRC_001\ndocuments: []\nseries: []\n"
-        )
+        manifest_path.write_text("source_id: SRC_001\ndocuments: []\nseries: []\n")
 
         config = RunConfig(
             source_id="SRC_001",

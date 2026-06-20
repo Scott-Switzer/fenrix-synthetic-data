@@ -185,9 +185,17 @@ def get_patterns_for_alias(
         patterns.append(("literal", _bounded(re.escape(value)), replacement, priority, flags))
 
     if match_policy == MatchPolicy.TICKER_EXACT:
-        patterns.append(("ticker", _bounded(re.escape(value.upper())), replacement, priority, flags))
         patterns.append(
-            ("ticker_exchange", build_ticker_exchange_pattern(value), replacement, priority + 10, flags)
+            ("ticker", _bounded(re.escape(value.upper())), replacement, priority, flags)
+        )
+        patterns.append(
+            (
+                "ticker_exchange",
+                build_ticker_exchange_pattern(value),
+                replacement,
+                priority + 10,
+                flags,
+            )
         )
         patterns.append(
             (
@@ -205,10 +213,14 @@ def get_patterns_for_alias(
         )
 
     if match_policy == MatchPolicy.CIK_PADDED:
-        patterns.append(("cik_padded", build_cik_padded_pattern(value), replacement, priority, flags))
+        patterns.append(
+            ("cik_padded", build_cik_padded_pattern(value), replacement, priority, flags)
+        )
 
     if match_policy == MatchPolicy.ACCESSION_DASHED:
-        patterns.append(("accession", build_accession_dashed_pattern(value), replacement, priority, flags))
+        patterns.append(
+            ("accession", build_accession_dashed_pattern(value), replacement, priority, flags)
+        )
 
     if match_policy == MatchPolicy.DOMAIN_FULL:
         patterns.append(("url", build_domain_url_pattern(value), replacement, priority, flags))
@@ -221,14 +233,32 @@ def get_patterns_for_alias(
         patterns.append(("url", build_domain_url_pattern(value), replacement, priority, flags))
 
     if MutationPolicy.POSSESSIVE in alias.enabled_mutation_policies:
-        patterns.append(("possessive", build_possessive_pattern(value), replacement, priority + 1, flags))
+        patterns.append(
+            ("possessive", build_possessive_pattern(value), replacement, priority + 1, flags)
+        )
 
     if MutationPolicy.DASH_VARIANT in alias.enabled_mutation_policies:
         if " " in value:
             dash_variant = value.replace(" ", "-")
-            patterns.append(("dash_variant", _bounded(re.escape(dash_variant)), replacement, priority + 2, flags))
+            patterns.append(
+                (
+                    "dash_variant",
+                    _bounded(re.escape(dash_variant)),
+                    replacement,
+                    priority + 2,
+                    flags,
+                )
+            )
         if "-" in value:
             space_variant = value.replace("-", " ")
-            patterns.append(("space_variant", _bounded(re.escape(space_variant)), replacement, priority + 2, flags))
+            patterns.append(
+                (
+                    "space_variant",
+                    _bounded(re.escape(space_variant)),
+                    replacement,
+                    priority + 2,
+                    flags,
+                )
+            )
 
     return patterns

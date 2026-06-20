@@ -25,6 +25,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from fenrix_synthetic.release.eligibility import (
+    enforce_eligibility_for_export,
+)
+
 
 def build_checksums(files: dict[str, str]) -> dict[str, str]:
     """Compute SHA-256 checksums for each file in the dossier."""
@@ -215,11 +219,17 @@ def generate_dossier(
         for fname, content in masked_documents.items():
             (unstructured_dir / fname).write_text(content)
 
-    # Write structured data
+    # Write structured data — defense-in-depth: refuse to write any
+    # ineligible variant to disk regardless of upstream marker tampering.
     if structured_data:
         structured_dir = dossier_root / "structured"
         structured_dir.mkdir(exist_ok=True)
         for variant, data in structured_data.items():
+            enforce_eligibility_for_export(
+                variant=variant,
+                release_marker="release_candidate",
+                attempted_action="dossier_generation",
+            )
             (structured_dir / f"{variant}.json").write_text(
                 json.dumps(data, indent=2)
             )  # Write reports

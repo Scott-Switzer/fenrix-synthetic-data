@@ -200,13 +200,14 @@ def _stddev(values: list[float]) -> float:
     mean: float = sum(values) / n
     sq_diffs: list[float] = [(v - mean) ** 2 for v in values]
     variance: float = sum(sq_diffs) / n
-    result: float = variance ** 0.5
+    result: float = variance**0.5
     return result
 
 
 def _compute_log_returns(closes: list[float]) -> list[float]:
     """Compute log returns from close prices."""
     import math
+
     returns: list[float] = []
     for i in range(1, len(closes)):
         if closes[i - 1] > 0 and closes[i] > 0:
@@ -339,7 +340,11 @@ def transform_s2_privacy(
         sec_returns = _compute_log_returns(sec_closes)
 
     # Step 2: Align series lengths (use minimum overlapping period)
-    n = min(len(src_returns), len(mkt_returns) if mkt_returns else len(src_returns), len(sec_returns) if sec_returns else len(src_returns))
+    n = min(
+        len(src_returns),
+        len(mkt_returns) if mkt_returns else len(src_returns),
+        len(sec_returns) if sec_returns else len(src_returns),
+    )
     if n < fit_window:
         return TransformResult(
             variant=TransformVariant.S2_INCOMPLETE,
@@ -358,7 +363,9 @@ def transform_s2_privacy(
 
     # Step 3: In-sample regression (first fit_window observations)
     fit_n = min(fit_window, n)
-    alpha, beta_mkt, beta_sec = _ols_coefficients(src_r[:fit_n], mkt_r[:fit_n], sec_r[:fit_n] if has_sector else None)
+    alpha, beta_mkt, beta_sec = _ols_coefficients(
+        src_r[:fit_n], mkt_r[:fit_n], sec_r[:fit_n] if has_sector else None
+    )
 
     # Step 4: Remove market/sector components from FULL period
     residuals: list[float] = []

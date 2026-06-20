@@ -12,6 +12,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from fenrix_synthetic.release.eligibility import (
+    IneligibleVariantError as _IneligibleVariantError,
+)
+from fenrix_synthetic.release.eligibility import (
+    assert_releasable_variant,
+)
 from fenrix_synthetic.release.evidence import EvidenceManifest
 
 
@@ -97,6 +103,29 @@ def evaluate_release_gate(
     conditions: list[GateCondition] = []
     policy = policy or {}
     thresholds = policy.get("attack_thresholds", {})
+
+    # ── Defense-in-depth: refuse to gate an ineligible variant ──────
+    release_variant = thresholds.get("release_variant") if isinstance(thresholds, dict) else None
+    if isinstance(release_variant, str) and release_variant:
+        try:
+            assert_releasable_variant(release_variant)
+        except _IneligibleVariantError as exc:
+            conditions.append(
+                GateCondition(
+                    condition_id="release_variant_eligibility",
+                    description="Release variant is in NOT_ELIGIBLE_FOR_STRUCTURED_RELEASE",
+                    passed=False,
+                    is_blocking=True,
+                    evidence={"ineligible_variant": release_variant, "detail": str(exc)},
+                )
+            )
+            return ReleaseGateResult(
+                decision=ReleaseDecision.FAIL,
+                conditions=conditions,
+                blocking_failures=1,
+                warnings=0,
+                gate_hash=_compute_gate_hash(ReleaseDecision.FAIL, 1, 0, conditions),
+            )
 
     # ── Evidence manifest validation ────────────────────────────────
     if evidence_manifest is not None:

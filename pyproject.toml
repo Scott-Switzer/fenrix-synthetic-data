@@ -101,7 +101,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# --disable-socket enforces the network-isolated CI guardrail via pytest-socket.
+# Tests assert pytest-socket raises SocketBlockedError on outbound TCP/DNS.
+addopts = "-v --tb=short --disable-socket"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

@@ -35,10 +35,21 @@ def _make_invented_fixture(private_root: Path) -> Path:
         "data_end": "2025-12-31",
         "expected_history_years": 1,
         "documents": [
-            {"document_id": "report_q1", "document_type": "earnings_release", "source_path": "unstructured/report_q1.txt", "content_hash": "abc123"}
+            {
+                "document_id": "report_q1",
+                "document_type": "earnings_release",
+                "source_path": "unstructured/report_q1.txt",
+                "content_hash": "abc123",
+            }
         ],
         "series": [
-            {"series_id": "prices", "format": "ohlcv", "source_path": "structured/prices.json", "content_hash": "def456", "row_count": 252}
+            {
+                "series_id": "prices",
+                "format": "ohlcv",
+                "source_path": "structured/prices.json",
+                "content_hash": "def456",
+                "row_count": 252,
+            }
         ],
         "extractor_versions": {"ohlcv": "1.0.0"},
         "manifest_hash": "manifest-hash-123",
@@ -183,14 +194,16 @@ def _make_invented_fixture(private_root: Path) -> Path:
         day_low = min(day_open, day_close) - intra_range * rng.random()
         day_low = max(day_low, 0.01)
         day_high = max(day_high, day_low)
-        records.append({
-            "date": f"2025-01-{(i % 28) + 1:02d}",
-            "open": round(day_open, 2),
-            "high": round(day_high, 2),
-            "low": round(day_low, 2),
-            "close": round(day_close, 2),
-            "volume": float(rng.randint(100000, 5000000)),
-        })
+        records.append(
+            {
+                "date": f"2025-01-{(i % 28) + 1:02d}",
+                "open": round(day_open, 2),
+                "high": round(day_high, 2),
+                "low": round(day_low, 2),
+                "close": round(day_close, 2),
+                "volume": float(rng.randint(100000, 5000000)),
+            }
+        )
         price = day_close
     (prices_dir / "prices.json").write_text(json.dumps({"records": records}))
 
@@ -207,14 +220,16 @@ def _make_invented_fixture(private_root: Path) -> Path:
         mkt_low = min(mkt_open, mkt_close) - intra * rng_mkt.random()
         mkt_low = max(mkt_low, 0.01)
         mkt_high = max(mkt_high, mkt_low)
-        mkt_records.append({
-            "date": f"2025-01-{(i % 28) + 1:02d}",
-            "open": round(mkt_open, 2),
-            "high": round(mkt_high, 2),
-            "low": round(mkt_low, 2),
-            "close": round(mkt_close, 2),
-            "volume": float(rng_mkt.randint(1000000, 10000000)),
-        })
+        mkt_records.append(
+            {
+                "date": f"2025-01-{(i % 28) + 1:02d}",
+                "open": round(mkt_open, 2),
+                "high": round(mkt_high, 2),
+                "low": round(mkt_low, 2),
+                "close": round(mkt_close, 2),
+                "volume": float(rng_mkt.randint(1000000, 10000000)),
+            }
+        )
         mkt_price = mkt_close
     (prices_dir / "market_reference.json").write_text(json.dumps({"records": mkt_records}))
 
@@ -231,14 +246,16 @@ def _make_invented_fixture(private_root: Path) -> Path:
         sec_low = min(sec_open, sec_close) - intra * rng_sec.random()
         sec_low = max(sec_low, 0.01)
         sec_high = max(sec_high, sec_low)
-        sec_records.append({
-            "date": f"2025-01-{(i % 28) + 1:02d}",
-            "open": round(sec_open, 2),
-            "high": round(sec_high, 2),
-            "low": round(sec_low, 2),
-            "close": round(sec_close, 2),
-            "volume": float(rng_sec.randint(500000, 8000000)),
-        })
+        sec_records.append(
+            {
+                "date": f"2025-01-{(i % 28) + 1:02d}",
+                "open": round(sec_open, 2),
+                "high": round(sec_high, 2),
+                "low": round(sec_low, 2),
+                "close": round(sec_close, 2),
+                "volume": float(rng_sec.randint(500000, 8000000)),
+            }
+        )
         sec_price = sec_close
     (prices_dir / "sector_reference.json").write_text(json.dumps({"records": sec_records}))
 
@@ -250,11 +267,13 @@ def _make_invented_fixture(private_root: Path) -> Path:
             source_returns.append(math.log(records[i]["close"] / records[i - 1]["close"]))
 
     # True source
-    universe["candidates"].append({
-        "candidate_id": "SRC_001",
-        "returns": source_returns,
-        "prices": [r["close"] for r in records],
-    })
+    universe["candidates"].append(
+        {
+            "candidate_id": "SRC_001",
+            "returns": source_returns,
+            "prices": [r["close"] for r in records],
+        }
+    )
 
     # Distractor generators with deterministic seeds
     def _make_distractor(seed: int, vol: float, beta_mkt: float, beta_sec: float) -> list[float]:
@@ -272,48 +291,60 @@ def _make_invented_fixture(private_root: Path) -> Path:
     # Similar volatility distractors
     for d in range(20):
         returns = _make_distractor(100 + d, 0.015, 0.3, 0.2)
-        universe["candidates"].append({
-            "candidate_id": f"DISTRACTOR-VOL-{d:04d}",
-            "returns": returns,
-        })
+        universe["candidates"].append(
+            {
+                "candidate_id": f"DISTRACTOR-VOL-{d:04d}",
+                "returns": returns,
+            }
+        )
 
     # Similar market beta distractors
     for d in range(20):
         returns = _make_distractor(200 + d, 0.012, 0.9, 0.1)
-        universe["candidates"].append({
-            "candidate_id": f"DISTRACTOR-MKT-{d:04d}",
-            "returns": returns,
-        })
+        universe["candidates"].append(
+            {
+                "candidate_id": f"DISTRACTOR-MKT-{d:04d}",
+                "returns": returns,
+            }
+        )
 
     # Similar sector beta distractors
     for d in range(20):
         returns = _make_distractor(300 + d, 0.013, 0.2, 0.8)
-        universe["candidates"].append({
-            "candidate_id": f"DISTRACTOR-SEC-{d:04d}",
-            "returns": returns,
-        })
+        universe["candidates"].append(
+            {
+                "candidate_id": f"DISTRACTOR-SEC-{d:04d}",
+                "returns": returns,
+            }
+        )
 
     # Unrelated distractors
     for d in range(30):
         returns = _make_distractor(400 + d, 0.020, 0.0, 0.0)
-        universe["candidates"].append({
-            "candidate_id": f"DISTRACTOR-UNREL-{d:04d}",
-            "returns": returns,
-        })
+        universe["candidates"].append(
+            {
+                "candidate_id": f"DISTRACTOR-UNREL-{d:04d}",
+                "returns": returns,
+            }
+        )
 
     # Shifted near-copy (robustness test)
     shifted_returns = [0.0] * 5 + source_returns[:-5]
-    universe["candidates"].append({
-        "candidate_id": "SHIFTED-COPY-001",
-        "returns": shifted_returns,
-    })
+    universe["candidates"].append(
+        {
+            "candidate_id": "SHIFTED-COPY-001",
+            "returns": shifted_returns,
+        }
+    )
 
     # Rescaled near-copy
     rescaled_returns = [r * 1.05 for r in source_returns]
-    universe["candidates"].append({
-        "candidate_id": "RESCALED-COPY-001",
-        "returns": rescaled_returns,
-    })
+    universe["candidates"].append(
+        {
+            "candidate_id": "RESCALED-COPY-001",
+            "returns": rescaled_returns,
+        }
+    )
 
     (prices_dir / "candidate_universe.json").write_text(json.dumps(universe))
 
@@ -354,16 +385,13 @@ class TestEndToEndInventedPilot:
             release_id="SYNTH_001",
             private_root=private_root,
             candidate_universe_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "candidate_universe.json"
+                private_root / "sources" / "SRC_001" / "structured" / "candidate_universe.json"
             ),
             market_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "market_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "market_reference.json"
             ),
             sector_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "sector_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "sector_reference.json"
             ),
             test_fixture=True,
         )
@@ -400,16 +428,10 @@ class TestEndToEndInventedPilot:
             assert "fictitious holdings inc." not in masked_text, (
                 "Legal name leaked in masked output"
             )
-            assert "jane fictitious" not in masked_text, (
-                "Executive name leaked in masked output"
-            )
-            assert "fict" not in masked_text, (
-                "Ticker leaked in masked output"
-            )
+            assert "jane fictitious" not in masked_text, "Executive name leaked in masked output"
+            assert "fict" not in masked_text, "Ticker leaked in masked output"
             # Placeholders should appear
-            assert "[" in masked_text, (
-                "No placeholders found in masked output"
-            )
+            assert "[" in masked_text, "No placeholders found in masked output"
 
         # Stage 7-10: Structured transforms
         s0 = stage_by_name["generate_s0"]
@@ -451,9 +473,7 @@ class TestEndToEndInventedPilot:
         dossier_stage = stage_by_name.get("export_dossier_if_allowed")
         if dossier_stage:
             # Dossier may be BLOCKED_UPSTREAM if gate was FAIL
-            assert dossier_stage.status in (
-                StageStatus.PASSED, StageStatus.BLOCKED_UPSTREAM
-            )
+            assert dossier_stage.status in (StageStatus.PASSED, StageStatus.BLOCKED_UPSTREAM)
 
         # Stage 18: Finalize
         finalize = stage_by_name["finalize_checksums"]
@@ -479,16 +499,13 @@ class TestEndToEndInventedPilot:
             release_id="SYNTH_001",
             private_root=private_root,
             candidate_universe_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "candidate_universe.json"
+                private_root / "sources" / "SRC_001" / "structured" / "candidate_universe.json"
             ),
             market_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "market_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "market_reference.json"
             ),
             sector_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "sector_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "sector_reference.json"
             ),
             test_fixture=True,
         )
@@ -514,16 +531,13 @@ class TestEndToEndInventedPilot:
             release_id="SYNTH_001",
             private_root=private_root,
             candidate_universe_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "candidate_universe.json"
+                private_root / "sources" / "SRC_001" / "structured" / "candidate_universe.json"
             ),
             market_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "market_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "market_reference.json"
             ),
             sector_reference_path=(
-                private_root / "sources" / "SRC_001" / "structured" /
-                "sector_reference.json"
+                private_root / "sources" / "SRC_001" / "structured" / "sector_reference.json"
             ),
             test_fixture=True,
         )

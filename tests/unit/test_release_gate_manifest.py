@@ -30,7 +30,9 @@ class TestReleaseGateManifest:
         for et in manifest.get_required_types():
             manifest.add_reference(et, f"hash-{et}")
         # Remove one required type to make it incomplete
-        manifest.references = [r for r in manifest.references if r.evidence_type != "structured_attacks"]
+        manifest.references = [
+            r for r in manifest.references if r.evidence_type != "structured_attacks"
+        ]
         gate = evaluate_release_gate(
             text_attacks_blocked=False,
             structured_rank=5,
