@@ -340,10 +340,29 @@ class TestLimitEnforcement:
                     encoding="utf-8",
                 )
 
+        # Atlas MUST contain at least one real entity + alias so the
+        # orchestrator's fail-closed ``aliases_loaded == 0`` contract
+        # does NOT block limit-enforcement tests. These tests intentionally
+        # focus on form-cap semantics, not on registry loading, so the
+        # placeholder atlas is small but spec-conformant.
         atlas = {
             "metadata": {"registry_id": f"reg-{ticker}", "company_id": ticker},
-            "entities": [],
-            "aliases": [],
+            "entities": [
+                {
+                    "entity_id": f"ent_{ticker}_co",
+                    "entity_type": "company",
+                    "canonical_private_value": "TestCo",
+                }
+            ],
+            "aliases": [
+                {
+                    "alias_id": f"a_{ticker}_co",
+                    "canonical_entity_id": f"ent_{ticker}_co",
+                    "private_alias_value": "TestCo",
+                    "entity_type": "company",
+                    "match_policy": "literal",
+                }
+            ],
         }
         (private / "identity_atlas.yaml").write_text(yaml.safe_dump(atlas), encoding="utf-8")
         (run / "run_summary.json").write_text(

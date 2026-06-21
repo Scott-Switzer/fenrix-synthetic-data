@@ -469,3 +469,35 @@ These schemes use different namespaces and are not cross-referenceable.
 **Decision**: The pytest `local_model` marker is registered in `pyproject.toml`. Default CI runs the full suite via `pytest --disable-socket --allow-unix-socket`. The CI does not install `local-ner`, does not download weights, and does not run any `local_model` test. Live GLiNER smoke (if executed locally) uses synthetic text only and is documented but unrequired.
 
 **Rationale**: Default CI must test the adapter's offline guarantees without paying for model load latency or for GPU inference.
+
+---
+
+## Decision 030: ``--enable-nvidia`` Deferred From Current Beta
+
+**Date**: 2026-06-20
+**Status**: Accepted
+
+**Context**: The bounded beta of ``fenrix-synth reanonymize-run`` exposes
+``--source-run``, ``--output-root``, ``--limit-forms``, and ``--limit-news``
+flags but NOT ``--enable-nvidia``. Reviewers would otherwise discover the
+gap cold and ask for clarification. The Phase 3C deferral in AGENTS.md
+already lists NVIDIA-hosted review as deferred, but no DECISIONS entry
+hitherto recorded the explicit gap in the beta CLI surface.
+
+**Decision**: ``--enable-nvidia`` (and the NVIDIA review adapter behind it)
+remains deferred from the current beta release. The release gate's
+``stubs_enforced`` list explicitly tracks ``nvidia`` so a downstream
+consumer of ``qa/release_gate.json`` can verify the stub status without
+reading the source code.
+
+**Rationale**: Recording the gap as an explicit decision — rather than
+leaving it as silent absence — lets a future reviewer or contributor
+add the flag without re-deriving intent. The deferred NVIDIA adapter is
+a known scope-choice (Decision 022); this entry just makes its absence
+from the beta CLI visible.
+
+**Implications**:
+- ``--enable-nvidia`` is not present in ``fenrix-synth --help``.
+- ``beta_status`` stays ``INCOMPLETE`` until a real NVIDIA adapter lands.
+- ``release_safe`` remains ``false`` for any release that relies on
+  the NVIDIA reviewer's verdict.

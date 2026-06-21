@@ -19,6 +19,10 @@ from ..identity import EntityRegistry
 from ..masking import DeterministicMasker
 from ..release.pseudonym_paths import build_pseudonym_path_map
 from ..storage.hashing import hash_file
+from .registry_load import (
+    RegistryLoadSummary,
+    load_atlas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,9 @@ class TextAnonymizer:
     def anonymize_all(
         self,
         selected_paths: list[Path] | None = None,
+        *,
+        preloaded_registry: EntityRegistry | None = None,
+        preloaded_summary: RegistryLoadSummary | None = None,
     ) -> list[dict[str, Any]]:
         """Anonymize filings for ``<ticker>``.
 
@@ -60,6 +67,20 @@ class TextAnonymizer:
             The orchestrator passes this argument so that a
             ``--limit-forms`` directive actually restricts work, instead
             of being reported but ignored.
+
+        preloaded_registry:
+            Optional already-loaded ``EntityRegistry``. When supplied,
+            the YAML disk load is skipped — the orchestrator can call
+            ``registry_load.load_atlas`` once during Phase 1.5 and
+            hand the loaded registry to every anonymizer call to
+            avoid duplicate disk reads AND enforce the per-run
+            ``aliases_loaded == 0`` fail-closed contract before any
+            public surrogate is written.
+
+        preloaded_summary:
+            Optional ``RegistryLoadSummary`` matching ``preloaded_registry``
+            so the QA ``registry_load_report.json`` reflects the actual
+            load attempt (not a placeholder).
         """
         manifests: list[dict[str, Any]] = []
         filings_dir = (
@@ -90,18 +111,46 @@ class TextAnonymizer:
                 logger.warning("anonymize_all: no .html/.htm filings found under %s", filings_dir)
                 return manifests
 
-        # Load atlas
         atlas_path = self.private_maps_dir / "identity_atlas.yaml"
-        if not atlas_path.exists():
-            logger.warning("No identity atlas found for %s", self.ticker)
-            return manifests
 
-        import yaml
-
-        atlas_data = yaml.safe_load(atlas_path.read_text())
-        reg = self._load_registry(atlas_data)
-        if not reg:
-            return manifests
+        # Resolve the registry via three paths in priority order:
+        # 1) ``preloaded_registry`` (orchestrator - Phase 1.5)
+        # 2) cached registry from a previous call this run
+        # 3) disk YAML load via ``registry_load.load_atlas``
+        if preloaded_registry is not None:
+            reg = preloaded_registry
+            self.last_load_summary = preloaded_summary or RegistryLoadSummary(
+                atlas_path=atlas_path,
+                redacted_ticker=self.ticker,
+            )
+            self._cached_reg = reg
+            self._cached_load_summary = self.last_load_summary
+        else:
+            # Cache-hit branch: walrus-narrow ``cached_reg`` to
+            # ``EntityRegistry`` so mypy sees a typed ``reg`` after the
+            # ``is not None`` guard. Avoids the brittle ``assert ... is
+            # not None`` narrowing that disappears under ``python -O``.
+            cached_summary = getattr(self, "_cached_load_summary", None)
+            if (cached_reg := getattr(self, "_cached_reg", None)) is not None and (
+                cached_summary is None or cached_summary.atlas_path == atlas_path
+            ):
+                reg = cached_reg
+                self.last_load_summary = cached_summary or RegistryLoadSummary(
+                    atlas_path=atlas_path,
+                    redacted_ticker=self.ticker,
+                )
+            else:
+                reg, load_summary = load_atlas(atlas_path, ticker=self.ticker)
+                self.last_load_summary = load_summary
+                if reg is None:
+                    logger.warning(
+                        "No identity atlas loaded for %s (status=%s)",
+                        self.ticker,
+                        load_summary.status,
+                    )
+                    return manifests
+                self._cached_reg = reg
+                self._cached_load_summary = load_summary
 
         masker = DeterministicMasker(reg)
         config_hash = reg.config_hash()
@@ -184,12 +233,28 @@ class TextAnonymizer:
             logger.warning("No identity atlas found for %s", self.ticker)
             return manifests
 
-        import yaml
-
-        atlas_data = yaml.safe_load(atlas_path.read_text())
-        reg = self._load_registry(atlas_data)
-        if not reg:
-            return manifests
+        # Cache-hit: when the lazy-load path already populated the
+        # registry inside ``anonymize_all`` we can skip the second
+        # YAML parse in ``anonymize_news`` to keep the boundary honest.
+        cached_summary: RegistryLoadSummary | None = getattr(self, "_cached_load_summary", None)
+        if (cached := getattr(self, "_cached_reg", None)) is not None and (
+            cached_summary is None or cached_summary.atlas_path == atlas_path
+        ):
+            reg = cached
+            self.last_load_summary = cached_summary or RegistryLoadSummary(
+                atlas_path=atlas_path,
+                redacted_ticker=self.ticker,
+            )
+        else:
+            reg, load_summary = load_atlas(atlas_path, ticker=self.ticker)
+            self.last_load_summary = load_summary
+            if reg is None:
+                logger.warning(
+                    "No identity atlas loaded for %s (status=%s) in news path",
+                    self.ticker,
+                    load_summary.status,
+                )
+                return manifests
 
         masker = DeterministicMasker(reg)
         config_hash = reg.config_hash()
@@ -337,52 +402,11 @@ class TextAnonymizer:
                 accessions.append(entity.canonical_private_value)
         return accessions
 
-    def _load_registry(self, atlas_data: dict[str, Any]) -> EntityRegistry | None:
-        from ..identity import EntityRegistry
-        from ..identity.schemas import EntityType, MatchPolicy
-
-        try:
-            reg_meta = atlas_data.get("registry", {})
-            reg = EntityRegistry.create(
-                company_id=reg_meta.get("company_id", self.ticker),
-                registry_id=reg_meta.get("registry_id", f"reg-{self.ticker}"),
-            )
-
-            def _lookup_etype(name: str) -> EntityType:
-                for et in EntityType:
-                    if et.value == name:
-                        return et
-                return EntityType.COMPANY
-
-            def _lookup_mpolicy(name: str) -> MatchPolicy:
-                for mp in MatchPolicy:
-                    if mp.value == name:
-                        return mp
-                return MatchPolicy.LITERAL
-
-            for ent in atlas_data.get("entities", []):
-                eid = ent.get("entity_id", "")
-                etype = _lookup_etype(ent.get("entity_type", "company"))
-                value = ent.get("canonical_private_value", "")
-                if eid and value:
-                    try:
-                        reg.add_entity(eid, etype, value)
-                    except ValueError:
-                        pass
-
-            for ali in atlas_data.get("aliases", []):
-                aid = ali.get("alias_id", "")
-                eid = ali.get("canonical_entity_id", "")
-                value = ali.get("private_alias_value", "")
-                etype = _lookup_etype(ali.get("entity_type", "company"))
-                mpolicy = _lookup_mpolicy(ali.get("match_policy", "literal"))
-                if aid and eid and value:
-                    try:
-                        reg.add_alias(aid, eid, value, etype, mpolicy)
-                    except ValueError:
-                        pass
-
-            return reg
-        except Exception as exc:
-            logger.warning("Failed to load registry: %s", exc)
-            return None
+    # NOTE: the legacy ``_load_registry`` method was retired by this
+    # refactor. Registry loading now goes through ``registry_load.load_atlas``,
+    # which enforces strict normalization, fail-closed behaviour on zero
+    # aliases, and surfaces a ``RegistryLoadSummary`` for QA. The orchestrator
+    # calls ``load_atlas`` once during Phase 1.5 and passes the loaded
+    # registry into ``anonymize_all(preloaded_registry=...)`` to enforce the
+    # ``aliases_loaded == 0`` fail-closed contract BEFORE any public
+    # surrogate is written.

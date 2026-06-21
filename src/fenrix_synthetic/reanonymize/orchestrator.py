@@ -39,6 +39,11 @@ import orjson
 
 from ..anonymization.classroom_numeric_writer import ClassroomNumericWriter
 from ..anonymization.news_surrogate_generator import NewsSurrogateGenerator
+from ..anonymization.registry_load import (
+    RegistryLoadSummary,
+    build_private_values_dict,
+    load_atlas,
+)
 from ..anonymization.text_anonymizer import TextAnonymizer
 from ..attacks.text_attacks import exact_identity_scan, filename_and_metadata_scan
 from ..release.gate import (
@@ -117,6 +122,17 @@ class ReanonymizeOrchestrator:
         self.limit_forms_raw = limit_forms
         self.limit_news = max(0, int(limit_news))
         self.form_limits = parse_form_limits(limit_forms)
+        # Populated by ``_phase_atlas_load`` and consumed by
+        # Phase 5 (``TextAnonymizer``) + Phase 6 (``_phase_direct_privacy``).
+        # Setting up the slots here keeps the ``run()`` flow readable.
+        self._preloaded_registry: Any = None
+        self._preloaded_summary: RegistryLoadSummary | None = None
+        # Captured from ``TextAnonymizer.anonymize_all`` manifests so we
+        # can compute pre-mask hits without re-scanning the source HTML.
+        self._pre_mask_hits: int = 0
+        self._pre_replacement_count: int = 0
+        # Captured from Phase 6 scan for the release_gate.json.
+        self._post_mask_hits: int = 0
 
     # ── Phase 1: Validate source-run ─────────────────────────────────
 
@@ -189,14 +205,20 @@ class ReanonymizeOrchestrator:
     def run(self) -> dict[str, Any]:
         ctx = self.validate()
 
+        qa_root = self.output_root / self.QA_ROOT
+        # Phase 1.5 — load the registry BEFORE the public/ mkdir block.
+        # If the loader reports ``blocking = True`` we MUST fail closed
+        # so a downstream consumer can never scrape un-masked surrogates
+        # off the public/ tree. This phase ALSO writes
+        # ``qa/registry_load_report.json`` regardless of outcome.
+        self._phase_atlas_load(ctx, qa_root)
+
         public_root = self.output_root / self.PUBLIC_ROOT
         public_surrogates = public_root / "surrogates"
-        qa_root = self.output_root / self.QA_ROOT
         for d in (
             public_surrogates / self.SEC_SURROGATE_SUBDIR,
             public_surrogates / self.NEWS_SURROGATE_SUBDIR,
             public_root / self.NUMERIC_SAFE_SUBDIR,
-            qa_root,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -295,6 +317,51 @@ class ReanonymizeOrchestrator:
 
     # ── Phase helpers ────────────────────────────────────────────────
 
+    def _phase_atlas_load(self, ctx: RunContext, qa_root: Path) -> None:
+        """Phase 1.5 — load the identity atlas and fail-closed on zero aliases.
+
+        Writes ``qa/registry_load_report.json`` BEFORE any public-dir
+        mkdir, so a fail-closed run still leaves a diagnostic artifact
+        that downstream tooling can inspect without exposing the atlas
+        absolute path (only the basename is emitted per
+        ``RegistryLoadSummary.to_report``).
+
+        Raises ``RuntimeError`` when ``RegistryLoadSummary.blocking``
+        is True. The full public/ dir is never created in that case
+        because the public/ mkdir block in ``run()`` is sequenced AFTER
+        this phase.
+        """
+        atlas_path = ctx.source_run / "private_maps" / ctx.ticker / "identity_atlas.yaml"
+        qa_root.mkdir(parents=True, exist_ok=True)
+
+        self._preloaded_registry, self._preloaded_summary = load_atlas(
+            atlas_path, ticker=ctx.ticker
+        )
+        # Sanity: build the report even when load_atlas returned None
+        # so the run's failure mode is transparent in QA.
+        assert self._preloaded_summary is not None  # invariant of load_atlas
+        report_path = qa_root / "registry_load_report.json"
+        report_path.write_text(
+            json.dumps(self._preloaded_summary.to_report(), indent=2),
+            encoding="utf-8",
+        )
+
+        if self._preloaded_summary.blocking:
+            logger.error(
+                "Registry-load fail-closed for %s (aliases_loaded=%d "
+                "load_errors=%d skipped_empty=%d duplicates=%d)",
+                ctx.ticker,
+                self._preloaded_summary.aliases_loaded,
+                self._preloaded_summary.load_errors,
+                self._preloaded_summary.skipped_empty,
+                self._preloaded_summary.duplicates,
+            )
+            raise RuntimeError(
+                f"Registry-load fail-closed for {ctx.ticker}: "
+                f"aliases_loaded={self._preloaded_summary.aliases_loaded} "
+                f"load_errors={self._preloaded_summary.load_errors}"
+            )
+
     def _phase_numeric_package(self, ctx: RunContext, output_dir: Path) -> dict[str, Any]:
         writer = ClassroomNumericWriter(ticker=ctx.ticker)
         pkg = writer.write_package(output_dir)
@@ -365,13 +432,18 @@ class ReanonymizeOrchestrator:
         public_dir: Path,
     ) -> dict[str, Any]:
         if not selection.items:
-            return {"written": [], "processed": 0, "forms": {}}
+            return {
+                "written": [],
+                "processed": 0,
+                "forms": {},
+                "pre_mask_hits": 0,
+                "pre_replacement_count": 0,
+            }
 
         originals_dir = ctx.source_run / "originals"
-        # The atlas convention used elsewhere in the orchestrator and in
-        # the canned fixtures is ``private_maps/<TICKER>/identity_atlas.yaml``.
-        # Point the anonymizer at that nested directory so it finds the
-        # atlas on its first lookup (``private_maps_dir / "identity_atlas.yaml"``).
+        # Phase 1.5 already loaded the registry; pass it through so the
+        # anonymizer does NOT re-read the YAML again and the failure
+        # surface is exactly one place (the orchestrator).
         private_maps_dir = ctx.source_run / "private_maps" / ctx.ticker
 
         anonymizer = TextAnonymizer(
@@ -380,20 +452,26 @@ class ReanonymizeOrchestrator:
             anonymized_dir=public_dir.parent,
             private_maps_dir=private_maps_dir,
         )
-        # Pass the Phase 2 selection explicitly so that
-        # ``--limit-forms`` ACTUALLY restricts the work performed by
-        # the masker rather than being only reported. Output still
-        # lands at ``public_dir`` (=parent/sec/...md) because
-        # anonymized_dir = public_dir.parent.
-        anonymizer.anonymize_all(selected_paths=selection.paths)
+        # Capture the manifests so Phase 6 can compute ``pre_mask_hits``
+        # and ``replacement_rate`` from the masker's match_count /
+        # replacement_count without re-scanning the source HTML.
+        sec_manifests = anonymizer.anonymize_all(
+            selected_paths=selection.paths,
+            preloaded_registry=self._preloaded_registry,
+            preloaded_summary=self._preloaded_summary,
+        )
+        pre_mask_hits = sum(int(m.get("match_count", 0)) for m in sec_manifests)
+        pre_replacement_count = sum(int(m.get("replacement_count", 0)) for m in sec_manifests)
+        self._pre_mask_hits = pre_mask_hits
+        self._pre_replacement_count = pre_replacement_count
 
         written = sorted(str(p) for p in public_dir.iterdir() if p.is_file())
-        # Form coverage comes from Phase 2's tagging, NOT from re-inferring
-        # the pseudonymised output filenames (those are `filing_<hash>.md`).
         return {
             "written": written,
             "processed": len(written),
             "forms": selection.form_counts,
+            "pre_mask_hits": pre_mask_hits,
+            "pre_replacement_count": pre_replacement_count,
         }
 
     def _phase_direct_privacy(
@@ -402,8 +480,15 @@ class ReanonymizeOrchestrator:
         sec_public_dir: Path,
         qa_dir: Path,
     ) -> dict[str, Any]:
-        # Read each public surrogate individually so per-file attribution
-        # is preserved inside `scanned_files` and `attacks`.
+        """Phase 6 — per-file direct privacy scan + replacement metrics.
+
+        Uses the SHARED ``build_private_values_dict`` so the scanner
+        cannot drift from the masker's normalization. Captures
+        ``pre_mask_hits`` (from ``TextAnonymizer.anonymize_all``
+        ``match_count`` sums) and ``post_mask_hits`` (per-file scan)
+        so the gate can compute ``replacement_rate`` honestly without
+        re-reading the source HTML.
+        """
         per_file_hits: list[dict[str, Any]] = []
         combined_chunks: list[tuple[str, str]] = []
         for md in sorted(sec_public_dir.glob("*.md")):
@@ -413,27 +498,18 @@ class ReanonymizeOrchestrator:
                 continue
             combined_chunks.append((md.stem, text))
 
-        # Read private values from the identity atlas.
-        private_values: dict[str, list[str]] = {"names": [], "ticker": [ctx.ticker]}
-        atlas_path = ctx.source_run / "private_maps" / ctx.ticker / "identity_atlas.yaml"
-        if atlas_path.is_file():
-            try:
-                import yaml
-
-                atlas = yaml.safe_load(atlas_path.read_text()) or {}
-                for ent in atlas.get("entities", []):
-                    val = str(ent.get("canonical_private_value", "") or "").strip()
-                    if val and len(val) >= 3:
-                        private_values["names"].append(val)
-                for ali in atlas.get("aliases", []):
-                    val = str(ali.get("private_alias_value", "") or "").strip()
-                    if val and len(val) >= 3:
-                        private_values["names"].append(val)
-            except (yaml.YAMLError, OSError):
-                pass
+        # The private-values payload now comes from the SAME registry
+        # Phase 1.5 loaded. Masker and scanner use the exact same set
+        # of normalized strings, eliminating the historical asymmetry
+        # that produced 4735 leaked hits on the real NVDA run.
+        private_values = build_private_values_dict(
+            self._preloaded_registry, fallback_ticker=ctx.ticker
+        )
 
         # Per-file exact-identity scan preserves attribution.
         total_exact = 0
+        top_hit_types: dict[str, int] = {}
+        all_blocking_files: list[str] = []
         for file_id, text in combined_chunks:
             hit = exact_identity_scan(text, file_id, private_values)
             total_exact += hit.total_hits
@@ -446,17 +522,50 @@ class ReanonymizeOrchestrator:
                     "is_blocked": hit.is_blocked,
                 }
             )
+            if hit.is_blocked:
+                all_blocking_files.append(file_id)
+            # Aggregate the top hit values (truncated) so the report
+            # names exactly WHAT is leaking, not just that something is.
+            for h in hit.hits:
+                matched = h.matched_text or ""
+                if len(matched) > 30:
+                    key = matched[:30] + "..."
+                else:
+                    key = matched
+                top_hit_types[key] = top_hit_types.get(key, 0) + 1
+        # Keep the top 10 by count, deterministic on tie (sorted alpha).
+        top_hit_ordered = sorted(top_hit_types.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+        top_hit_dict = dict(top_hit_ordered)
 
-        # Filename + metadata scan
+        # Filename and metadata scan.
         filenames = [str(p) for p in sec_public_dir.iterdir() if p.is_file()]
         filename_res = filename_and_metadata_scan(
             filenames, {"source_run": str(ctx.source_run)}, private_values
         )
 
+        # Compute replacement rate. Division-by-zero guard: if the
+        # masker matched nothing in the source, rate is 1.0 ("all of
+        # nothing was replaced" is vacuous PASS, not a blocker).
+        pre_mask_hits = self._pre_mask_hits
+        pre_replacement_count = self._pre_replacement_count
+        if pre_mask_hits == 0:
+            replacement_rate = 1.0
+        else:
+            replacement_rate = pre_replacement_count / float(pre_mask_hits)
+        self._post_mask_hits = total_exact
+
         report = {
             "document_id": "reanonymize_run",
             "scanned_files": [name for name, _ in combined_chunks],
+            "files_scanned": len(combined_chunks),
             "private_values_count": sum(len(v) for v in private_values.values()),
+            "pre_mask_hits": pre_mask_hits,
+            "pre_replacement_count": pre_replacement_count,
+            "post_mask_hits": total_exact,
+            "replacement_rate": replacement_rate,
+            "top_hit_types": top_hit_dict,
+            "top_hit_values": top_hit_dict,  # legacy alias kept for back-compat
+            "blocking_files": all_blocking_files,
             "attacks": [
                 {
                     "attack_type": "exact_identity",
@@ -632,11 +741,124 @@ class ReanonymizeOrchestrator:
                 }
             )
 
-        # Strict rule the user dictated:
-        # If semantic or NVIDIA is not implemented the gate must say
-        # beta_status=INCOMPLETE, release_safe=false.
+        # Append the four direct-masking gate blockers the user spec
+        # requires. These are derived from ``direct_privacy`` and the
+        # registry-load summary loaded by Phase 1.5.
+        post_mask_hits = direct_privacy.get("post_mask_hits", 0)
+        replacement_rate = float(direct_privacy.get("replacement_rate", 1.0))
+        pre_mask_hits = direct_privacy.get("pre_mask_hits", 0)
+        pre_replacement_count = direct_privacy.get("pre_replacement_count", 0)
+        aliases_loaded = (
+            self._preloaded_summary.aliases_loaded if self._preloaded_summary is not None else 0
+        )
+        load_errors_count = (
+            self._preloaded_summary.load_errors if self._preloaded_summary is not None else 0
+        )
+
+        # 1. post_mask_identity_hits — block if any private value still
+        # appears in the masked surrogates (the symptom we just fixed).
+        if post_mask_hits > 0:
+            conditions_payload.append(
+                {
+                    "id": "post_mask_identity_hits",
+                    "description": (
+                        "Direct identity scan on masked surrogates found "
+                        "blocking hits; the masker is leaving private "
+                        "values in the public tree."
+                    ),
+                    "passed": False,
+                    "blocking": True,
+                    "evidence": {
+                        "post_mask_hits": post_mask_hits,
+                        "files_scanned": direct_privacy.get("files_scanned", 0),
+                    },
+                }
+            )
+
+        # 2. replacement_rate — block when fewer than 99% of source
+        # matches were replaced by the masker. ``direct_privacy`` carries
+        # the per-phase aggregate.
+        if replacement_rate < 0.99:
+            conditions_payload.append(
+                {
+                    "id": "direct_replacement_rate",
+                    "description": (
+                        "Masker replaced fewer than 99% of pre-mask "
+                        "regex matches; replacement rate is the honest "
+                        "inverse of the pre/post hit ratio."
+                    ),
+                    "passed": False,
+                    "blocking": True,
+                    "evidence": {
+                        "replacement_rate": replacement_rate,
+                        "pre_mask_hits": pre_mask_hits,
+                        "post_mask_hits": post_mask_hits,
+                        "pre_replacement_count": pre_replacement_count,
+                    },
+                }
+            )
+
+        # 3. registry aliases_loaded — Phase 1.5 fail-closed already
+        # raised RuntimeError, but the gate condition is recorded anyway
+        # so re-runs of an already-failed run have an explicit signal.
+        if aliases_loaded == 0:
+            conditions_payload.append(
+                {
+                    "id": "registry_aliases_loaded",
+                    "description": (
+                        "Identity atlas must produce at least one loadable "
+                        "alias for the masker to do any work; zero aliases "
+                        "is a fail-closed condition."
+                    ),
+                    "passed": False,
+                    "blocking": True,
+                    "evidence": {
+                        "aliases_loaded": aliases_loaded,
+                        "report_path": "qa/registry_load_report.json",
+                    },
+                }
+            )
+
+        # 4. registry load_errors — any exception that surfaced during
+        # atlas load short-circuits individual aliases but should ALSO
+        # downgrade the release gate, even when ``aliases_loaded`` is
+        # somehow > 0 (e.g. only some aliases failed to bind).
+        if load_errors_count > 0:
+            conditions_payload.append(
+                {
+                    "id": "registry_load_errors",
+                    "description": (
+                        "Atlas loader reported at least one error while "
+                        "constructing the alias set (e.g. orphan alias with "
+                        "no matching entity, parser failures)."
+                    ),
+                    "passed": False,
+                    "blocking": True,
+                    "evidence": {
+                        "load_errors": load_errors_count,
+                        "report_path": "qa/registry_load_report.json",
+                    },
+                }
+            )
+
+        # Derived ``beta_status``: PASS only when every blocking
+        # condition is satisfied AND no declared stub is enforced.
+        # Direct privacy passing + zero load errors + replacement
+        # rate >= 0.99 + semantic + NVIDIA still INCOMPLETE -> HONEST
+        # INCOMPLETE (per the user's "do not proceed to NVIDIA or
+        # semantic attacks until direct privacy passes" rule applied
+        # in reverse: when those surface, INCOMPLETE is the truthful
+        # answer).
         beta_status = "PASS"
-        if gate.decision != ReleaseDecision.PASS or semantic_incomplete or nvidia_incomplete:
+        if (
+            gate.decision != ReleaseDecision.PASS
+            or semantic_incomplete
+            or nvidia_incomplete
+            or post_mask_hits > 0
+            or replacement_rate < 0.99
+            or aliases_loaded == 0
+            or load_errors_count > 0
+        ):
             beta_status = "INCOMPLETE"
         release_safe = beta_status == "PASS"
 
