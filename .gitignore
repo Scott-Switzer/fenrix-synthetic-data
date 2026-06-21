@@ -2,6 +2,9 @@
 data/
 !data/.gitkeep
 
+# Archive patches (local only, may contain paths)
+archive/
+
 # Private configuration (contains source-company mappings, secrets)
 configs/company.yaml
 configs/*.local.yaml
