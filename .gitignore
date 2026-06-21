@@ -120,4 +120,5 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 Scott.zip
-scripts/
+scripts/*
+!scripts/build_submission_fast.py
