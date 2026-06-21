@@ -17,6 +17,7 @@ configs/*.local.yaml
 
 # Python cache and build artifacts
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -87,7 +88,11 @@ xet/
 
 # Generated artifacts (never commit)
 artifacts/
+exports/
+originals/
 output/
+private_maps/
+smoke_excerpts/
 *.parquet
 *.jsonl
 *.json
