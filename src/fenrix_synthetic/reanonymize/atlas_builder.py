@@ -44,10 +44,7 @@ from typing import Any
 import orjson
 
 from ..anonymization.registry_load import normalize_private_value
-from ..identity.schemas import (
-    EntityType,
-    MatchPolicy,
-)
+from ..identity.schemas import EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +104,13 @@ class AtlasHarvestReport:
     orchestrator writes this report to
     ``qa/direct_identifier_coverage_report.json``.
 
-    ``buckets`` carries the RAW harvested values per type so the
+    ``_buckets`` carries the RAW harvested values per type so the
     orchestrator's ``_merge_harvest_into_atlas_yaml`` can iterate the
     exact strings (the dataclass's other fields only carry counts so
-    the public QA payload NEVER leaks raw identifiers).
+    the public QA payload NEVER leaks raw identifiers). The field is
+    marked ``repr=False`` so the default dataclass ``__repr__`` —
+    which is what ``f\"{report}\"`` / ``print(report)`` / debug logs
+    produce — also elides the raw values. Defended in depth.
     """
 
     ticker: str = ""
@@ -121,8 +121,12 @@ class AtlasHarvestReport:
     coverage_warnings: list[dict[str, str]] = field(default_factory=list)
     # Internal-use-only: the actual harvested values per type.
     # NOT serialized by ``to_report`` because raw identifiers must
-    # never appear in public QA.
-    buckets: dict[str, set[str]] = field(default_factory=dict)
+    # never appear in public QA. ``repr=False`` elides the field from
+    # the default dataclass ``__repr__`` used by ``f\"{report}\"``,
+    # debug logs, and crash dumps. ``to_report()`` is the only path
+    # the orchestrator writes to disk and you can see it explicitly
+    # omits this attribute.
+    _buckets: dict[str, set[str]] = field(default_factory=dict, repr=False)
 
     def to_report(self) -> dict[str, Any]:
         """Public QA payload — NEVER emits raw identifiers."""
@@ -195,8 +199,34 @@ class DirectIdentifierAtlasBuilder:
             return
         if not isinstance(data, dict):
             return
-        ticker = str(data.get("ticker") or data.get("primary_ticker") or self.ticker)
-        self._buckets["ticker"].add(ticker)
+        # Accept the canonical scalar keys AND the list-of-tickers
+        # key the orchestrator / producer code paths write today. The
+        # deterministic-source contract holds: every value here comes
+        # from the source-run's own run_summary.json — no network,
+        # no guessing. We deliberately do NOT fall back to
+        # ``self.ticker`` so a misconfigured source run fails-closed
+        # (missing_required_type warning) instead of silently
+        # injecting the orchestrator-arg ticker.
+        ticker_raw = data.get("ticker") or data.get("primary_ticker")
+        tickers_list = data.get("tickers")
+        if not ticker_raw and isinstance(tickers_list, list) and tickers_list:
+            first = tickers_list[0]
+            if first:
+                ticker_raw = first
+        # Audit signal: when the source-run list shape disagrees with
+        # the harvester's single-ticker contract, expose the dropped
+        # count in ``atlas_sources`` so QA can see it.
+        if isinstance(tickers_list, list) and len(tickers_list) > 1:
+            self._sources_seen["tickers_dropped"] += len(tickers_list) - 1
+        if ticker_raw:
+            self._buckets["ticker"].add(str(ticker_raw))
+        # Capture the source-run diagnostic status (e.g. ``failed_privacy``)
+        # so the coverage report's ``atlas_sources`` map exposes which
+        # upstream state drove the harvest — snake_case prefix keeps
+        # namespace parity with ``run_summary``, ``atlas_yaml``, etc.
+        status = data.get("status")
+        if isinstance(status, str) and status:
+            self._sources_seen[f"run_status_{status}"] += 1
         self._sources_seen["run_summary"] += 1
 
     def _harvest_config_files(self) -> None:
@@ -325,8 +355,9 @@ class DirectIdentifierAtlasBuilder:
         report.atlas_sources = dict(self._sources_seen)
         # Carry the RAW values forward so ``_merge_harvest_into_atlas_yaml``
         # can iterate them. ``to_report`` deliberately never serializes
-        # this field so the public QA payload stays identifier-free.
-        report.buckets = {etype: set(values) for etype, values in self._buckets.items()}
+        # this field so the public QA payload stays identifier-free,
+        # and ``__repr__`` elides it from debug logs.
+        report._buckets = {etype: set(values) for etype, values in self._buckets.items()}
         for etype, values in self._buckets.items():
             report.identifier_types[etype] = len(values)
             report.aliases_by_type[etype] = len(values)
@@ -375,45 +406,6 @@ class DirectIdentifierAtlasBuilder:
                     }
                 )
         return report
-
-    # ── Atlas materialisation helpers ─────────────────────────────────
-
-    def emit_entityregistry_kwargs(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
-        """Format the harvested buckets into the shape ``load_atlas`` can read.
-
-        Returns ``(entities_payload, aliases_payload)`` so an external
-        YAML merge can feed existing-atlas values into Phase 1.5 without
-        losing curated typing.
-        """
-        entities: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
-        aliases: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
-        counter = 1
-        for etype, values in sorted(self._buckets.items()):
-            for value in sorted(values):
-                entity_id = f"harvest_{etype}_{counter:04d}"
-                entities["items"].append(
-                    {
-                        "entity_id": entity_id,
-                        "entity_type": etype,
-                        "canonical_private_value": value,
-                    }
-                )
-                aliases["items"].append(
-                    {
-                        "alias_id": f"harvest_{etype}_a{counter:04d}",
-                        "canonical_entity_id": entity_id,
-                        "private_alias_value": value,
-                        "entity_type": etype,
-                        "match_policy": MatchPolicy.LITERAL.value,
-                    }
-                )
-                counter += 1
-        # Type narrowing for mypy — emit empty lists if no items.
-        if not entities["items"]:
-            entities.pop("items", None)
-        if not aliases["items"]:
-            aliases.pop("items", None)
-        return dict(entities), dict(aliases)
 
     # ── Helpers ───────────────────────────────────────────────────────
 

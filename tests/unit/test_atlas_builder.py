@@ -13,11 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from fenrix_synthetic.reanonymize.atlas_builder import (
-    AtlasHarvestReport,
     CRITICAL_ALIAS_THRESHOLD,
+    AtlasHarvestReport,
     DirectIdentifierAtlasBuilder,
 )
 
@@ -93,15 +91,82 @@ def _build_source_run(
 
 class TestAtlasBuilderHarvest:
     def test_run_summary_ticker_lands_in_ticker_bucket(self, tmp_path: Path) -> None:
-        run = _build_source_run(tmp_path, ticker="NVDA")
+        # Contract: a run_summary.json with an explicit ``ticker`` key
+        # must land in the ticker bucket. This replaced a previous test
+        # that asserted the now-removed ``or self.ticker`` fallback.
+        run = _build_source_run(
+            tmp_path,
+            ticker="NVDA",
+            run_summary={"run_id": "x", "ticker": "NVDA"},
+        )
         builder = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run)
         report = builder.harvest()
-        assert (
-            "NVDA" in report.to_report()["ticker"]
-            or len(report.identifier_types.get("ticker", 0)) >= 1
-        )
-        # Ticker bucket must have NVDA.
         assert report.identifier_types.get("ticker", 0) >= 1
+        assert "NVDA" in report.to_report()["ticker"]
+
+    def test_run_summary_without_ticker_key_triggers_missing_required(self, tmp_path: Path) -> None:
+        # Contract: WITHOUT an explicit ``ticker`` key (and WITHOUT a
+        # ``tickers`` list either) the harvester does NOT fall back to
+        # ``self.ticker``; the missing_required_type critical warning
+        # fires (fail-closed on silent ticker injection). We override
+        # the default fixture's ``tickers: [ticker]`` explicitly so
+        # ``run_summary`` is genuinely empty of ticker sources.
+        run = _build_source_run(
+            tmp_path,
+            ticker="AAA",
+            run_summary={"run_id": "x"},
+            atlas_entities=[
+                {
+                    "entity_id": "ent_only",
+                    "entity_type": "company",
+                    "canonical_private_value": "BigCo",
+                }
+            ],
+            atlas_aliases=[
+                {
+                    "alias_id": "ali_only",
+                    "canonical_entity_id": "ent_only",
+                    "private_alias_value": "BigCoShort",
+                    "entity_type": "company",
+                    "match_policy": "literal",
+                }
+            ],
+        )
+        builder = DirectIdentifierAtlasBuilder(ticker="AAA", source_run=run)
+        report = builder.harvest()
+        assert report.identifier_types.get("ticker", 0) == 0
+        # Belt-and-braces: the raw bucket MUST also be empty so a
+        # future value-injection regression cannot slip through the
+        # type-count check above by being filtered out at materialization.
+        assert report._buckets.get("ticker", set()) == set()
+        critical = [w for w in report.coverage_warnings if w.get("level") == "critical"]
+        assert any(w.get("code") == "missing_required_type" for w in critical)
+
+    def test_run_summary_tickers_list_and_status_capture(self, tmp_path: Path) -> None:
+        # Contract: the real-world bounded-beta source run writes
+        # ``tickers`` as a LIST and a ``status`` field marker
+        # (e.g. ``failed_privacy``). The harvester must accept that
+        # shape (first list element lands in the ticker bucket) and
+        # surface the diagnostic status in ``atlas_sources`` so the
+        # audit trail explains WHY the previous run failed.
+        run = _build_source_run(
+            tmp_path,
+            ticker="NVDA",
+            run_summary={
+                "run_id": "x",
+                "tickers": ["NVDA", "INTC"],
+                "status": "failed_privacy",
+            },
+        )
+        builder = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run)
+        report = builder.harvest()
+        assert report.identifier_types.get("ticker", 0) >= 1
+        assert "NVDA" in report._buckets.get("ticker", set())
+        assert report.atlas_sources.get("run_status_failed_privacy") == 1
+        # Negative assertion locks in the namespace rename — a future
+        # regression to the OLD ``status:{X}`` key will surface here.
+        assert "status:failed_privacy" not in report.atlas_sources
+        assert report.atlas_sources.get("run_summary") == 1
 
     def test_existing_atlas_yaml_entries_propagate(self, tmp_path: Path) -> None:
         run = _build_source_run(
@@ -219,6 +284,10 @@ class TestAtlasBuilderCoverageWarnings:
 
     def test_six_aliases_is_critical_for_nvda_like(self, tmp_path: Path) -> None:
         # 6 aliases (matches the previous bounded-beta real NVDA outcome).
+        # Override run_summary to empty so the fixture's default
+        # ``tickers: [ticker]`` doesn't accidentally add one more
+        # alias via the new harvester's ``tickers``-list support and
+        # push the count to 7.
         small_entities = [
             {
                 "entity_id": f"e{i}",
@@ -240,6 +309,7 @@ class TestAtlasBuilderCoverageWarnings:
         run = _build_source_run(
             tmp_path,
             ticker="AAA",
+            run_summary={"run_id": "x"},
             atlas_entities=small_entities,
             atlas_aliases=small_aliases,
         )

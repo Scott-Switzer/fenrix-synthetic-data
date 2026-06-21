@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..identity import EntityRegistry
 from ..masking import DeterministicMasker
@@ -126,31 +126,31 @@ class TextAnonymizer:
             self._cached_reg = reg
             self._cached_load_summary = self.last_load_summary
         else:
-            # Cache-hit branch: ``getattr`` returns ``Any`` so a bare
-            # ``is not None`` check does NOT narrow for mypy. Using
-            # ``isinstance`` gives the type-checker a ``True`` narrowing
-            # to ``EntityRegistry`` after the guard — without depending
-            # on ``assert`` (which evaporates under ``python -O``).
-            cached_summary = getattr(self, "_cached_load_summary", None)
-            cached_reg = getattr(self, "_cached_reg", None)
-            if isinstance(cached_reg, EntityRegistry) and (
-                cached_summary is None or cached_summary.atlas_path == atlas_path
-            ):
-                reg = cached_reg
-                self.last_load_summary = cached_summary or RegistryLoadSummary(
-                    atlas_path=atlas_path,
-                    redacted_ticker=self.ticker,
-                )
+            # Cache-hit branch: ``_resume_cached_registry`` centralises
+            # the cast / isinstance / summary narrowing so the contract
+            # lives in ONE place. The bare ``or`` short-circuit and the
+            # getattr-Any narrowing pitfalls are gone.
+            cached = self._resume_cached_registry(atlas_path)
+            if cached is not None:
+                reg, self.last_load_summary = cached
             else:
-                reg, load_summary = load_atlas(atlas_path, ticker=self.ticker)
+                # ``load_atlas`` returns ``tuple[EntityRegistry | None, ...]``,
+                # so we hand the loaded value to ``reg_raw`` (a
+                # ``EntityRegistry | None`` variable) and re-bind ``reg``
+                # through an explicit ``cast`` after the None check.
+                # This is the canonical mypy pattern when the union
+                # pattern appears in the return signature of an external
+                # function.
+                reg_raw, load_summary = load_atlas(atlas_path, ticker=self.ticker)
                 self.last_load_summary = load_summary
-                if reg is None:
+                if reg_raw is None:
                     logger.warning(
                         "No identity atlas loaded for %s (status=%s)",
                         self.ticker,
                         load_summary.status,
                     )
                     return manifests
+                reg = cast(EntityRegistry, reg_raw)
                 self._cached_reg = reg
                 self._cached_load_summary = load_summary
 
@@ -235,31 +235,27 @@ class TextAnonymizer:
             logger.warning("No identity atlas found for %s", self.ticker)
             return manifests
 
-        # Cache-hit: when the lazy-load path already populated the
-        # registry inside ``anonymize_all`` we can skip the second
-        # YAML parse in ``anonymize_news`` to keep the boundary honest.
-        # ``isinstance`` narrows for mypy without relying on ``assert``
-        # (which evaporates under ``python -O``).
-        cached_summary: RegistryLoadSummary | None = getattr(self, "_cached_load_summary", None)
-        cached_reg = getattr(self, "_cached_reg", None)
-        if isinstance(cached_reg, EntityRegistry) and (
-            cached_summary is None or cached_summary.atlas_path == atlas_path
-        ):
-            reg = cached_reg
-            self.last_load_summary = cached_summary or RegistryLoadSummary(
-                atlas_path=atlas_path,
-                redacted_ticker=self.ticker,
-            )
+        # Cache-hit: defer to ``_resume_cached_registry`` so the cache
+        # contract lives in ONE place — fixes the post-cast duplication
+        # between ``anonymize_all`` and ``anonymize_news``. Cache miss
+        # below also seeds ``self._cached_reg`` / ``self._cached_load_summary``
+        # so the next call (news, second HTML pass) hits cache.
+        cached = self._resume_cached_registry(atlas_path)
+        if cached is not None:
+            reg, self.last_load_summary = cached
         else:
-            reg, load_summary = load_atlas(atlas_path, ticker=self.ticker)
+            reg_raw, load_summary = load_atlas(atlas_path, ticker=self.ticker)
             self.last_load_summary = load_summary
-            if reg is None:
+            if reg_raw is None:
                 logger.warning(
                     "No identity atlas loaded for %s (status=%s) in news path",
                     self.ticker,
                     load_summary.status,
                 )
                 return manifests
+            reg = cast(EntityRegistry, reg_raw)
+            self._cached_reg = reg
+            self._cached_load_summary = load_summary
 
         masker = DeterministicMasker(reg)
         config_hash = reg.config_hash()
@@ -415,3 +411,37 @@ class TextAnonymizer:
     # registry into ``anonymize_all(preloaded_registry=...)`` to enforce the
     # ``aliases_loaded == 0`` fail-closed contract BEFORE any public
     # surrogate is written.
+
+    def _resume_cached_registry(
+        self, atlas_path: Path
+    ) -> tuple[EntityRegistry, RegistryLoadSummary] | None:
+        """Return the cached registry + summary if a prior call seeded them.
+
+        Centralising the cache-hit logic in ONE place keeps the
+        ``anonymize_all`` (HTML filings) and ``anonymize_news`` paths
+        aligned AND lets ``cast`` + ``isinstance`` narrow cleanly for
+        mypy in a single scope instead of two.
+
+        - ``getattr`` returns ``Any``, so a bare ``is not None`` would
+          not narrow. ``cast(EntityRegistry | None, ...)`` makes the
+          type honest under strict flags.
+        - The ``isinstance`` guard then narrows the union to the
+          ``EntityRegistry`` arm without ``assert`` (which evaporates
+          under ``python -O``).
+        - When the path differs from the cached ``atlas_path`` we still
+          return the cached registry but with a fresh
+          ``RegistryLoadSummary`` so callers' downstream QA carries the
+          right path.
+        """
+        cached_summary = getattr(self, "_cached_load_summary", None)
+        cached_reg = cast(EntityRegistry | None, getattr(self, "_cached_reg", None))
+        if isinstance(cached_reg, EntityRegistry):
+            if cached_summary is not None and cached_summary.atlas_path == atlas_path:
+                summary: RegistryLoadSummary = cached_summary
+            else:
+                summary = RegistryLoadSummary(
+                    atlas_path=atlas_path,
+                    redacted_ticker=self.ticker,
+                )
+            return cached_reg, summary
+        return None

@@ -6,8 +6,6 @@ suppression. Generic raw values MUST NEVER be suppressed by accident.
 
 from __future__ import annotations
 
-import pytest
-
 from fenrix_synthetic.identity.pseudonym_allowlist import (
     SAFE_PSEUDONYM_ALLOWLIST_SIZE,
     allowlist_human_readable,

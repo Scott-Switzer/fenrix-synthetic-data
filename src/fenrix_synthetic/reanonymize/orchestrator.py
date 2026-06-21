@@ -50,7 +50,6 @@ from ..identity.pseudonym_allowlist import (
     SAFE_PSEUDONYM_ALLOWLIST_SIZE,
     allowlist_human_readable,
     is_pseudonym_suppression_eligible,
-    safe_pseudonym_patterns,
 )
 from ..release.gate import (
     ReleaseDecision,
@@ -431,7 +430,7 @@ class ReanonymizeOrchestrator:
         counter = 1
         merged_entities = 0
         merged_aliases = 0
-        for etype, values in sorted(report.buckets.items()):
+        for etype, values in sorted(report._buckets.items()):
             for value in sorted(values):
                 entity_id = f"harvest_{etype}_{counter:04d}"
                 if entity_id in existing_entity_ids:
@@ -769,9 +768,9 @@ class ReanonymizeOrchestrator:
             suppressed_total += file_suppressed
         # Suppression per-file accounting, used after the recompute to
         # populate ``per_file_hits[i]["suppressed_hits"]`` honestly.
-        recompute_per_file_suppressed: dict[str, int] = {
-            file_id: 0 for file_id in {fid for fid, _ in combined_chunks}
-        }
+        recompute_per_file_suppressed: dict[str, int] = dict.fromkeys(
+            {fid for fid, _ in combined_chunks}, 0
+        )
         for file_id, text in combined_chunks:
             hit = exact_identity_scan(text, file_id, private_values)
             count = sum(
