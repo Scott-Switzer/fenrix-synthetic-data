@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fenrix_synthetic.anonymization.news_surrogate_generator import (
+    FingerprintEntry,
+    LightweightFingerprint,
     NewsSurrogateGenerator,
 )
 
@@ -112,19 +116,59 @@ class TestPublisherAndUrlRemoval:
 
 class TestIdentityStripping:
     def test_company_replaced_when_in_graph(self) -> None:
-        # Build a tiny graph builder substitute via dict
-        from fenrix_synthetic.identity.fingerprint_graph import (
-            FingerprintGraph,
-        )
+        # Build a tiny fingerprint view using the local lightweight types
+        # that live inside news_surrogate_generator (no experimental
+        # ``identity.fingerprint_graph`` module required).
         from fenrix_synthetic.identity.schemas import EntityType
 
-        g = FingerprintGraph("XX")
+        g = LightweightFingerprint("XX")
         g.add_entry(EntityType.COMPANY, "SecretCo International", "test")
         gen = NewsSurrogateGenerator("XX", fingerprint_graph=g)
         text = "SecretCo International reported earnings today."
         out, n = gen.strip_identity(text)
         assert "SecretCo International" not in out
         assert n >= 1
+
+    def test_plain_list_of_entries_is_acceptable(self) -> None:
+        # The constructor must accept any iterable of FingerprintEntry so
+        # callers can avoid building a LightweightFingerprint explicitly.
+        from fenrix_synthetic.identity.schemas import EntityType
+
+        entries = [
+            FingerprintEntry(
+                entity_type=EntityType.EXECUTIVE,
+                canonical_value="Jane Smith",
+            )
+        ]
+        gen = NewsSurrogateGenerator("XX", fingerprint_graph=entries)
+        out, n = gen.strip_identity("Jane Smith announced new strategy.")
+        assert "Jane Smith" not in out
+        assert "[Executive-" in out
+        assert n >= 1
+
+    def test_clean_subprocess_import_smoke(self) -> None:
+        # Fail-closed regression: the package must import in a fresh
+        # interpreter without touching experimental modules. If a future
+        # change breaks top-level imports this subprocess test fails.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import fenrix_synthetic;"
+                " import fenrix_synthetic.cli;"
+                " from fenrix_synthetic.anonymization.news_surrogate_generator"
+                " import LightweightFingerprint, FingerprintEntry;"
+                " print('import_ok')",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"subprocess import failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "import_ok" in result.stdout
 
     def test_ticker_replaced_always(self) -> None:
         gen = NewsSurrogateGenerator("ZZZZ")

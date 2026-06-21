@@ -17,11 +17,18 @@ Each surrogate:
   ``general_corporate`` (catch-all).
 - Labels output as ``synthetic financial news surrogate``.
 
-The generator is deterministic and key-based off the company fingerprint
-graph when available, falling back to a stable synthetic company name.
+The generator is deterministic and key-based off a lightweight company
+fingerprint when available (see :class:`LightweightFingerprint`),
+falling back to a stable synthetic company name.
 It never exposes any private article text in the public output. Only
 SHA-256 hashes of the original text, URL, publisher, and timestamp
 appear in the private provenance map.
+
+This module intentionally defines its own minimal fingerprint types
+instead of depending on an experimental ``identity.fingerprint_graph``
+module. When richer fingerprint structures are needed by other code
+paths they should be additive: this generator only needs an iterable
+of ``(entity_type, canonical_value)`` entries.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,10 +44,70 @@ from typing import Any
 
 import orjson
 
-from ..identity.fingerprint_graph import FingerprintGraph
+from ..identity.schemas import EntityType
 from ..storage.hashing import hash_string
 
 logger = logging.getLogger(__name__)
+
+
+# ── Lightweight fingerprint types (local; no experimental-module dep) ──
+
+
+@dataclass(frozen=True)
+class FingerprintEntry:
+    """A single ``(entity_type, canonical_value)`` identity record.
+
+    Frozen so callers cannot mutate the generator's view of an entry
+    after it has been added to a :class:`LightweightFingerprint`.
+    """
+
+    entity_type: EntityType
+    canonical_value: str
+    source: str = ""
+
+
+class LightweightFingerprint:
+    """Minimal fingerprint view used by :class:`NewsSurrogateGenerator`.
+
+    This is a plain-data stand-in for the experimental
+    ``identity.fingerprint_graph.FingerprintGraph`` module. The news
+    surrogate generator only needs to iterate over an ordered set of
+    ``FingerprintEntry`` records keyed to a ticker. It never mutates the
+    input, so duck-typed objects with an ``.entries`` attribute are also
+    accepted.
+
+    Example::
+
+        g = LightweightFingerprint("NVDA")
+        g.add_entry(EntityType.COMPANY, "Acme Corporation")
+        g.add_entry(EntityType.EXECUTIVE, "Jane Doe")
+        NewsSurrogateGenerator("NVDA", fingerprint_graph=g)
+    """
+
+    def __init__(
+        self,
+        ticker: str,
+        entries: Iterable[FingerprintEntry] | None = None,
+    ) -> None:
+        self.ticker = ticker.upper()
+        # Materialise so callers can keep appending cheaply.
+        self.entries: list[FingerprintEntry] = list(entries or [])
+
+    def add_entry(
+        self,
+        entity_type: EntityType,
+        canonical_value: str,
+        source: str = "",
+    ) -> LightweightFingerprint:
+        """Append an entry and return ``self`` for fluent-style chaining."""
+        self.entries.append(
+            FingerprintEntry(
+                entity_type=entity_type,
+                canonical_value=canonical_value,
+                source=source,
+            )
+        )
+        return self
 
 
 # ── Event-type classification ──────────────────────────────────────────
@@ -173,11 +241,26 @@ class NewsSurrogateGenerator:
     def __init__(
         self,
         ticker: str,
-        fingerprint_graph: FingerprintGraph | None = None,
+        fingerprint_graph: LightweightFingerprint | Iterable[FingerprintEntry] | None = None,
         synthetic_company: str | None = None,
     ) -> None:
         self.ticker = ticker.upper()
-        self.fingerprint_graph = fingerprint_graph
+        # Accept either a LightweightFingerprint builder or any iterable of
+        # FingerprintEntry records (e.g. a plain list). The generator only
+        # iterates ``.entries`` once at construction time.
+        if fingerprint_graph is None:
+            self.fingerprint_entries: list[FingerprintEntry] = []
+        elif isinstance(fingerprint_graph, LightweightFingerprint):
+            self.fingerprint_entries = list(fingerprint_graph.entries)
+        else:
+            # Assume an iterable of FingerprintEntry. Materialise once so the
+            # iterable (which may be a generator) is not consumed twice.
+            self.fingerprint_entries = list(fingerprint_graph)
+        # Note: the previous public attribute ``self.fingerprint_graph``
+        # (a FingerprintGraph-shaped builder) has been removed. Callers
+        # should use ``self.fingerprint_entries``. The two attributes had
+        # incompatible shapes, and dropping the misleading mirror avoids a
+        # silent type-lie for callers doing ``gen.fingerprint_graph.add_entry``.
         self.synthetic_company = (synthetic_company or self.DEFAULT_SYNTHETIC_COMPANY).strip()
         # Sorted (longest-first) real → synthetic replacement tuples
         self._replacements: list[tuple[str, str]] = self._build_replacements()
@@ -186,21 +269,20 @@ class NewsSurrogateGenerator:
 
     def _build_replacements(self) -> list[tuple[str, str]]:
         pairs: list[tuple[str, str]] = []
-        if self.fingerprint_graph is not None:
-            for entry in self.fingerprint_graph.entries:
-                real = entry.canonical_value.strip()
-                if len(real) < 3:
-                    continue
-                synth = self._synthetic_for_entry(entry)
-                if synth:
-                    pairs.append((real, synth))
+        for entry in self.fingerprint_entries:
+            real = entry.canonical_value.strip()
+            if len(real) < 3:
+                continue
+            synth = self._synthetic_for_entry(entry)
+            if synth:
+                pairs.append((real, synth))
         # Real ticker -> synthetic company (always replaced, even when
-        # no fingerprint graph is supplied).
+        # no fingerprint is supplied).
         pairs.append((self.ticker, self.synthetic_company))
         pairs.sort(key=lambda x: len(x[0]), reverse=True)
         return pairs
 
-    def _synthetic_for_entry(self, entry: Any) -> str | None:
+    def _synthetic_for_entry(self, entry: FingerprintEntry) -> str | None:
         """Type-bucketed generic placeholder keyed off the entry value hash.
 
         Uses only EntityType values that exist in identity.schemas.EntityType;
@@ -208,8 +290,6 @@ class NewsSurrogateGenerator:
         LOCATION values are recorded only as hashes in the private provenance
         map; the public surrogate never references them.
         """
-        from ..identity.schemas import EntityType
-
         et = entry.entity_type
         h = hashlib.sha256(entry.canonical_value.encode()).hexdigest()[:6].upper()
         if et in (EntityType.COMPANY, EntityType.TICKER):
