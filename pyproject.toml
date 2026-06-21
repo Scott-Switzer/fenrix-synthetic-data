@@ -30,9 +30,11 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "requests>=2.31",
-]
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+] 
 
-[project.optional-dependencies]
+[project.optional-dependencies] 
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -41,15 +43,26 @@ dev = [
     "ruff>=0.1",
     "types-requests>=2.31",
     "types-PyYAML>=6.0",
+    "nbformat>=5.7",
+    "nbconvert>=7.0",
+    "ipykernel>=6.0",
 ]
 
-[project.entry-points]
+local-ner = [
+    "gliner==0.2.27",
+]
+
+submission = [
+    "yfinance>=0.2",
+]
+
+[project.entry-points] 
 console_scripts = { fenrix-synth = "fenrix_synthetic.cli:main" }
 
 [project.urls]
-Homepage = "https://github.com/fenrix/fenrix-synthetic-data"
-Repository = "https://github.com/fenrix/fenrix-synthetic-data"
-Issues = "https://github.com/fenrix/fenrix-synthetic-data/issues"
+Homepage = "https://github.com/Scott-Switzer/fenrix-synthetic-data"
+Repository = "https://github.com/Scott-Switzer/fenrix-synthetic-data"
+Issues = "https://github.com/Scott-Switzer/fenrix-synthetic-data/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -98,7 +111,13 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# --disable-socket enforces the network-isolated CI guardrail via pytest-socket.
+# Tests assert pytest-socket raises SocketBlockedError on outbound TCP/DNS.
+addopts = "-v --tb=short --disable-socket"
 filterwarnings = [
     "ignore::DeprecationWarning",
+]
+markers = [
+    "local_model: tests that require an installed GLiNER/torch model and locally-cached weights",
+    "local_package: tests that require the gliner package to be installed but do not download weights",
 ]

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..identity import EntityRegistry
+from ..identity.schemas import MatchPolicy, MutationPolicy
 from .deterministic import (
     MatchEntry,
     get_patterns_for_alias,
@@ -32,7 +33,17 @@ class DeterministicMasker:
         text: str,
         config_hash: str = "",
     ) -> tuple[str, MaskingAudit, MaskingSummary]:
+        from .deterministic import normalize_text
+
         registry = self._registry
+
+        # Detect already-inserted placeholders to avoid mutating them
+        placeholder_spans = [
+            (m.start(), m.end()) for m in re.finditer(r"\[[A-Za-z0-9_\s]+\]", text)
+        ]
+
+        # Normalized text for whitespace-normalized matching policies
+        normalized_text = normalize_text(text)
 
         # Phase 1: Discover all possible matches
         matches: list[MatchEntry] = []
@@ -40,10 +51,26 @@ class DeterministicMasker:
             if not alias.active:
                 continue
             patterns = get_patterns_for_alias(alias, registry)
-            for ptype, pattern, replacement, priority in patterns:
-                for regex_match in re.finditer(pattern, text):
+            # Use normalized text when policy or mutation requires it
+            target_text = (
+                normalized_text
+                if (
+                    alias.match_policy == MatchPolicy.WHITESPACE_VARIANT
+                    or MutationPolicy.WHITESPACE_NORMALIZE in alias.enabled_mutation_policies
+                )
+                else text
+            )
+            for ptype, pattern, replacement, priority, flags in patterns:
+                for regex_match in re.finditer(pattern, target_text, flags=flags):
                     start = regex_match.start()
                     end = regex_match.end()
+
+                    # Do not match inside existing placeholders
+                    if any(
+                        ps[0] <= start < ps[1] or ps[0] < end <= ps[1] for ps in placeholder_spans
+                    ):
+                        continue
+
                     matched = regex_match.group()
                     span_id = f"span-{ptype}-{len(matches):06d}"
                     entry = MatchEntry(

@@ -1,0 +1,74 @@
+# Fenrix canonical entity label mapping
+# Version: 1.0.0
+#
+# This file maps user-facing descriptive labels (which GLiNER accepts as
+# free-form text at predict time) to canonical Fenrix entity types used
+# downstream by the masking pipeline. Unknown labels remain visible as
+# 'UNKNOWN' rather than being silently dropped.
+version: "1.0.0"
+
+label_mapping:
+  # Company
+  "company or organization name": company
+  "company": company
+  "organization name": company
+  "corporation": company
+  # Former company name
+  "former company name": former_company_name
+  # Executive
+  "executive or board member": executive
+  "executive": executive
+  "ceo": executive
+  "cfo": executive
+  "chief executive officer": executive
+  "chief financial officer": executive
+  # Board member
+  "board member": board_member
+  # Subsidiary
+  "company subsidiary": subsidiary
+  "subsidiary": subsidiary
+  # Business segment
+  "business segment": business_segment
+  "division": business_segment
+  # Product
+  "commercial product or brand": product
+  "product": product
+  "product name": product
+  # Brand
+  "brand": brand
+  "brand name": brand
+  # Proprietary platform
+  "proprietary technology platform": proprietary_platform
+  "proprietary technology": proprietary_platform
+  # Facility / headquarters
+  "corporate facility or headquarters": facility
+  "facility": facility
+  "headquarters": headquarters
+  "office": facility
+  # Acquisition / JV
+  "acquisition target": acquisition_target
+  "joint venture": joint_venture
+  # Service providers
+  "auditor": auditor
+  "accounting firm": auditor
+  "law firm": law_firm
+  "legal counsel": law_firm
+  # Counterparties
+  "customer": customer
+  "client": customer
+  "supplier": supplier
+  "vendor": supplier
+  # Competitive / regulatory
+  "competitor": competitor
+  "regulator": regulator
+  "regulatory body": regulator
+  # Location / domain / ticker
+  "location": location
+  "city": location
+  "country": location
+  "headquarters location": location
+  "domain name": domain
+  "domain": domain
+  "exchange ticker": exchange_ticker
+  "ticker symbol": exchange_ticker
+  "stock ticker": exchange_ticker

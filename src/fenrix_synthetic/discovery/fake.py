@@ -29,6 +29,14 @@ class FakeProviderMode:
 
 @dataclass
 class FakeProviderConfig:
+    """Synthetic-test fake-discovery-provider configuration.
+
+    ``company_id`` is REQUIRED. Production code must NEVER silently assume
+    any C001/HBAN-like identifier. Callers explicitly supply a synthetic
+    fixture id (e.g. ``TEST-CO-001``).
+    """
+
+    company_id: str = ""
     mode: str = FakeProviderMode.FIXED
     fixed_candidates: list[dict] = field(default_factory=list)
     provider_name: str = "fake-local"
@@ -38,10 +46,19 @@ class FakeProviderConfig:
     token_count: int | None = None
     warning_messages: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        if not self.company_id or not isinstance(self.company_id, str):
+            raise ValueError(
+                "FakeProviderConfig.company_id is REQUIRED and must be a non-empty string. "
+                "Use a synthetic fixture identifier (e.g. 'TEST-CO-001'). "
+                "Production code must NEVER silently assume a real C001/HBAN id."
+            )
+
 
 class FakeEntityDiscoveryProvider:
-    def __init__(self, config: FakeProviderConfig | None = None) -> None:
-        self._config = config or FakeProviderConfig()
+    def __init__(self, config: FakeProviderConfig) -> None:
+        # __post_init__ already validated company_id.
+        self._config = config
 
     @property
     def provider_name(self) -> str:
@@ -69,7 +86,7 @@ class FakeEntityDiscoveryProvider:
             candidates.append(
                 ProviderCandidate(
                     candidate_id=f"fake-{uuid.uuid4().hex[:8]}",
-                    company_id=fc.get("company_id", "C001"),
+                    company_id=fc.get("company_id", self._config.company_id),
                     document_artifact_id=chunk.document_artifact_id,
                     chunk_ids=[chunk.chunk_id],
                     original_start=start,
@@ -112,7 +129,7 @@ class FakeEntityDiscoveryProvider:
                 provider_name=self._config.provider_name,
                 model_name=self._config.model_name,
                 model_version=self._config.model_version,
-                company_id="C001",
+                company_id=self._config.company_id,
                 document_artifact_id=chunk.document_artifact_id,
                 chunk_id=chunk.chunk_id,
                 input_hash=chunk.input_hash,
@@ -140,6 +157,7 @@ class FakeEntityDiscoveryProvider:
                 }
             ] * 3
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -167,6 +185,7 @@ class FakeEntityDiscoveryProvider:
                 },
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -194,6 +213,7 @@ class FakeEntityDiscoveryProvider:
                 },
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -221,6 +241,7 @@ class FakeEntityDiscoveryProvider:
                 },
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -240,6 +261,7 @@ class FakeEntityDiscoveryProvider:
                 }
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -259,6 +281,7 @@ class FakeEntityDiscoveryProvider:
                 }
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -278,6 +301,7 @@ class FakeEntityDiscoveryProvider:
                 }
             ]
             self._config = FakeProviderConfig(
+                company_id=self._config.company_id,
                 mode=FakeProviderMode.FIXED,
                 fixed_candidates=fixed,
                 provider_name=self._config.provider_name,
@@ -299,7 +323,7 @@ class FakeEntityDiscoveryProvider:
             provider_name=self._config.provider_name,
             model_name=self._config.model_name,
             model_version=self._config.model_version,
-            company_id="C001",
+            company_id=self._config.company_id,
             document_artifact_id=chunk.document_artifact_id,
             chunk_id=chunk.chunk_id,
             input_hash=chunk.input_hash,

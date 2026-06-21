@@ -2,6 +2,9 @@
 data/
 !data/.gitkeep
 
+# Archive patches (local only, may contain paths)
+archive/
+
 # Private configuration (contains source-company mappings, secrets)
 configs/company.yaml
 configs/*.local.yaml
@@ -17,6 +20,7 @@ configs/*.local.yaml
 
 # Python cache and build artifacts
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -82,10 +86,19 @@ logs/
 *.safetensors
 embeddings/
 models/
+xet/
+*.agent_harnesses.json
 
 # Generated artifacts (never commit)
 artifacts/
+anonymized_bundle/
+exports/
+MagicMock/
+originals/
 output/
+private_maps/
+smoke_excerpts/
+*.zip
 *.parquet
 *.jsonl
 *.json
@@ -94,15 +107,25 @@ output/
 # Checkpoints (can be regenerated)
 .checkpoints/
 
-# Notebooks (not used in M0/M1)
-notebooks/
+# Notebooks — track the primary notebook, ignore generated notebooks and checkpoints
+notebooks/*
+!notebooks/FENRIX_MultiCompany_Anonymization.ipynb
+.ipynb_checkpoints/
 *.ipynb
+!notebooks/FENRIX_MultiCompany_Anonymization.ipynb
+!notebooks/FENRIX_MultiCompany_Anonymization_Reproducible.ipynb
 
 # Private identity registries (never commit)
 private/
 private/**/*
 
+# Sanitized evidence artifacts (never commit — generated on demand)
+evidence/
+
 # OS
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+Scott.zip
+scripts/*
+!scripts/build_submission_fast.py
