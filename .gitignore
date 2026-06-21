@@ -110,6 +110,7 @@ notebooks/*
 .ipynb_checkpoints/
 *.ipynb
 !notebooks/FENRIX_MultiCompany_Anonymization.ipynb
+!notebooks/FENRIX_MultiCompany_Anonymization_Reproducible.ipynb
 
 # Private identity registries (never commit)
 private/
