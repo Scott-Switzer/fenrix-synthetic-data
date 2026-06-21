@@ -88,11 +88,14 @@ xet/
 
 # Generated artifacts (never commit)
 artifacts/
+anonymized_bundle/
 exports/
+MagicMock/
 originals/
 output/
 private_maps/
 smoke_excerpts/
+*.zip
 *.parquet
 *.jsonl
 *.json

@@ -27,7 +27,8 @@ dependencies = [
     "python-json-logger>=2.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
-    "beautifulsoup4>=4.12",    "lxml>=5.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
     "requests>=2.31",
     "httpx>=0.28",
     "python-dotenv>=1.0",
@@ -46,6 +47,10 @@ dev = [
 
 local-ner = [
     "gliner==0.2.27",
+]
+
+submission = [
+    "yfinance>=0.2",
 ]
 
 [project.entry-points] 
@@ -112,4 +117,4 @@ filterwarnings = [
 markers = [
     "local_model: tests that require an installed GLiNER/torch model and locally-cached weights",
     "local_package: tests that require the gliner package to be installed but do not download weights",
-] 
+]
