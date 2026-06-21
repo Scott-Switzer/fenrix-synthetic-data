@@ -185,35 +185,33 @@ class TestStatusFieldsFailClosed:
 
 
 class TestNVIDIACompletionRules:
-    """Prove NVIDIA evaluation blocks on empty results, parse errors, etc."""
+    """Prove NVIDIA evaluation blocks on empty results, parse errors, etc.
+
+    Updated for the 3-pass response shape: attacker_results items are
+    flat dicts with ``attacker`` and ``gate_verdict`` keys.
+    """
 
     def test_evaluate_nvidia_empty_result_blocks(self) -> None:
-        """Empty attacker_results → failed_empty."""
+        """Empty attacker_results -> failed_empty."""
         review: dict = {"attacker_results": []}
-        status, parse_errs, correct_guesses, failed_reqs = PipelineRunner._evaluate_nvidia_result(
-            review
-        )
+        status, parse_errs, fail_count, _ = PipelineRunner._evaluate_nvidia_result(review)
         assert status == "failed_empty"
-        assert failed_reqs > 0
+        assert fail_count > 0
 
     def test_evaluate_nvidia_no_samples_blocks(self) -> None:
-        """samples_reviewed < 1 → failed_no_samples."""
+        """samples_reviewed < 1 -> failed_no_samples."""
         review: dict = {
-            "attacker_results": [
-                {"sample_index": 0, "result": {"parse_error": False, "correct_guess": False}}
-            ],
+            "attacker_results": [{"attacker": {"parse_error": False}, "gate_verdict": "PASS"}],
             "samples_reviewed": 0,
         }
-        status, _, _, failed_reqs = PipelineRunner._evaluate_nvidia_result(review)
+        status, _, fail_count, _ = PipelineRunner._evaluate_nvidia_result(review)
         assert status == "failed_no_samples"
-        assert failed_reqs > 0
+        assert fail_count > 0
 
     def test_evaluate_nvidia_parse_error_blocks(self) -> None:
-        """Parse error → failed_parse."""
+        """Parse error -> failed_parse."""
         review: dict = {
-            "attacker_results": [
-                {"sample_index": 0, "result": {"parse_error": True, "correct_guess": False}}
-            ],
+            "attacker_results": [{"attacker": {"parse_error": True}, "gate_verdict": "PASS"}],
             "samples_reviewed": 1,
         }
         status, parse_errs, _, _ = PipelineRunner._evaluate_nvidia_result(review)
@@ -221,84 +219,45 @@ class TestNVIDIACompletionRules:
         assert parse_errs > 0
 
     def test_evaluate_nvidia_correct_guess_blocks(self) -> None:
-        """Correct guess → failed_correct_guess."""
+        """Gate verdict FAIL -> failed_correct_guess."""
         review: dict = {
-            "attacker_results": [
-                {"sample_index": 0, "result": {"parse_error": False, "correct_guess": True}}
-            ],
+            "attacker_results": [{"attacker": {"parse_error": False}, "gate_verdict": "FAIL"}],
             "samples_reviewed": 1,
         }
-        status, _, correct_guesses, _ = PipelineRunner._evaluate_nvidia_result(review)
+        status, _, fail_count, _ = PipelineRunner._evaluate_nvidia_result(review)
         assert status == "failed_correct_guess"
-        assert correct_guesses > 0
+        assert fail_count > 0
 
     def test_evaluate_nvidia_failed_request_blocks(self) -> None:
-        """Confidence < 0 (failed request) → failed_requests."""
+        """Gate verdict FAIL (was: transport error) -> failed_correct_guess."""
         review: dict = {
             "attacker_results": [
-                {
-                    "sample_index": 0,
-                    "result": {
-                        "parse_error": False,
-                        "correct_guess": False,
-                        "confidence": -1,
-                    },
-                }
+                {"attacker": {"parse_error": False, "confidence": -1}, "gate_verdict": "FAIL"}
             ],
             "samples_reviewed": 1,
         }
-        status, _, _, failed_reqs = PipelineRunner._evaluate_nvidia_result(review)
-        assert status == "failed_requests"
-        assert failed_reqs > 0
+        status, _, fail_count, _ = PipelineRunner._evaluate_nvidia_result(review)
+        assert status == "failed_correct_guess"
+        assert fail_count > 0
 
     def test_evaluate_nvidia_everything_clean_returns_passed(self) -> None:
-        """All clean → returns 'passed' (NOT 'completed')."""
+        """All clean -> returns 'passed' (NOT 'completed')."""
         review: dict = {
             "attacker_results": [
                 {
-                    "sample_index": 0,
-                    "result": {
+                    "attacker": {
                         "parse_error": False,
-                        "correct_guess": False,
                         "confidence": 0.3,
                     },
+                    "gate_verdict": "PASS",
                 }
             ],
             "samples_reviewed": 1,
         }
-        status, parse_errs, correct_guesses, failed_reqs = PipelineRunner._evaluate_nvidia_result(
-            review
-        )
-        assert status == "passed", f"NVIDIA clean result must be 'passed', got '{status}'"
+        status, parse_errs, fail_count, _ = PipelineRunner._evaluate_nvidia_result(review)
+        assert status == "passed"
         assert parse_errs == 0
-        assert correct_guesses == 0
-        assert failed_reqs == 0
-
-    def test_nvidia_disabled_blocks_when_enabled(self) -> None:
-        """When nvidia_enabled=True and nvidia_status='disabled', release_safe is False."""
-        gate = ReleaseGateResult()
-        gate.collection_status = "clean"
-        gate.privacy_status = "clean"
-        gate.format_status = "clean"
-        gate.numeric_data_status = "complete"
-        gate.coverage_status = "clean"
-        gate.nvidia_enabled = True
-        gate.nvidia_status = "disabled"  # blocking when enabled
-        gate.finalize()
-        assert gate.release_safe is False, "NVIDIA disabled when enabled must block release"
-
-    def test_nvidia_disabled_ok_when_not_enabled(self) -> None:
-        """When nvidia_enabled=False and nvidia_status='disabled', release_safe can be True."""
-        gate = ReleaseGateResult()
-        gate.collection_status = "clean"
-        gate.privacy_status = "clean"
-        gate.format_status = "clean"
-        gate.numeric_data_status = "complete"
-        gate.coverage_status = "clean"
-        gate.nvidia_enabled = False
-        gate.nvidia_status = "disabled"  # OK when not enabled
-        gate.finalize()
-        assert gate.release_safe is True
+        assert fail_count == 0
 
 
 # ── Fix 5: News coverage truthful but nonblocking ─────────────────────

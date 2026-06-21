@@ -33,7 +33,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import orjson
 
@@ -199,20 +199,523 @@ def _strip_html(html: str) -> str:
 
         return BeautifulSoup(html, "lxml").get_text(separator=" ")
     except Exception:
-        # Fall back to a regex tag strip. Good enough for offline analysis.
         return re.sub(r"<[^>]+>", " ", html)
 
 
 # ── Attack 1: rare phrase ─────────────────────────────────────────────
 
 
+# ── Taxonomy constants (direct ``Final`` annotations — no aliasing) ────
+
+
+_RARE_PHRASE_CATEGORIES: Final[list[tuple[str, bool]]] = [
+    ("raw_direct_identifier", True),
+    ("product_or_platform_phrase", True),
+    ("company_specific_business_phrase", True),
+    ("sec_xbrl_boilerplate", False),
+    ("date_period_boilerplate", False),
+    ("accounting_taxonomy_boilerplate", False),
+    ("synthetic_placeholder", False),
+    ("generic_financial_phrase", False),
+    ("low_information_ngram", False),
+]
+
+_LOW_INFO_DF_RATIO: Final[float] = 0.30
+_MIN_DOCS_FOR_DF_CUTOFF: Final[int] = 5
+_PRIVATE_VALUE_SUBSTR_MIN_LEN: Final[int] = 4
+
+# Single-word SEC / XBRL / EDGAR boilerplate tokens.
+_SEC_XBRL_BOILERPLATE_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "cik",
+        "dei",
+        "us-gaap",
+        "xbrl",
+        "ixbrl",
+        "iso4217",
+        "srt",
+        "edgar",
+        "fasb",
+        "gaap",
+        "ifrs",
+        "sec",
+        "form",
+        "filing",
+        "filings",
+        "shares",
+        "share",
+        "document",
+        "entity",
+        "registrant",
+        "consolidated",
+        "unaudited",
+        "interim",
+        "condensed",
+        "statements",
+        "schedule",
+        "amendment",
+        "exhibit",
+        "item",
+        "report",
+        "reports",
+        "subsidiary",
+        "subsidiaries",
+        "hereto",
+        "hereunder",
+        "herein",
+        "thereto",
+        "thereunder",
+        "therein",
+        "thereof",
+        "hereof",
+        "whereas",
+        "foregoing",
+        "aforesaid",
+        "herewith",
+        "therewith",
+        "pursuant",
+        "furnished",
+        "incorporated",
+        "reference",
+    }
+)
+
+# Multi-word accounting / SEC taxonomy boilerplate phrases (substring-matched).
+_ACCOUNTING_TAXONOMY_PHRASES: Final[frozenset[str]] = frozenset(
+    {
+        "consolidated financial statements",
+        "balance sheet",
+        "cash flows",
+        "statement of operations",
+        "net income",
+        "gross margin",
+        "operating expenses",
+        "retained earnings",
+        "accumulated deficit",
+        "comprehensive income",
+        "stockholders equity",
+        "common stock outstanding",
+        "common stock",
+        "table of contents",
+        "annual report on form 10-k",
+        "annual report on form 10-q",
+        "quarterly report on form 10-q",
+        "current report on form 8-k",
+        "report on form 10-k",
+        "report on form 10-q",
+        "report on form 8-k",
+        "on form 10-k",
+        "on form 10-q",
+        "on form 8-k",
+        "fiscal year ended",
+        "fiscal quarter ended",
+        "interim financial statements",
+        "unaudited consolidated",
+        "unaudited interim",
+        "notes to consolidated financial",
+        "notes to financial",
+        "financial statements",
+        "financial condition",
+        "results of operations",
+        "liquidity and capital resources",
+        "critical accounting policies",
+        "quantitative and qualitative disclosures",
+        "internal control over financial",
+        "evaluation of disclosure controls",
+        "part ii other information",
+        "part i financial information",
+        "legal proceedings",
+        "risk factors",
+        "forward-looking statements",
+        "cautionary note regarding forward",
+        "statement of cash flows",
+        "statement of stockholders equity",
+        "notes to unaudited condensed",
+        "basis of presentation",
+        "summary of significant accounting",
+        "recently issued accounting",
+        "recently adopted accounting",
+        "fair value measurements",
+        "property and equipment",
+        "goodwill and intangible",
+        "intangible assets",
+        "restricted stock units",
+        "earnings per share",
+        "basic net income per share",
+        "diluted net income per share",
+        "weighted average shares",
+        "outstanding common stock",
+        "accumulated other comprehensive",
+        "other comprehensive income",
+        "comprehensive income loss",
+    }
+)
+
+# Generic accounting vocabulary that, when ALL remaining tokens
+# (stopwords stripped) belong to this set or _SEC_XBRL_BOILERPLATE_TOKENS,
+# routes to non-blocking.
+_GENERIC_FINANCIAL_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "revenue",
+        "revenues",
+        "cost",
+        "costs",
+        "expense",
+        "expenses",
+        "operations",
+        "operating",
+        "income",
+        "margin",
+        "margins",
+        "earnings",
+        "loss",
+        "losses",
+        "profit",
+        "share",
+        "shares",
+        "dividend",
+        "dividends",
+        "diluted",
+        "basic",
+        "growth",
+        "decline",
+        "increase",
+        "decrease",
+        "quarterly",
+        "annual",
+        "fiscal",
+        "period",
+        "year",
+        "total",
+        "net",
+        "gross",
+        "effective",
+        "rate",
+        "tax",
+        "taxes",
+        "returns",
+        "sales",
+        "guidance",
+        "outlook",
+        "demand",
+        "supply",
+        "inventory",
+        "channel",
+        "market",
+        "markets",
+        "customer",
+        "customers",
+        "supplier",
+        "suppliers",
+        "board",
+        "directors",
+        "officers",
+        "executives",
+        "assets",
+        "liabilities",
+        "equity",
+        "debt",
+        "cash",
+        "capital",
+        "stock",
+        "treasury",
+        "investment",
+        "investments",
+        "securities",
+        "balance",
+        "sheet",
+        "flow",
+        "flows",
+        "statement",
+        "financial",
+        "accounting",
+        "audit",
+        "auditor",
+        "valuation",
+        "allowance",
+        "amortization",
+        "depreciation",
+        "accrued",
+        "deferred",
+        "payable",
+        "receivable",
+        "disclosure",
+        "disclosures",
+        "presentation",
+        "recognition",
+        "measurement",
+        "transition",
+        "segment",
+        "segments",
+        "geographic",
+        "domestic",
+        "international",
+        "restructuring",
+        "acquisition",
+        "acquisitions",
+        "merger",
+        "goodwill",
+        "impairment",
+        "intangible",
+        "stock-based",
+        "compensation",
+        "performance",
+        "results",
+        "amounts",
+        "amount",
+        "ended",
+        "months",
+    }
+)
+
+# Financial / temporal stopwords stripped from token evaluation in
+# Tier 8 (generic_financial_phrase).  Phrases composed entirely of
+# stopwords + financial tokens are non-blocking.
+_FINANCIAL_STOPWORDS: Final[frozenset[str]] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "for",
+        "in",
+        "on",
+        "to",
+        "by",
+        "as",
+        "at",
+        "and",
+        "or",
+        "with",
+        "from",
+        "is",
+        "are",
+        "was",
+        "were",
+        "been",
+        "not",
+        "its",
+        "their",
+        "our",
+        "we",
+        "this",
+        "that",
+        "these",
+        "those",
+        "such",
+        "each",
+        "all",
+        "any",
+        "other",
+        "may",
+        "will",
+        "shall",
+        "would",
+        "could",
+        "should",
+        "has",
+        "have",
+        "had",
+        "during",
+        "including",
+        "which",
+        "about",
+        "also",
+        "into",
+        "through",
+        "after",
+        "before",
+        "between",
+        "under",
+        "over",
+        "no",
+        "only",
+        "if",
+        "but",
+    }
+)
+
+# Synthetic placeholder patterns (re.search within squashed phrase).
+_SYNTHETIC_PLACEHOLDER_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"\b(?:syn|hash|sha)_[a-f0-9]{4,}\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:company|executive|person|product|location|region|platform)\s*_?\s*\d{1,4}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\[(?:URL|PUBLISHER|PERIOD\s+DATE|FILING\s+DATE)\s+REMOVED\]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsynthetic\s+(?:financial\s+)?(?:disclosure|news)\s+surrogate\b",
+        re.IGNORECASE,
+    ),
+)
+
+# Date / period boilerplate (re.search — matches within n-gram).
+# The taxonomy ladder evaluates product/direct-identifier tiers BEFORE
+# this tier, so "April 2025 Acquisition" triggers Tier 2 and never
+# reaches Tier 6.
+_MONTHS: Final[str] = (
+    r"(?:january|february|march|april|may|june|july|august|"
+    r"september|october|november|december|"
+    r"jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)"
+)
+
+_DATE_PERIOD_BOILERPLATE_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
+    # as of [month]
+    re.compile(rf"as of {_MONTHS}", re.IGNORECASE),
+    # [month] [day] [year]  (full date anywhere)
+    re.compile(rf"{_MONTHS}\.?\s+\d{{1,2}}\s+\d{{4}}", re.IGNORECASE),
+    # [month] [day]
+    re.compile(rf"{_MONTHS}\.?\s+\d{{1,2}}(?!\s*\d{{4}})", re.IGNORECASE),
+    # [month] [year4]
+    re.compile(rf"{_MONTHS}\.?\s+\d{{4}}", re.IGNORECASE),
+    # fiscal (year|quarter|month)
+    re.compile(r"fiscal (?:year|quarter|month)", re.IGNORECASE),
+    # (fiscal )?(year|quarter|month|years|quarters|months) ended
+    re.compile(r"(?:fiscal )?(?:years?|quarters?|months?) ended", re.IGNORECASE),
+    # in fiscal year [year4]
+    re.compile(r"in fiscal year \d{4}", re.IGNORECASE),
+    # as of \d{4}
+    re.compile(r"as of \d{4}", re.IGNORECASE),
+    # (prior|current|last|next) fiscal year
+    re.compile(r"(?:prior|current|last|next) fiscal year", re.IGNORECASE),
+    # (three|six|nine|twelve) months ended
+    re.compile(r"(?:three|six|nine|twelve) months ended", re.IGNORECASE),
+    # year ended [month]
+    re.compile(rf"year ended {_MONTHS}", re.IGNORECASE),
+    # quarter ended [month]
+    re.compile(rf"quarter ended {_MONTHS}", re.IGNORECASE),
+    # period ended [month]
+    re.compile(rf"period ended {_MONTHS}", re.IGNORECASE),
+    # fiscal \d{4}
+    re.compile(r"fiscal \d{4}", re.IGNORECASE),
+    # form 10-k / 10-q / 8-k / s-\d …
+    re.compile(r"form\s+(?:10-k|10-q|8-k|s-\d|20-f|6-k|40-f|def\s*14a)", re.IGNORECASE),
+    # (annual|quarterly|current) report
+    re.compile(r"(?:annual|quarterly|current) report", re.IGNORECASE),
+    # on form 10-k / on form 10-q / on form 8-k
+    re.compile(r"on form (?:10-k|10-q|8-k|s-\d)", re.IGNORECASE),
+    # fiscal year ended [month] [day]? [year]?
+    re.compile(
+        rf"fiscal year ended {_MONTHS}\.?(\s+\d{{1,2}})?(\s+\d{{4}})?",
+        re.IGNORECASE,
+    ),
+    # [month] [day]: year
+    re.compile(rf"{_MONTHS}\.?\s+\d{{1,2}}:\s+\d{{4}}", re.IGNORECASE),
+    # ended [month] [day]? [year]?
+    re.compile(rf"ended {_MONTHS}\.?(\s+\d{{1,2}})?(\s+\d{{4}})?", re.IGNORECASE),
+    # [month] [year] ended
+    re.compile(rf"{_MONTHS}\.?\s+\d{{4}} ended", re.IGNORECASE),
+    # for the (three|six|nine|twelve) months ended
+    re.compile(r"for the (?:three|six|nine|twelve) months ended", re.IGNORECASE),
+    # the (three|six|nine|twelve) months ended
+    re.compile(r"the (?:three|six|nine|twelve) months ended", re.IGNORECASE),
+    # \d{4} annual report
+    re.compile(r"\d{4} annual report", re.IGNORECASE),
+    # for the fiscal year
+    re.compile(r"for the fiscal year", re.IGNORECASE),
+)
+
+
+# ── Classification helpers ────────────────────────────────────────────
+
+
+def _squash_spaces(s: str) -> str:
+    """Collapse runs of whitespace for taxonomy comparison."""
+    return re.sub(r"\s+", " ", s.strip()).lower()
+
+
+def _word_boundary_contains(haystack: str, needle: str) -> bool:
+    """Substring match with strict word boundaries."""
+    if not needle:
+        return False
+    return re.search(r"\b" + re.escape(needle) + r"\b", haystack) is not None
+
+
+def _is_synthetic_value(value_lower: str) -> bool:
+    """Return True iff ``value_lower`` matches a synthetic-placeholder pattern."""
+    return any(rx.search(value_lower) for rx in _SYNTHETIC_PLACEHOLDER_REGEXES)
+
+
+def _classify_phrase(
+    squashed: str,
+    tokens: list[str],
+    df: int,
+    total_docs: int,
+    private_value_substrings: set[str],
+    product_value_substrings: set[str],
+) -> str:
+    """Return the taxonomy category for a surviving 3..7 word ngram.
+
+    Precedence ladder (top to bottom):
+
+    Tier 1 — ``synthetic_placeholder``     regex search  NON-BLOCKING
+    Tier 2 — ``product_or_platform_phrase`` word-boundary BLOCKING
+    Tier 3 — ``raw_direct_identifier``      word-boundary BLOCKING
+    Tier 4 — ``accounting_taxonomy_boilerplate`` substr  NON-BLOCKING
+    Tier 5 — ``sec_xbrl_boilerplate``       token check   NON-BLOCKING
+    Tier 6 — ``date_period_boilerplate``    regex search  NON-BLOCKING
+    Tier 7 — ``low_information_ngram``      df-ratio gate NON-BLOCKING
+    Tier 8 — ``generic_financial_phrase``   token all-in  NON-BLOCKING
+    Tier 9 — ``company_specific_business_phrase`` fallback BLOCKING
+    """
+    token_set = set(tokens)
+
+    # Tier 1 — synthetic placeholder
+    if any(rx.search(squashed) for rx in _SYNTHETIC_PLACEHOLDER_REGEXES):
+        return "synthetic_placeholder"
+
+    # Tier 2 — product / platform phrase (BLOCKING)
+    for sub in product_value_substrings:
+        if len(sub) >= _PRIVATE_VALUE_SUBSTR_MIN_LEN and _word_boundary_contains(squashed, sub):
+            return "product_or_platform_phrase"
+
+    # Tier 3 — raw direct identifier (BLOCKING)
+    if squashed in private_value_substrings:
+        return "raw_direct_identifier"
+    for sub in private_value_substrings:
+        if len(sub) >= _PRIVATE_VALUE_SUBSTR_MIN_LEN and _word_boundary_contains(squashed, sub):
+            return "raw_direct_identifier"
+
+    # Tier 4 — accounting taxonomy substring match (before single-token
+    # SEC check, which would catch "consolidated" etc. prematurely).
+    if any(_word_boundary_contains(squashed, phrase) for phrase in _ACCOUNTING_TAXONOMY_PHRASES):
+        return "accounting_taxonomy_boilerplate"
+
+    # Tier 5 — SEC / XBRL boilerplate (single-word token check)
+    if any(t in _SEC_XBRL_BOILERPLATE_TOKENS for t in token_set):
+        return "sec_xbrl_boilerplate"
+
+    # Tier 6 — date / period boilerplate (re.search within n-gram)
+    if any(rx.search(squashed) for rx in _DATE_PERIOD_BOILERPLATE_REGEXES):
+        return "date_period_boilerplate"
+
+    # Tier 7 — low-information ngram (df-ratio gate)
+    df_ratio = (df / total_docs) if total_docs > 0 else 0.0
+    if total_docs >= _MIN_DOCS_FOR_DF_CUTOFF and df_ratio >= _LOW_INFO_DF_RATIO:
+        return "low_information_ngram"
+
+    # Tier 8 — generic accounting-vocabulary phrase (stopword-stripped)
+    remaining = [t for t in tokens if t not in _FINANCIAL_STOPWORDS]
+    if remaining and all(
+        t in _GENERIC_FINANCIAL_TOKENS or t in _SEC_XBRL_BOILERPLATE_TOKENS for t in remaining
+    ):
+        return "generic_financial_phrase"
+
+    # Tier 9 fallback — blocking distinctive business phrase.
+    return "company_specific_business_phrase"
+
+
+# ── N-gram extraction ─────────────────────────────────────────────────
+
+
 def _distinctive_ngrams(text: str, min_n: int = 3, max_n: int = 7) -> list[str]:
     """Return distinctive lowercased n-grams (3..7 words) carrying caps.
 
-    A phrase is "distinctive" when it contains AT LEAST ONE word whose
-    surface form begins with an upper-case character. This is the
-    heuristic the user's directive calls for: short multi-word sequences
-    that retain capitalisation signals after masking.
+    A phrase is ``distinctive`` when it contains AT LEAST ONE word whose
+    surface form begins with an upper-case character.
     """
     spans = _word_spans(text)
     n_words = len(spans)
@@ -228,65 +731,149 @@ def _distinctive_ngrams(text: str, min_n: int = 3, max_n: int = 7) -> list[str]:
     return out
 
 
+# ── Attack function ───────────────────────────────────────────────────
+
+
 def rare_phrase_attack(
     masked_docs: list[tuple[str, str]],
     private_values: dict[str, list[str]],
     min_ngram: int = 3,
     max_ngram: int = 7,
     top_k: int = 20,
+    low_info_df_ratio: float = _LOW_INFO_DF_RATIO,
 ) -> SemanticAttackResult:
     """Detect distinctive multi-word n-grams surviving the masker.
 
-    Distinctive = 3+ word contiguous case-preserving phrase containing
-    at least one capitalised word AND whose lowercased form does NOT
-    appear in the ``private_values`` registry.
+    Every surviving 3..7 word ngram is classified into one of 9
+    taxonomy classes via a deterministic precedence ladder (see
+    ``_classify_phrase``).  The verdict is PASS iff no surviving
+    phrase falls into a *blocking* class.  Non-blocking classes
+    (SEC/XBRL/date/accounting boilerplate, synthetic placeholders,
+    low-information ngrams, generic financial vocabulary) are
+    reported in ``counts_by_class`` for audit transparency but do
+    NOT block the release.
 
     Args:
-        masked_docs: list of ``(doc_id, text)`` already passed through the masker
-        private_values: ``build_private_values_dict``-shaped registry
-        min_ngram: smallest n-gram length (default 3)
-        max_ngram: largest n-gram length (default 7)
-        top_k: how many top distinctive phrases to hash in the report
+        masked_docs: list of ``(doc_id, text)`` already passed
+                     through the masker.
+        private_values: ``build_private_values_dict``-shaped registry.
+        min_ngram: smallest n-gram length (default 3).
+        max_ngram: largest n-gram length (default 7).
+        top_k: how many top distinctive phrases to hash in the report.
+        low_info_df_ratio: doc-frequency cutoff for
+                           ``low_information_ngram`` (default 0.30).
 
     Returns:
-        ``SemanticAttackResult`` whose ``.hits`` carry SHA-256 truncated
-        hashes (never raw phrase text beyond a 60-char preview).
+        ``SemanticAttackResult`` with per-class counts, split
+        blocking / non-blocking hash arrays, and legacy
+        backward-compatible keys.
     """
+    # Build private-value lookup sets.  Product / platform values
+    # go to ``product_value_substrings`` only — they must NOT be
+    # force-dropped from ``surviving`` via ``pv_lower`` because the
+    # ``product_or_platform_phrase`` tier (Tier 2) needs to see them.
     pv_lower: set[str] = set()
-    for vs in private_values.values():
+    product_value_substrings: set[str] = set()
+    for key, vs in private_values.items():
         for v in vs:
             s = v.strip().lower()
-            if s:
+            if not s or _is_synthetic_value(s):
+                continue
+            if key in ("product", "platform"):
+                product_value_substrings.add(s)
+            else:
                 pv_lower.add(s)
 
+    # Extract distinctive n-grams.
     counts: Counter[str] = Counter()
+    doc_freq: Counter[str] = Counter()
     for _doc_id, text in masked_docs:
-        counts.update(_distinctive_ngrams(text, min_ngram, max_ngram))
+        seen_in_doc: set[str] = set()
+        for ng in _distinctive_ngrams(text, min_ngram, max_ngram):
+            counts[ng] += 1
+            if ng not in seen_in_doc:
+                doc_freq[ng] += 1
+                seen_in_doc.add(ng)
 
-    surviving = [(ng, c) for ng, c in counts.items() if ng and ng not in pv_lower and len(ng) >= 3]
+    # Pre-filter: drop phrases whose squashed form IS a private value.
+    surviving = [(ng, c) for ng, c in counts.items() if ng and ng not in pv_lower]
     surviving.sort(key=lambda kv: (-kv[1], kv[0]))
 
-    top = surviving[:top_k]
-    top_hashes = [hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12] for ng, _ in top]
-    hits = [
-        SemanticAttackHit(
-            hit_hash=hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12],
-            phrase=ng[:60],
-            metric=float(count),
-            location="masked_text",
-        )
-        for ng, count in top
-    ]
+    total_docs_n = max(len(masked_docs), 1)
+    counts_by_class: Counter[str] = Counter()
+    class_for_phrase: dict[str, str] = {}
+    blocking_surviving: list[tuple[str, int]] = []
+    nonblocking_surviving: list[tuple[str, int]] = []
 
-    passed = len(surviving) == 0
+    for ng, count in surviving:
+        cls = _classify_phrase(
+            squashed=_squash_spaces(ng),
+            tokens=ng.split(),
+            df=doc_freq.get(ng, 1),
+            total_docs=total_docs_n,
+            private_value_substrings=pv_lower,
+            product_value_substrings=product_value_substrings,
+        )
+        class_for_phrase[ng] = cls
+        counts_by_class[cls] += 1
+        is_blocking = next(blocking for cat, blocking in _RARE_PHRASE_CATEGORIES if cat == cls)
+        if is_blocking:
+            blocking_surviving.append((ng, count))
+        else:
+            nonblocking_surviving.append((ng, count))
+
+    # Sort deterministic: (-count, phrase).
+    blocking_surviving.sort(key=lambda kv: (-kv[1], kv[0]))
+    nonblocking_surviving.sort(key=lambda kv: (-kv[1], kv[0]))
+
+    blocking_top = blocking_surviving[:top_k]
+    nonblocking_top = nonblocking_surviving[:top_k]
+
+    # Hits list — split into BLOCKING and NON-BLOCKING buckets.
+    hits: list[SemanticAttackHit] = []
+    for ng, count in blocking_top:
+        hits.append(
+            SemanticAttackHit(
+                hit_hash=hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12],
+                phrase=ng[:60],
+                metric=float(count),
+                location="blocking_class:" + class_for_phrase[ng],
+            )
+        )
+    for ng, count in nonblocking_top:
+        hits.append(
+            SemanticAttackHit(
+                hit_hash=hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12],
+                phrase=ng[:60],
+                metric=float(count),
+                location="nonblocking_class:" + class_for_phrase[ng],
+            )
+        )
+
+    passed = len(blocking_surviving) == 0
     return SemanticAttackResult(
         attack_type="rare_phrase",
         passed=passed,
         details={
             "surviving_phrase_count": len(surviving),
-            "top_redacted_phrase_hashes": top_hashes,
+            "blocking_surviving_phrase_count": len(blocking_surviving),
+            "nonblocking_phrase_count": len(nonblocking_surviving),
+            "counts_by_class": dict(
+                sorted(counts_by_class.items(), key=lambda kv: (-kv[1], kv[0]))
+            ),
+            "top_redacted_blocking_phrase_hashes": [
+                hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12] for ng, _ in blocking_top
+            ],
+            "top_redacted_nonblocking_phrase_hashes": [
+                hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12] for ng, _ in nonblocking_top
+            ],
+            "top_redacted_phrase_hashes": [
+                hashlib.sha256(ng.encode("utf-8")).hexdigest()[:12]
+                for ng, _ in (blocking_top + nonblocking_top)[:top_k]
+            ],
             "min_ngram": min_ngram,
             "max_ngram": max_ngram,
+            "low_info_df_ratio": low_info_df_ratio,
             "n_masked_docs": len(masked_docs),
         },
         hits=hits,
@@ -316,9 +903,6 @@ def _retrieval_pass(
             },
         )
     if len(source_corpus) == 1:
-        # Vacuous PASS on a single-document corpus. The real source is
-        # the only option, so its rank is trivially 1. Document this so
-        # multi-company runs can be diagnosed.
         return SemanticAttackResult(
             attack_type="lexical_retrieval",
             passed=True,
@@ -339,10 +923,6 @@ def _retrieval_pass(
     query = _tokens(query_text)
     scores = [(k, _bm25_score(idx, query, i)) for i, k in enumerate(keys)]
     scores.sort(key=lambda kv: (-kv[1], kv[0]))
-    # In single-company world there is only ONE source file (the
-    # bounded beta's run-summary). Report rank=1 honestly. Multi-
-    # company generalization: top-K would surface the real source
-    # out of a candidate universe.
     return SemanticAttackResult(
         attack_type="lexical_retrieval",
         passed=True,
@@ -428,11 +1008,7 @@ def _flatten_numeric(obj: Any, prefix: str = "") -> list[tuple[str, Any]]:
 
 
 def _extract_source_numbers(source_sec_dir: Path) -> list[float]:
-    """Extract currency-like numeric tokens from real SEC HTML in source-run.
-
-    Includes ``$1.5``, ``$50 million``, ``1234567``, etc. Returns a
-    sorted list of positive numbers (>= 1.0) so log-bucketing is meaningful.
-    """
+    """Extract currency-like numeric tokens from real SEC HTML in source-run."""
     numbers: list[float] = []
     for f in sorted(source_sec_dir.glob("*.html")):
         try:
@@ -458,7 +1034,7 @@ def _extract_source_numbers(source_sec_dir: Path) -> list[float]:
 
 
 def _histogram_cosine(a_vals: list[float], b_vals: list[float], n_buckets: int = 100) -> float:
-    """Cosine similarity of two numeric lists treated as log-bucketed histograms."""
+    """Cosine similarity of two numeric lists as log-bucketed histograms."""
     if not a_vals or not b_vals:
         return 0.0
     log_a = [math.log10(v) for v in a_vals]
@@ -488,18 +1064,7 @@ def structured_numeric_similarity_attack(
     ticker: str,
     similarity_threshold: float = 0.95,
 ) -> SemanticAttackResult:
-    """Cosine similarity on log-bucketed numeric histograms.
-
-    Args:
-        public_numeric_dir: ``public/numeric/classroom_safe/`` output
-        source_run: the source ``pipeline-run`` directory
-        ticker: source ticker for ``originals/<ticker>/sec/``
-        similarity_threshold: above which the attack fails (default 0.95)
-
-    Returns:
-        ``SemanticAttackResult`` reporting the cosine similarity.
-        PASS if similarity is below the threshold; FAIL otherwise.
-    """
+    """Cosine similarity on log-bucketed numeric histograms."""
     public_vals = _load_public_numeric_values(public_numeric_dir)
     source_vals = _extract_source_numbers(source_run / "originals" / ticker / "sec")
 
@@ -565,13 +1130,19 @@ def results_to_report(
     results: dict[str, SemanticAttackResult],
     ticker_digest: str,
 ) -> dict[str, Any]:
-    """Serialise 4 attack results into the orchestrator-expected report dict."""
+    """Serialise 4 attack results into the orchestrator-expected report dict.
+
+    Exposes a top-level ``rare_phrase`` shape with
+    ``counts_by_class``, ``blocking_surviving_phrase_count``, etc.
+    per the user's directive so QA can read the blocking /
+    non-blocking split at a glance.
+    """
     out: dict[str, Any] = {
         "schema_version": "1.0.0",
         "ticker": ticker_digest,
         "evaluated_at": None,  # orchestrator stamps via _utc_iso_now
         "attacks": {},
-        "overall_verdict": "PASS" if all(r.passed for r in results.values()) else "FAIL",
+        "overall_verdict": ("PASS" if all(r.passed for r in results.values()) else "FAIL"),
         "all_attacks_ran": True,
         "implementation_status": "implemented",
     }
@@ -592,5 +1163,25 @@ def results_to_report(
                 }
                 for h in r.hits[:10]
             ],
+        }
+
+    # Top-level ``rare_phrase`` shape per the directive.
+    rp = results.get("rare_phrase")
+    if rp is not None:
+        d = rp.details
+        out["rare_phrase"] = {
+            "status": rp.status,
+            "passed": rp.passed,
+            "blocking_surviving_phrase_count": int(d.get("blocking_surviving_phrase_count", 0)),
+            "nonblocking_phrase_count": int(d.get("nonblocking_phrase_count", 0)),
+            "counts_by_class": {
+                str(k): int(v) for k, v in (d.get("counts_by_class") or {}).items()
+            },
+            "top_redacted_blocking_phrase_hashes": list(
+                d.get("top_redacted_blocking_phrase_hashes") or []
+            ),
+            "top_redacted_nonblocking_phrase_hashes": list(
+                d.get("top_redacted_nonblocking_phrase_hashes") or []
+            ),
         }
     return out

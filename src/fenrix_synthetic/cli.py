@@ -7,6 +7,14 @@ from typing import Any
 
 import click
 
+# Load .env file at CLI startup (safe: never loads if .env is missing)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 from . import __version__
 from .config import CampaignConfig, load_company_config
 from .pipeline.config import PipelineConfig

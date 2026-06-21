@@ -307,12 +307,52 @@ class ReanonymizeOrchestrator:
             public_root / self.NUMERIC_SAFE_SUBDIR,
             qa_root,
         )
-        # Phase 9 — NVIDIA review (still NOT_RUN in this revision).
-        nvidia_report = _write_stub_report(
-            qa_root / "nvidia_attack_report.json",
-            surfaces=["nvidia_review"],
-            reason="NVIDIA review adapter not implemented in this revision.",
-        )
+        # Phase 9 — NVIDIA 3-pass adversarial review.
+        # Runs when NVIDIA_API_KEY is configured; writes NOT_RUN stub otherwise.
+        # Fail-fast: in final submission mode (allow_incomplete=False),
+        # a missing NVIDIA_API_KEY is a hard error.
+        import os as _os
+
+        nvidia_api_key = _os.environ.get("NVIDIA_API_KEY", "")
+        nvidia_report: dict[str, Any]
+        if not nvidia_api_key and not self.allow_incomplete:
+            raise RuntimeError(
+                "NVIDIA_REQUIRED_BUT_NOT_CONFIGURED: "
+                "final submission mode requires NVIDIA_API_KEY. "
+                "Set the environment variable or use --allow-incomplete for development."
+            )
+        elif nvidia_api_key:
+            try:
+                from fenrix_synthetic.providers.nvidia_review import NVIDIAReviewAdapter
+
+                adapter = NVIDIAReviewAdapter()
+                nvidia_report = adapter.review_batch(
+                    anonymized_dir=public_root / "surrogates" / "sec",
+                    ticker=ctx.ticker,
+                )
+                # Write the full review results
+                nvidia_path = qa_root / "nvidia_attack_report.json"
+                import orjson as _orjson
+
+                nvidia_path.write_bytes(
+                    _orjson.dumps(
+                        nvidia_report,
+                        option=_orjson.OPT_SORT_KEYS | _orjson.OPT_INDENT_2,
+                    )
+                )
+            except Exception:
+                logger.exception("NVIDIA review failed at runtime for %s", ctx.ticker)
+                nvidia_report = _write_stub_report(
+                    qa_root / "nvidia_attack_report.json",
+                    surfaces=["nvidia_review"],
+                    reason="NVIDIA review failed at runtime.",
+                )
+        else:
+            nvidia_report = _write_stub_report(
+                qa_root / "nvidia_attack_report.json",
+                surfaces=["nvidia_review"],
+                reason="NVIDIA_API_KEY not configured.",
+            )
 
         # Phase 9 — release gate evaluation
         gate_payload = self._phase_release_gate(

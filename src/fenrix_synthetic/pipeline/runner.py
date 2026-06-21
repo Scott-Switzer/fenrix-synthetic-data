@@ -100,8 +100,8 @@ class ReleaseGateResult:
     filename_identifier_count: int = 0
     manifest_identifier_count: int = 0
     nvidia_parse_error_count: int = 0
-    nvidia_correct_guess_count: int = 0
-    nvidia_failed_request_count: int = 0
+    nvidia_fail_count: int = 0
+    nvidia_rewrite_count: int = 0
     required_numeric_dataset_failure_count: int = 0
     required_sec_format_failure_count: int = 0
     required_coverage_failure_count: int = 0
@@ -124,8 +124,7 @@ class ReleaseGateResult:
         "filename_identifier_count",
         "manifest_identifier_count",
         "nvidia_parse_error_count",
-        "nvidia_correct_guess_count",
-        "nvidia_failed_request_count",
+        "nvidia_fail_count",
         "required_numeric_dataset_failure_count",
         "required_sec_format_failure_count",
         "required_coverage_failure_count",
@@ -230,8 +229,8 @@ class ReleaseGateResult:
             "filename_identifier_count": self.filename_identifier_count,
             "manifest_identifier_count": self.manifest_identifier_count,
             "nvidia_parse_error_count": self.nvidia_parse_error_count,
-            "nvidia_correct_guess_count": self.nvidia_correct_guess_count,
-            "nvidia_failed_request_count": self.nvidia_failed_request_count,
+            "nvidia_fail_count": self.nvidia_fail_count,
+            "nvidia_rewrite_count": self.nvidia_rewrite_count,
             "required_numeric_dataset_failure_count": self.required_numeric_dataset_failure_count,
             "required_sec_format_failure_count": self.required_sec_format_failure_count,
             "required_coverage_failure_count": self.required_coverage_failure_count,
@@ -411,8 +410,8 @@ class PipelineRunner:
         # ── NVIDIA REVIEW ──
         nvidia_status = "disabled"
         nvidia_parse_errors = 0
-        nvidia_correct_guess_count = 0
-        nvidia_failed_request_count = 0
+        nvidia_fail_count = 0
+        nvidia_rewrite_count = 0
 
         if self.config.enable_nvidia:
             from ..providers.nvidia_review import NVIDIAReviewAdapter
@@ -433,8 +432,8 @@ class PipelineRunner:
                         (
                             nvidia_status,
                             nvidia_parse_errors,
-                            nvidia_correct_guess_count,
-                            nvidia_failed_request_count,
+                            nvidia_fail_count,
+                            nvidia_rewrite_count,
                         ) = self._evaluate_nvidia_result(review)
                         nvidia_path = qa_dir / "nvidia_reviews" / "review_result.json"
                         nvidia_path.parent.mkdir(parents=True, exist_ok=True)
@@ -447,7 +446,7 @@ class PipelineRunner:
                     except Exception as exc:
                         logger.warning("NVIDIA review failed for %s: %s", ticker, exc)
                         nvidia_status = "failed"
-                        nvidia_failed_request_count = 1
+                        nvidia_fail_count = 1
             else:
                 nvidia_status = "not_configured"
                 if self.config.enable_nvidia:
@@ -469,7 +468,7 @@ class PipelineRunner:
             unresolved=unresolved,
             nvidia_status=nvidia_status,
             nvidia_parse_errors=nvidia_parse_errors,
-            nvidia_correct_guess=(nvidia_correct_guess_count > 0),
+            nvidia_correct_guess=(nvidia_fail_count > 0),
             coverage_report=coverage_report,
             sec_archive_path=self.config.sec_archive_path,
             sec_source_mode=self.config.sec_source_mode,
@@ -510,9 +509,9 @@ class PipelineRunner:
             # NVIDIA
             "nvidia_status": nvidia_status,
             "nvidia_parse_errors": nvidia_parse_errors,
-            "nvidia_correct_guess": nvidia_correct_guess_count,
-            "nvidia_correct_guess_count": nvidia_correct_guess_count,
-            "nvidia_failed_request_count": nvidia_failed_request_count,
+            "nvidia_correct_guess": nvidia_fail_count,
+            "nvidia_fail_count": nvidia_fail_count,
+            "nvidia_rewrite_count": nvidia_rewrite_count,
             # Format / numeric
             "required_numeric_dataset_failure_count": numeric_failures,
             "required_sec_format_failure_count": format_failures,
@@ -773,53 +772,53 @@ class PipelineRunner:
     def _evaluate_nvidia_result(
         review: dict[str, Any],
     ) -> tuple[str, int, int, int]:
-        """Evaluate NVIDIA review results.
+        """Evaluate NVIDIA 3-pass review results.
 
-        Returns (status, parse_error_count, correct_guess_count, failed_request_count).
+        Returns (status, parse_error_count, fail_count, rewrite_count).
 
         Status MUST be explicit "passed" for release — never "completed".
         Blocks release if:
         - result list is empty
         - any parse error exists
+        - any gate_verdict is FAIL
         - any request fails
-        - any correct guess occurs
         """
         parse_errors = 0
-        correct_guesses = 0
-        failed_requests = 0
+        fail_count = 0
+        rewrite_count = 0
         attacker_results = review.get("attacker_results", [])
 
         # Empty result list blocks release
         if not attacker_results:
-            return "failed_empty", 1, 0, 1
+            return "failed_empty", 1, 1, 0
 
         for ar in attacker_results:
-            result = ar.get("result", {})
-            if result.get("parse_error"):
+            # New 3-pass shape: flat dict with attacker, gate_verdict, rewrite_applied
+            attacker = ar.get("attacker", {})
+            if attacker.get("parse_error"):
                 parse_errors += 1
-            if result.get("correct_guess"):
-                correct_guesses += 1
-            if result.get("confidence") is not None and result["confidence"] < 0:
-                failed_requests += 1
+            verdict = ar.get("gate_verdict", "PASS")
+            if verdict == "FAIL":
+                fail_count += 1
+            if ar.get("rewrite_applied"):
+                rewrite_count += 1
 
-        # Count top-level failures
+        # Count top-level parse errors
         if review.get("parse_errors", 0) > 0:
             parse_errors = max(parse_errors, review["parse_errors"])
 
         # Check reviewed sample count vs configured requirement
         samples_reviewed = review.get("samples_reviewed", 0)
         if samples_reviewed < 1:
-            return "failed_no_samples", parse_errors + 1, correct_guesses, failed_requests + 1
+            return "failed_no_samples", parse_errors + 1, fail_count + 1, rewrite_count
 
-        if parse_errors > 0 and correct_guesses > 0:
-            return "failed_both", parse_errors, correct_guesses, failed_requests
+        if parse_errors > 0 and fail_count > 0:
+            return "failed_both", parse_errors, fail_count, rewrite_count
         if parse_errors > 0:
-            return "failed_parse", parse_errors, correct_guesses, failed_requests
-        if correct_guesses > 0:
-            return "failed_correct_guess", parse_errors, correct_guesses, failed_requests
-        if failed_requests > 0:
-            return "failed_requests", parse_errors, correct_guesses, failed_requests
-        return "passed", 0, 0, 0
+            return "failed_parse", parse_errors, fail_count, rewrite_count
+        if fail_count > 0:
+            return "failed_correct_guess", parse_errors, fail_count, rewrite_count
+        return "passed", 0, 0, rewrite_count
 
     # ── ZIP export with staging and scanning ─────────────────────────
 
@@ -1111,8 +1110,8 @@ class PipelineRunner:
                 "manifest_identifier_count": ts.get("manifest_identifier_count", 0),
                 "nvidia_status": ts.get("nvidia_status"),
                 "nvidia_parse_errors": ts.get("nvidia_parse_errors", 0),
-                "nvidia_correct_guess_count": ts.get("nvidia_correct_guess_count", 0),
-                "nvidia_failed_request_count": ts.get("nvidia_failed_request_count", 0),
+                "nvidia_fail_count": ts.get("nvidia_fail_count", 0),
+                "nvidia_rewrite_count": ts.get("nvidia_rewrite_count", 0),
                 "required_numeric_dataset_failure_count": ts.get(
                     "required_numeric_dataset_failure_count", 0
                 ),
@@ -1166,8 +1165,7 @@ def _merge_gate(gate: ReleaseGateResult, ticker_summary: dict[str, Any]) -> None
     gate.filename_identifier_count += ticker_summary.get("filename_identifier_count", 0)
     gate.manifest_identifier_count += ticker_summary.get("manifest_identifier_count", 0)
     gate.nvidia_parse_error_count += ticker_summary.get("nvidia_parse_errors", 0)
-    gate.nvidia_correct_guess_count += ticker_summary.get("nvidia_correct_guess_count", 0)
-    gate.nvidia_failed_request_count += ticker_summary.get("nvidia_failed_request_count", 0)
+    gate.nvidia_fail_count += ticker_summary.get("nvidia_fail_count", 0)
     gate.required_numeric_dataset_failure_count += ticker_summary.get(
         "required_numeric_dataset_failure_count", 0
     )

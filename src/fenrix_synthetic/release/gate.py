@@ -69,6 +69,9 @@ def evaluate_release_gate(
     provenance_complete: bool = True,
     private_paths_found: list[str] | None = None,
     unhandled_errors: list[str] | None = None,
+    nvidia_decision: str = "NOT_RUN",
+    nvidia_review_implemented: bool = False,
+    nvidia_final_submission: bool = False,
     policy: dict[str, Any] | None = None,
     evidence_manifest: EvidenceManifest | None = None,
 ) -> ReleaseGateResult:
@@ -348,6 +351,40 @@ def evaluate_release_gate(
             passed=c11_passed,
             is_blocking=True,
             evidence={"errors": ue},
+        )
+    )
+
+    # Condition 12: NVIDIA review implemented
+    c12_passed = nvidia_review_implemented
+    c12_blocking = nvidia_final_submission
+    conditions.append(
+        GateCondition(
+            condition_id="nvidia_review_implemented",
+            description=(
+                "NVIDIA review is implemented"
+                if nvidia_final_submission
+                else "NVIDIA review (optional in dev mode)"
+            ),
+            passed=c12_passed,
+            is_blocking=c12_blocking,
+            evidence={
+                "nvidia_decision": nvidia_decision,
+                "implemented": nvidia_review_implemented,
+                "final_submission": nvidia_final_submission,
+            },
+        )
+    )
+
+    # Condition 13: NVIDIA decision
+    c13_passed = nvidia_decision not in ("FAIL", "NOT_RUN")
+    c13_blocking = nvidia_final_submission
+    conditions.append(
+        GateCondition(
+            condition_id="nvidia_decision",
+            description=f"NVIDIA review decision: {nvidia_decision}",
+            passed=c13_passed,
+            is_blocking=c13_blocking,
+            evidence={"nvidia_decision": nvidia_decision},
         )
     )
 

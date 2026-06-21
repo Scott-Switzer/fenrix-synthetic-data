@@ -187,6 +187,7 @@ class TestValidation:
             output_root=tmp_path / "out",
             limit_forms=None,
             limit_news=5,
+            allow_incomplete=True,
         )
         with pytest.raises(InvalidSourceRunError):
             o.validate()
@@ -198,6 +199,7 @@ class TestValidation:
             output_root=tmp_path / "out",
             limit_forms=None,
             limit_news=5,
+            allow_incomplete=True,
         )
         with pytest.raises(InvalidSourceRunError):
             o.validate()
@@ -212,6 +214,7 @@ class TestValidation:
             output_root=tmp_path / "out",
             limit_forms=None,
             limit_news=5,
+            allow_incomplete=True,
         )
         with pytest.raises(InvalidSourceRunError, match="multiple tickers"):
             o.validate()
@@ -228,6 +231,7 @@ class TestRunHappyPath:
             output_root=out,
             limit_forms="10-K:1,10-Q:1,8-K:1",
             limit_news=5,
+            allow_incomplete=True,
         )
         o.run()
 
@@ -286,6 +290,7 @@ class TestRunHappyPath:
             output_root=out,
             limit_forms=None,
             limit_news=2,
+            allow_incomplete=True,
         )
         o.run()
         gate = json.loads((out / "qa" / "release_gate.json").read_text())
@@ -303,6 +308,7 @@ class TestCLISmoke:
             output_root=tmp_path / "out3",
             limit_forms=None,
             limit_news=5,
+            allow_incomplete=True,
         )
         run_result = o.run()
         assert run_result["ticker"] == "AAA"
@@ -399,6 +405,7 @@ class TestLimitEnforcement:
             output_root=out,
             limit_forms="10-K:1",
             limit_news=0,
+            allow_incomplete=True,
         )
         result = o.run()
 
@@ -431,6 +438,7 @@ class TestLimitEnforcement:
             output_root=out,
             limit_forms="10-K:5",
             limit_news=3,
+            allow_incomplete=True,
         )
         o.run()
         sec_dir = out / "public" / "surrogates" / "sec"
