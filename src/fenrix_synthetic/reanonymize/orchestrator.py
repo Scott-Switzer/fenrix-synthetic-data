@@ -45,6 +45,7 @@ from ..anonymization.registry_load import (
     load_atlas,
 )
 from ..anonymization.text_anonymizer import TextAnonymizer
+from ..attacks.semantic_attacks import results_to_report, run_semantic_attack_suite
 from ..attacks.text_attacks import exact_identity_scan, filename_and_metadata_scan
 from ..identity.pseudonym_allowlist import (
     SAFE_PSEUDONYM_ALLOWLIST_SIZE,
@@ -127,11 +128,19 @@ class ReanonymizeOrchestrator:
         output_root: Path,
         limit_forms: str | None,
         limit_news: int,
+        allow_incomplete: bool = False,
     ) -> None:
+        # ``allow_incomplete`` is a forward-compat operator signal: the
+        # orchestrator already always writes the release gate with an
+        # honest verdict (PASS / FAIL / INCOMPLETE) and never blindly
+        # claims safety; this flag records intent without changing the
+        # internal behavior. Future revisions can branch on it to skip
+        # non-critical post-processing for in-progress runs.
         self.source_run = source_run.resolve()
         self.output_root = output_root.resolve()
         self.limit_forms_raw = limit_forms
         self.limit_news = max(0, int(limit_news))
+        self.allow_incomplete = bool(allow_incomplete)
         self.form_limits = parse_form_limits(limit_forms)
         # Populated by ``_phase_atlas_load`` and consumed by
         # Phase 5 (``TextAnonymizer``) + Phase 6 (``_phase_direct_privacy``).
@@ -146,6 +155,9 @@ class ReanonymizeOrchestrator:
         self._post_mask_hits: int = 0
         # Phase 1.55 — coverage report from DirectIdentifierAtlasBuilder.
         self._harvest_report: AtlasHarvestReport | None = None
+        # Semantic privacy attack results (Phase 8), initialized so a
+        # conditional reporter never AttributeErrors.
+        self._semantic_report: dict[str, Any] | None = None
 
     # ── Phase 1: Validate source-run ─────────────────────────────────
 
@@ -283,12 +295,19 @@ class ReanonymizeOrchestrator:
             qa_root,
         )
 
-        # Phase 8 — write structural stubs for unimplemented gates
-        semantic_report = _write_stub_report(
-            qa_root / "semantic_privacy_report.json",
-            surfaces=["semantic_fingerprint", "llm_attack"],
-            reason="Semantic privacy / LLM attacks not implemented in this revision.",
+        # Phase 8 — semantic privacy attacks (4 required: rare phrase,
+        # BM25 lexical retrieval, multi-document, structured numeric
+        # similarity). The legacy stub is gone: this phase now writes
+        # ``qa/semantic_privacy_report.json`` with an honest verdict
+        # (PASS or FAIL) rather than a forever-INCOMPLETE marker.
+        semantic_report = self._phase_semantic_privacy(
+            ctx,
+            public_surrogates / self.SEC_SURROGATE_SUBDIR,
+            public_surrogates / self.NEWS_SURROGATE_SUBDIR,
+            public_root / self.NUMERIC_SAFE_SUBDIR,
+            qa_root,
         )
+        # Phase 9 — NVIDIA review (still NOT_RUN in this revision).
         nvidia_report = _write_stub_report(
             qa_root / "nvidia_attack_report.json",
             surfaces=["nvidia_review"],
@@ -1061,6 +1080,73 @@ class ReanonymizeOrchestrator:
         )
         return utility_payload
 
+    def _phase_semantic_privacy(
+        self,
+        ctx: RunContext,
+        sec_public_dir: Path,
+        news_public_dir: Path,
+        numeric_dir: Path,
+        qa_dir: Path,
+    ) -> dict[str, Any]:
+        """Phase 8 — semantic privacy attacks (4 attack suite).
+
+        Runs the rare phrase attack, BM25 lexical retrieval attack,
+        multi-document retrieval attack, and structured numeric
+        similarity attack against the masked surrogates + numeric
+        package. Writes ``qa/semantic_privacy_report.json`` and
+        returns the same dict for ``_phase_release_gate`` to consume.
+
+        Overall verdict rules (also embedded in
+        ``results_to_report``):
+
+        - All 4 passed: ``PASS``
+        - Any 1 failed: ``FAIL``
+        - Suite errored out: ``NOT_RUN`` (downstream INCOMPLETE)
+        """
+        try:
+            from ..anonymization.registry_load import build_private_values_dict
+
+            private_values = build_private_values_dict(
+                self._preloaded_registry, fallback_ticker=ctx.ticker
+            )
+            results = run_semantic_attack_suite(
+                sec_public_dir=sec_public_dir,
+                news_public_dir=news_public_dir,
+                numeric_dir=numeric_dir,
+                source_run=ctx.source_run,
+                ticker=ctx.ticker,
+                private_values=private_values,
+            )
+            implementation_status = "implemented"
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Semantic attack suite failed for %s: %s",
+                ctx.ticker,
+                exc,
+                exc_info=True,
+            )
+            results = {}
+            implementation_status = "implementation_failed"
+
+        ticker_digest = "syn_" + hashlib.sha256(ctx.ticker.encode("utf-8")).hexdigest()[:8]
+        report = results_to_report(results, ticker_digest)
+        report["evaluated_at"] = _utc_iso_now()
+        report["implementation_status"] = implementation_status
+        if implementation_status != "implemented":
+            report["overall_verdict"] = "NOT_RUN"
+
+        (qa_dir / "semantic_privacy_report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        logger.info(
+            "Semantic attack suite complete for %s: overall_verdict=%s",
+            ctx.ticker,
+            report.get("overall_verdict"),
+        )
+        self._semantic_report = report
+        return report
+
     def _phase_release_gate(
         self,
         ctx: RunContext,
@@ -1086,9 +1172,15 @@ class ReanonymizeOrchestrator:
             if a.get("attack_type") == "filename_metadata"
         )
 
-        # Semantic and NVIDIA are STUBS — explicitly declared as
-        # INCOMPLETE so the gate returns REVIEW_REQUIRED, not PASS.
-        semantic_incomplete = semantic_report.get("status") == "INCOMPLETE"
+        # Semantic attacks are IMPLEMENTED in this revision (rare
+        # phrase + BM25 retrieval + multi-document + structured
+        # numeric similarity); only NVIDIA review remains a single
+        # always-``NOT_RUN`` surface. ``semantic_incomplete`` and
+        # ``nvidia_incomplete`` feed the legacy downstream plumbing
+        # (conditions_payload + stubs_enforced + beta_status); the
+        # four explicit decision fields below are the canonical
+        # surfaces for new consumers.
+        semantic_incomplete = False
         nvidia_incomplete = nvidia_report.get("status") == "INCOMPLETE"
 
         gate: ReleaseGateResult = evaluate_release_gate(
@@ -1307,7 +1399,10 @@ class ReanonymizeOrchestrator:
             or critical_warnings_count > 0
         ):
             beta_status = "INCOMPLETE"
-        release_safe = beta_status == "PASS"
+        # ``release_safe`` is now driven explicitly by the four-decision
+        # rule table below; assign it as ``_release_safe`` via the
+        # inline computation in the return block to keep a single
+        # source of truth for ``safe in [true, false]``.
 
         # Recompute gate_hash over the FULL conditions list so it is
         # reproducible by construction across runs.
@@ -1334,13 +1429,53 @@ class ReanonymizeOrchestrator:
 
         _source_hash = _hashlib.sha256(str(ctx.source_run).encode("utf-8")).hexdigest()[:16]
 
+        # Four-decision naming per the user's directive. Consumers
+        # should rely on ``overall_release_decision`` rather than the
+        # legacy ``decision`` field; ``decision`` is preserved as a
+        # back-compat alias so existing scripts reading it keep
+        # working. Rules:
+        #   direct fail               -> FAIL
+        #   direct pass + sem fail    -> FAIL
+        #   direct pass + sem not run -> INCOMPLETE
+        #   direct pass + sem pass + nvidia not run -> INCOMPLETE
+        #   all required gates pass   -> PASS (release_safe true)
+        direct_privacy_decision = "FAIL" if exact_hits > 0 else "PASS"
+        sem_verdict = semantic_report.get("overall_verdict", "NOT_RUN")
+        semantic_privacy_decision = sem_verdict if sem_verdict in ("PASS", "FAIL") else "NOT_RUN"
+        nvidia_decision_label = "NOT_RUN"
+        if direct_privacy_decision == "FAIL":
+            overall_release_decision = "FAIL"
+        elif semantic_privacy_decision == "FAIL":
+            overall_release_decision = "FAIL"
+        elif (
+            direct_privacy_decision == "PASS"
+            and semantic_privacy_decision == "PASS"
+            and nvidia_decision_label == "PASS"
+        ):
+            overall_release_decision = "PASS"
+        elif semantic_privacy_decision == "NOT_RUN":
+            overall_release_decision = "INCOMPLETE"
+        elif nvidia_decision_label != "NOT_RUN":
+            overall_release_decision = "FAIL"
+        else:  # semantic=PASS, nvidia=NOT_RUN
+            overall_release_decision = "INCOMPLETE"
+        # Single source of truth for ``release_safe``: it follows
+        # ``overall_release_decision`` exactly, not the legacy
+        # ``beta_status``. ``beta_status`` stays binary
+        # (PASS|INCOMPLETE) for back-compat with prior consumers.
+        _release_safe = overall_release_decision == "PASS"
+
         return {
             "schema_version": "1.0.0",
             "ticker": "syn_" + hashlib.sha256(ctx.ticker.encode("utf-8")).hexdigest()[:8],
             "source_hash": _source_hash,
-            "decision": gate.decision.value,
+            "direct_privacy_decision": direct_privacy_decision,
+            "semantic_privacy_decision": semantic_privacy_decision,
+            "nvidia_decision": nvidia_decision_label,
+            "overall_release_decision": overall_release_decision,
+            "decision": overall_release_decision,  # back-compat alias
             "beta_status": beta_status,
-            "release_safe": release_safe,
+            "release_safe": _release_safe,
             "blocking_failures": gate.blocking_failures,
             "warnings": gate.warnings,
             "stubs_enforced": [

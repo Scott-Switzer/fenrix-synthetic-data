@@ -259,9 +259,21 @@ class TestRunHappyPath:
         gate = json.loads((qa_root / "release_gate.json").read_text())
         assert gate["beta_status"] == "INCOMPLETE"
         assert gate["release_safe"] is False
+        assert (
+            "stubs_enforced" in gate
+        )  # release_gate.json has the mandated keys. ``semantic`` is no
+        # longer in ``stubs_enforced`` because Phase 8 runs the real
+        # 4-attack suite; only NVIDIA review remains stubbed.
+        gate = json.loads((qa_root / "release_gate.json").read_text())
+        assert gate["beta_status"] == "INCOMPLETE"
+        assert gate["release_safe"] is False
         assert "stubs_enforced" in gate
-        assert "semantic" in gate["stubs_enforced"]
         assert "nvidia" in gate["stubs_enforced"]
+        assert "semantic" not in gate["stubs_enforced"]
+        # Four-decision naming fields are present and consistent.
+        assert gate["direct_privacy_decision"] == "PASS"
+        assert gate["nvidia_decision"] == "NOT_RUN"
+        assert gate["overall_release_decision"] in ("PASS", "FAIL", "INCOMPLETE")
 
         # Limits were honoured — news surrogates slice to <= limit_news
         news_files = list(news_dir.glob("*_surrogate.md"))

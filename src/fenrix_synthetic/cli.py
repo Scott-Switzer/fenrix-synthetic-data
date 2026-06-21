@@ -2237,6 +2237,17 @@ def boundary_diag(ctx: click.Context) -> None:
     type=int,
     help="At most this many news articles are processed.",
 )
+@click.option(
+    "--allow-incomplete",
+    is_flag=True,
+    default=False,
+    help=(
+        "Permit the orchestrator to write the release gate even when "
+        "semantic / NVIDIA surfaces are NOT_RUN. The orchestrator already "
+        "always writes the gate; this flag is a forward-compat signal for "
+        "operators who want the run to surface INCOMPLETE rather than fail."
+    ),
+)
 @click.pass_context
 def reanonymize_run(
     ctx: click.Context,
@@ -2244,6 +2255,7 @@ def reanonymize_run(
     output_root: Path,
     limit_forms: str | None,
     limit_news: int,
+    allow_incomplete: bool,
 ) -> None:
     """Re-run anonymization on a prior ``pipeline-run`` and write the release gate.
 
@@ -2277,6 +2289,7 @@ def reanonymize_run(
             output_root=output_root,
             limit_forms=limit_forms,
             limit_news=limit_news,
+            allow_incomplete=allow_incomplete,
         )
         result = orchestrator.run()
     except InvalidSourceRunError as exc:
