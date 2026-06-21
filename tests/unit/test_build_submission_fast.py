@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -84,3 +85,36 @@ def test_missing_nvidia_key_continues_as_incomplete(monkeypatch) -> None:  # typ
 
     assert result["status"] == "INCOMPLETE"
     assert result["decision"] == "NOT_RUN"
+
+
+def test_public_metadata_uses_pseudonymized_path_ids(tmp_path: Path) -> None:
+    builder = load_builder()
+    write_public_shell(tmp_path, builder)
+    result = builder.TickerResult(
+        ticker="CL",
+        company_id="COMPANY_001",
+        ticker_id="TICKER_001",
+        cik_id="CIK_001",
+        cik_resolved=True,
+        metrics_status="OK",
+        sec_status="OK",
+        news_status="OK",
+        residual_status="PASS",
+        nvidia_status="INCOMPLETE",
+        artifacts={"metrics_files": 1},
+        source_failures=[],
+    )
+
+    builder.write_run_summary(tmp_path, [result])
+    builder.write_artifact_inventory(tmp_path, [result])
+    builder.write_checksums(tmp_path, [result])
+
+    public_metadata = "\n".join(
+        [
+            (tmp_path / "run_summary.json").read_text(encoding="utf-8"),
+            (tmp_path / "artifact_inventory.csv").read_text(encoding="utf-8"),
+            (tmp_path / "checksums.sha256").read_text(encoding="utf-8"),
+        ]
+    )
+    assert not re.search(r"(?<![A-Za-z0-9_])CL(?![A-Za-z0-9_])", public_metadata)
+    assert "TICKER_001" in public_metadata

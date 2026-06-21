@@ -1237,9 +1237,9 @@ def write_docs(root: Path, results: Sequence[TickerResult]) -> None:
         "README.md": """# FENRIX 8-Company Anonymized Submission
 
 This bundle is a deterministic, classroom-oriented anonymized artifact built
-from eight public-company data collection attempts. It is not a mathematical
-anonymity guarantee and should not be described as release-safe against a
-motivated semantic re-identification attack.
+from eight public-company data collection attempts. It is not a mathematical anonymity guarantee
+and should not be described as release-safe against a motivated semantic
+re-identification attack.
 
 The package contains anonymized metrics, bounded SEC excerpts, news summaries,
 QA reports, checksums, and inventory metadata. Source material and private
@@ -1294,15 +1294,26 @@ configured or the provider fails.
 This artifact preserves educational utility, not anonymity. Numeric patterns,
 business descriptions, and public filing structure can still be identifying.
 
-The residual scan is literal-only. It does not detect semantic clues. NVIDIA QA
-is bounded to short samples and is allowed to be incomplete. ZIP creation is not
+The residual scan is literal-only. It does not detect semantic clues. NVIDIA QA is bounded
+to short samples and is allowed to be incomplete. ZIP creation is not
 blocked by imperfect semantic anonymity.
 
 No full-filing model rewrite is performed.
 """,
     }
+    attempted = ", ".join(result.ticker_id for result in results)
+    completed = ", ".join(
+        result.ticker_id
+        for result in results
+        if result.metrics_status != "FAIL"
+        or result.sec_status != "FAIL"
+        or result.news_status != "FAIL"
+    )
     summary_lines = [
         "# Run Summary",
+        "",
+        f"Attempted tickers: {attempted}",
+        f"Completed tickers: {completed}",
         "",
         "| Company | Metrics | SEC | News | Residual | NVIDIA |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -1401,26 +1412,59 @@ def source_failures_payload(results: Sequence[TickerResult]) -> list[dict[str, s
     failures: list[dict[str, str]] = []
     for result in results:
         for failure in result.source_failures:
-            failures.append(dataclasses.asdict(failure))
+            failures.append(
+                {
+                    "company_id": result.company_id,
+                    "ticker_id": result.ticker_id,
+                    "source": failure.source,
+                    "status": failure.status,
+                    "detail": failure.detail,
+                }
+            )
     return failures
 
 
 def write_run_summary(root: Path, results: Sequence[TickerResult]) -> None:
+    per_ticker = [
+        {
+            "company_id": result.company_id,
+            "ticker_id": result.ticker_id,
+            "cik_id": result.cik_id,
+            "cik_resolved": result.cik_resolved,
+            "metrics_status": result.metrics_status,
+            "sec_status": result.sec_status,
+            "news_status": result.news_status,
+            "residual_status": result.residual_status,
+            "nvidia_status": result.nvidia_status,
+            "artifacts": result.artifacts,
+            "source_failures": [
+                {
+                    "company_id": result.company_id,
+                    "ticker_id": result.ticker_id,
+                    "source": failure.source,
+                    "status": failure.status,
+                    "detail": failure.detail,
+                }
+                for failure in result.source_failures
+            ],
+        }
+        for result in results
+    ]
     write_json(
         root / "run_summary.json",
         {
             "schema_version": "1.0",
             "run_folder": root.name,
             "generated_at": now_utc(),
-            "tickers_attempted": [result.ticker for result in results],
+            "tickers_attempted": [result.ticker_id for result in results],
             "tickers_completed": [
-                result.ticker
+                result.ticker_id
                 for result in results
                 if result.metrics_status != "FAIL"
                 or result.sec_status != "FAIL"
                 or result.news_status != "FAIL"
             ],
-            "per_ticker": [dataclasses.asdict(result) for result in results],
+            "per_ticker": per_ticker,
             "source_failures": source_failures_payload(results),
             "notes": [
                 "ZIP excludes source folders and private maps.",
@@ -1445,6 +1489,14 @@ def iter_public_files(root: Path) -> Iterable[Path]:
                 yield path
 
 
+def public_reference(rel: str, results: Sequence[TickerResult]) -> str:
+    ref = rel
+    for result in results:
+        ref = ref.replace(f"anonymized/{result.ticker}/", f"anonymized/{result.ticker_id}/")
+        ref = ref.replace(f"qa/{result.ticker}_", f"qa/{result.ticker_id}_")
+    return ref
+
+
 def should_exclude_from_zip(rel: str) -> bool:
     if rel.startswith(("originals/", "private_maps/", "smoke_excerpts/", "exports/")):
         return True
@@ -1458,30 +1510,30 @@ def should_exclude_from_zip(rel: str) -> bool:
     return False
 
 
-def write_artifact_inventory(root: Path) -> None:
+def write_artifact_inventory(root: Path, results: Sequence[TickerResult]) -> None:
     rows: list[dict[str, str]] = []
     for path in iter_public_files(root):
         rel = path.relative_to(root).as_posix()
         rows.append(
             {
-                "relative_path": rel,
+                "public_path_id": public_reference(rel, results),
                 "size_bytes": str(path.stat().st_size),
                 "sha256": sha256_bytes(path.read_bytes()),
             }
         )
     with (root / "artifact_inventory.csv").open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["relative_path", "size_bytes", "sha256"])
+        writer = csv.DictWriter(fh, fieldnames=["public_path_id", "size_bytes", "sha256"])
         writer.writeheader()
         writer.writerows(rows)
 
 
-def write_checksums(root: Path) -> None:
+def write_checksums(root: Path, results: Sequence[TickerResult]) -> None:
     lines = []
     for path in iter_public_files(root):
         rel = path.relative_to(root).as_posix()
         if rel == "checksums.sha256":
             continue
-        lines.append(f"{sha256_bytes(path.read_bytes())}  {rel}")
+        lines.append(f"{sha256_bytes(path.read_bytes())}  {public_reference(rel, results)}")
     write_text(root / "checksums.sha256", "\n".join(lines) + "\n")
 
 
@@ -1570,8 +1622,8 @@ def build_submission(
     write_qa_summaries(output_root, results)
     write_docs(output_root, results)
     write_run_summary(output_root, results)
-    write_artifact_inventory(output_root)
-    write_checksums(output_root)
+    write_artifact_inventory(output_root, results)
+    write_checksums(output_root, results)
     zip_path = package_zip(output_root)
     validation = validate_zip(zip_path)
     write_json(
