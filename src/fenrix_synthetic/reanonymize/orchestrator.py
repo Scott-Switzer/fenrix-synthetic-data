@@ -46,12 +46,22 @@ from ..anonymization.registry_load import (
 )
 from ..anonymization.text_anonymizer import TextAnonymizer
 from ..attacks.text_attacks import exact_identity_scan, filename_and_metadata_scan
+from ..identity.pseudonym_allowlist import (
+    SAFE_PSEUDONYM_ALLOWLIST_SIZE,
+    allowlist_human_readable,
+    is_pseudonym_suppression_eligible,
+    safe_pseudonym_patterns,
+)
 from ..release.gate import (
     ReleaseDecision,
     ReleaseGateResult,
     evaluate_release_gate,
 )
 from ..utility.unstructured import evaluate_unstructured_utility
+from .atlas_builder import (
+    AtlasHarvestReport,
+    DirectIdentifierAtlasBuilder,
+)
 from .limits import apply_form_limits, infer_form, parse_form_limits
 
 logger = logging.getLogger(__name__)
@@ -133,6 +143,8 @@ class ReanonymizeOrchestrator:
         self._pre_replacement_count: int = 0
         # Captured from Phase 6 scan for the release_gate.json.
         self._post_mask_hits: int = 0
+        # Phase 1.55 — coverage report from DirectIdentifierAtlasBuilder.
+        self._harvest_report: AtlasHarvestReport | None = None
 
     # ── Phase 1: Validate source-run ─────────────────────────────────
 
@@ -206,6 +218,13 @@ class ReanonymizeOrchestrator:
         ctx = self.validate()
 
         qa_root = self.output_root / self.QA_ROOT
+        # Phase 1.55 — harvest & write coverage BEFORE registry load.
+        # On reload: builder MAY augment ``private_maps/<TICKER>/identity_atlas.yaml``
+        # with conservative regex + deterministic finds so the
+        # subsequent load_atlas sees the merged atlas; even when it
+        # does not, the harvest report itself gates the release on
+        # ``critical_warnings_count == 0`` (blocker 4).
+        self._phase_atlas_build(ctx, qa_root)
         # Phase 1.5 — load the registry BEFORE the public/ mkdir block.
         # If the loader reports ``blocking = True`` we MUST fail closed
         # so a downstream consumer can never scrape un-masked surrogates
@@ -316,6 +335,150 @@ class ReanonymizeOrchestrator:
         }
 
     # ── Phase helpers ────────────────────────────────────────────────
+
+    def _phase_atlas_build(self, ctx: RunContext, qa_root: Path) -> None:
+        """Phase 1.55 — harvest direct identifiers + write coverage report.
+
+        Runs BEFORE ``_phase_atlas_load`` so the loader MAY pick up extra
+        entries if the builder decided to merge. Either way, the
+        coverage report is always emitted so the release gate has an
+        explicit per-type count + warning level. ``critical_warnings``
+        (e.g. ``aliases_built == 0`` or ``<= 6``) BLOCK the release.
+        """
+        qa_root.mkdir(parents=True, exist_ok=True)
+        builder = DirectIdentifierAtlasBuilder(
+            ticker=ctx.ticker,
+            source_run=ctx.source_run,
+        )
+        report = builder.harvest()
+        self._harvest_report = report
+
+        coverage_path = qa_root / "direct_identifier_coverage_report.json"
+        coverage_path.write_text(
+            json.dumps(report.to_report(), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        # Pseudonym allowlist metadata so a downstream reviewer can
+        # audit which substrings the scanner ignored. We do NOT
+        # write the patterns into the public tree; the audit doc
+        # lives under private/ for transparency.
+        audit_path = self.output_root / ctx.ticker / "pseudonym_allowlist_report.json"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "ticker": ctx.ticker,
+                    "allowlist_size": SAFE_PSEUDONYM_ALLOWLIST_SIZE,
+                    "human_readable": allowlist_human_readable(),
+                    "audit_logged_at": _utc_iso_now(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        if report.coverage_warnings:
+            critical = [w for w in report.coverage_warnings if w.get("level") == "critical"]
+            logger.warning(
+                "Atlas coverage produced %d warning(s); %d critical for %s",
+                len(report.coverage_warnings),
+                len(critical),
+                ctx.ticker,
+            )
+
+        # Code-reviewer #3: MERGE harvested entries back into
+        # ``identity_atlas.yaml`` so ``load_atlas`` (Phase 1.5) sees
+        # them on the SAME run. ``private_maps`` is gitignored, so
+        # writing back is safe and reproducible. Preserves existing
+        # human-curated entries.
+        self._merge_harvest_into_atlas_yaml(report, ctx)
+
+        # The load_atlas step will raise RuntimeError when
+        # ``aliases_loaded == 0``, which is the right fail-closed
+        # contract. We do NOT raise here so the harvest report is
+        # always inspected before that fires.
+
+    def _merge_harvest_into_atlas_yaml(self, report: AtlasHarvestReport, ctx: RunContext) -> None:
+        """Merge harvested entities + aliases into identity_atlas.yaml.
+
+        Preserves every existing human-curated entry (no overwrite,
+        no dedup-against-curated that would delete real curation).
+        Source-run ``private_maps`` is gitignored, so writing back is
+        safe and reproducible.
+        """
+        if report.aliases_built == 0:
+            return
+
+        atlas_path = ctx.source_run / "private_maps" / ctx.ticker / "identity_atlas.yaml"
+        if not atlas_path.is_file():
+            return
+
+        try:
+            import yaml
+
+            data = yaml.safe_load(atlas_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read existing atlas YAML for merge: %s", exc)
+            return
+        if not isinstance(data, dict):
+            data = {}
+
+        existing_entity_ids = {e.get("entity_id") for e in (data.get("entities") or [])}
+        existing_alias_ids = {a.get("alias_id") for a in (data.get("aliases") or [])}
+
+        counter = 1
+        merged_entities = 0
+        merged_aliases = 0
+        for etype, values in sorted(report.buckets.items()):
+            for value in sorted(values):
+                entity_id = f"harvest_{etype}_{counter:04d}"
+                if entity_id in existing_entity_ids:
+                    counter += 1
+                    continue
+                data.setdefault("entities", []).append(
+                    {
+                        "entity_id": entity_id,
+                        "entity_type": etype,
+                        "canonical_private_value": value,
+                    }
+                )
+                merged_entities += 1
+                alias_id = f"harvest_{etype}_a{counter:04d}"
+                if alias_id in existing_alias_ids:
+                    counter += 1
+                    continue
+                data.setdefault("aliases", []).append(
+                    {
+                        "alias_id": alias_id,
+                        "canonical_entity_id": entity_id,
+                        "private_alias_value": value,
+                        "entity_type": etype,
+                        "match_policy": "literal",
+                    }
+                )
+                merged_aliases += 1
+                counter += 1
+
+        if merged_entities or merged_aliases:
+            try:
+                with atlas_path.open("w", encoding="utf-8") as fh:
+                    yaml.safe_dump(
+                        data,
+                        fh,
+                        sort_keys=False,
+                        allow_unicode=True,
+                        default_flow_style=False,
+                    )
+                logger.info(
+                    "Merged %d harvested entities + %d aliases into %s",
+                    merged_entities,
+                    merged_aliases,
+                    atlas_path.name,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not write merged atlas YAML: %s", exc)
 
     def _phase_atlas_load(self, ctx: RunContext, qa_root: Path) -> None:
         """Phase 1.5 — load the identity atlas and fail-closed on zero aliases.
@@ -496,7 +659,11 @@ class ReanonymizeOrchestrator:
                 text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            combined_chunks.append((md.stem, text))
+            try:
+                rel = md.relative_to(self.output_root).as_posix()
+            except ValueError:
+                rel = md.name
+            combined_chunks.append((rel, text))
 
         # The private-values payload now comes from the SAME registry
         # Phase 1.5 loaded. Masker and scanner use the exact same set
@@ -548,11 +715,123 @@ class ReanonymizeOrchestrator:
         # nothing was replaced" is vacuous PASS, not a blocker).
         pre_mask_hits = self._pre_mask_hits
         pre_replacement_count = self._pre_replacement_count
-        if pre_mask_hits == 0:
+        # Per user spec: ``replacement_rate = masked_hit_count / maskable_pre_hits``
+        # where ``masked_hit_count`` is the per-pattern masker
+        # replacement count and ``maskable_pre_hits`` is the total
+        # pre-mask matches. These are EXACTLY what the masker's
+        # manifest returns; both already include hit accounting only
+        # for values that could be replaced (i.e., that were loaded
+        # aliases). The naming change clarifies the contract: the
+        # numerator is what the masker actually replaced, NOT
+        # ``pre_mask_hits - post_mask_hits`` (which would be negative
+        # if the scanner became more sensitive than the masker).
+        maskable_pre_hits = max(pre_mask_hits, 0)
+        masked_hit_count = max(pre_replacement_count, 0)
+        if maskable_pre_hits == 0:
             replacement_rate = 1.0
         else:
-            replacement_rate = pre_replacement_count / float(pre_mask_hits)
+            replacement_rate = masked_hit_count / float(maskable_pre_hits)
         self._post_mask_hits = total_exact
+
+        # ── Pseudonym-aware suppression (blocker 5) ──────────────
+        # Re-scan per_file hits for suppression accounting. Reset
+        # counts so re-runs are deterministic. Anchored patterns
+        # (blocker 5) keep "the company" from ever being mistaken
+        # for a system pseudonym.
+        for f in per_file_hits:
+            f["suppressed_hits"] = 0
+        recompute_per_file: dict[str, int] = {f["document_id"]: 0 for f in per_file_hits}
+        recompute_total_exact = 0
+        recompute_top_hit_types: dict[str, int] = {}
+        top_hash_to_context: dict[str, str] = {}
+        suppressed_total = 0
+        for file_id, text in combined_chunks:
+            hit = exact_identity_scan(text, file_id, private_values)
+            real_exact = 0
+            file_suppressed = 0
+            for h in hit.hits:
+                if is_pseudonym_suppression_eligible(h.matched_text or ""):
+                    file_suppressed += 1
+                    continue
+                real_exact += 1
+                matched = h.matched_text or ""
+                key = matched[:30] + "..." if len(matched) > 30 else matched
+                recompute_top_hit_types[key] = recompute_top_hit_types.get(key, 0) + 1
+                # Pre-collect up to 20 redacted windows so the report
+                # can show ``example_contexts_redacted`` without
+                # leaking the raw matched_text.
+                if len(top_hash_to_context) < 20:
+                    hk = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+                    if hk not in top_hash_to_context:
+                        top_hash_to_context[hk] = (h.context or "")[:80]
+            recompute_per_file[file_id] = real_exact
+            recompute_total_exact += real_exact
+            suppressed_total += file_suppressed
+        # Suppression per-file accounting, used after the recompute to
+        # populate ``per_file_hits[i]["suppressed_hits"]`` honestly.
+        recompute_per_file_suppressed: dict[str, int] = {
+            file_id: 0 for file_id in {fid for fid, _ in combined_chunks}
+        }
+        for file_id, text in combined_chunks:
+            hit = exact_identity_scan(text, file_id, private_values)
+            count = sum(
+                1 for h in hit.hits if is_pseudonym_suppression_eligible(h.matched_text or "")
+            )
+            recompute_per_file_suppressed[file_id] = count
+        total_exact = recompute_total_exact
+        for f in per_file_hits:
+            f["total_hits"] = recompute_per_file.get(f["document_id"], 0)
+            f["blocking_hits"] = f["total_hits"] if f["total_hits"] > 0 else 0
+            f["is_blocked"] = f["total_hits"] > 0
+            f["suppressed_hits"] = recompute_per_file_suppressed.get(f["document_id"], 0)
+        self._post_mask_hits = total_exact
+        top_hit_ordered = sorted(recompute_top_hit_types.items(), key=lambda kv: (-kv[1], kv[0]))[
+            :10
+        ]
+        top_hit_dict = dict(top_hit_ordered)
+        # Redacted example contexts (≤5 short windows) — block reviewer #2.
+        example_redacted = [
+            {"hit_hash": hk, "context_window": cw}
+            for hk, cw in list(top_hash_to_context.items())[:5]
+        ]
+
+        # hits_by_type — map each top_hit bucket onto the per-type
+        # taxonomy from build_private_values_dict. Counts ONLY after
+        # pseudonym-suppression so a generic-looking raw value can
+        # never inflate the per-type bucketing.
+        hits_by_type: dict[str, int] = {}
+        hits_by_source = {
+            "exact_identity_scan": total_exact,
+            "filename_metadata_scan": sum(
+                1
+                for h in filename_res.hits
+                if not is_pseudonym_suppression_eligible(h.matched_text or "")
+            ),
+        }
+        for bucket, value_list in private_values.items():
+            count_for_bucket = 0
+            bucket_seen: set[str] = set()
+            for value in value_list:
+                if not value or value in bucket_seen:
+                    continue
+                bucket_seen.add(value)
+                # Count this value once if it appears in any masked
+                # file AND is NOT a system pseudonym (cheap O(N*M)
+                # over the small bounded corpus).
+                for _file_id, file_text in combined_chunks:
+                    if value in file_text and not is_pseudonym_suppression_eligible(value):
+                        count_for_bucket += 1
+                        break  # one occurrence is enough; this is per-bucket accounting
+            if count_for_bucket > 0:
+                hits_by_type[bucket] = count_for_bucket
+
+        hits_by_file = {f["document_id"]: f["total_hits"] for f in per_file_hits}
+
+        # Opaque hashes — never include raw matched_text in public QA.
+        top_20_redacted = [
+            hashlib.sha256(k.encode("utf-8")).hexdigest()[:12]
+            for k, _ in sorted(recompute_top_hit_types.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
+        ]
 
         report = {
             "document_id": "reanonymize_run",
@@ -585,6 +864,27 @@ class ReanonymizeOrchestrator:
             ],
             "passed": total_exact == 0 and not filename_res.is_blocked,
             "evaluated_at": _utc_iso_now(),
+            "replacement_rate_definition": ("masked_hit_count / maskable_pre_hits"),
+            "maskable_pre_hits": maskable_pre_hits,
+            "masked_hit_count": masked_hit_count,
+            "hits_by_type": hits_by_type,
+            "hits_by_file": hits_by_file,
+            "hits_by_source": hits_by_source,
+            "top_20_redacted_hit_hashes": top_20_redacted,
+            "example_contexts_redacted": example_redacted,
+            "suppressed_pseudonym_hits_total": suppressed_total,
+            "pseudonym_allowlist_size": SAFE_PSEUDONYM_ALLOWLIST_SIZE,
+            "aliases_snapshot": {
+                "aliases_loaded": (
+                    self._preloaded_summary.aliases_loaded if self._preloaded_summary else 0
+                ),
+                "harvest_built": (
+                    self._harvest_report.aliases_built if self._harvest_report else 0
+                ),
+                "aliases_by_type": (
+                    dict(self._harvest_report.aliases_by_type) if self._harvest_report else {}
+                ),
+            },
         }
         (qa_dir / "direct_privacy_report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"
@@ -819,6 +1119,35 @@ class ReanonymizeOrchestrator:
                 }
             )
 
+        # 4.5. coverage_critical_warnings — AtlasBuilder-reported critical
+        # warnings (e.g. ``aliases_built <= 6`` or zero). These do NOT
+        # stop the run (the harvest report + coverage report are still
+        # written) but they DO block the release gate.
+        if self._harvest_report is not None:
+            critical_warnings = [
+                w for w in self._harvest_report.coverage_warnings if w.get("level") == "critical"
+            ]
+            if critical_warnings:
+                conditions_payload.append(
+                    {
+                        "id": "coverage_critical_warnings",
+                        "description": (
+                            "AtlasBuilder reported critical coverage warnings "
+                            "(e.g. zero aliases built, or aliases_built <= critical "
+                            "threshold). The direct-privacy surface is under-covered; "
+                            "release is not safe until coverage is expanded."
+                        ),
+                        "passed": False,
+                        "blocking": True,
+                        "evidence": {
+                            "critical_warnings_count": len(critical_warnings),
+                            "aliases_built": self._harvest_report.aliases_built,
+                            "aliases_by_type": dict(self._harvest_report.aliases_by_type),
+                            "coverage_report": "qa/direct_identifier_coverage_report.json",
+                        },
+                    }
+                )
+
         # 4. registry load_errors — any exception that surfaced during
         # atlas load short-circuits individual aliases but should ALSO
         # downgrade the release gate, even when ``aliases_loaded`` is
@@ -849,6 +1178,11 @@ class ReanonymizeOrchestrator:
         # semantic attacks until direct privacy passes" rule applied
         # in reverse: when those surface, INCOMPLETE is the truthful
         # answer).
+        critical_warnings_count = sum(
+            1
+            for w in (self._harvest_report.coverage_warnings if self._harvest_report else [])
+            if w.get("level") == "critical"
+        )
         beta_status = "PASS"
         if (
             gate.decision != ReleaseDecision.PASS
@@ -858,6 +1192,7 @@ class ReanonymizeOrchestrator:
             or replacement_rate < 0.99
             or aliases_loaded == 0
             or load_errors_count > 0
+            or critical_warnings_count > 0
         ):
             beta_status = "INCOMPLETE"
         release_safe = beta_status == "PASS"

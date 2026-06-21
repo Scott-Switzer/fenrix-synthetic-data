@@ -126,12 +126,14 @@ class TextAnonymizer:
             self._cached_reg = reg
             self._cached_load_summary = self.last_load_summary
         else:
-            # Cache-hit branch: walrus-narrow ``cached_reg`` to
-            # ``EntityRegistry`` so mypy sees a typed ``reg`` after the
-            # ``is not None`` guard. Avoids the brittle ``assert ... is
-            # not None`` narrowing that disappears under ``python -O``.
+            # Cache-hit branch: ``getattr`` returns ``Any`` so a bare
+            # ``is not None`` check does NOT narrow for mypy. Using
+            # ``isinstance`` gives the type-checker a ``True`` narrowing
+            # to ``EntityRegistry`` after the guard — without depending
+            # on ``assert`` (which evaporates under ``python -O``).
             cached_summary = getattr(self, "_cached_load_summary", None)
-            if (cached_reg := getattr(self, "_cached_reg", None)) is not None and (
+            cached_reg = getattr(self, "_cached_reg", None)
+            if isinstance(cached_reg, EntityRegistry) and (
                 cached_summary is None or cached_summary.atlas_path == atlas_path
             ):
                 reg = cached_reg
@@ -236,11 +238,14 @@ class TextAnonymizer:
         # Cache-hit: when the lazy-load path already populated the
         # registry inside ``anonymize_all`` we can skip the second
         # YAML parse in ``anonymize_news`` to keep the boundary honest.
+        # ``isinstance`` narrows for mypy without relying on ``assert``
+        # (which evaporates under ``python -O``).
         cached_summary: RegistryLoadSummary | None = getattr(self, "_cached_load_summary", None)
-        if (cached := getattr(self, "_cached_reg", None)) is not None and (
+        cached_reg = getattr(self, "_cached_reg", None)
+        if isinstance(cached_reg, EntityRegistry) and (
             cached_summary is None or cached_summary.atlas_path == atlas_path
         ):
-            reg = cached
+            reg = cached_reg
             self.last_load_summary = cached_summary or RegistryLoadSummary(
                 atlas_path=atlas_path,
                 redacted_ticker=self.ticker,

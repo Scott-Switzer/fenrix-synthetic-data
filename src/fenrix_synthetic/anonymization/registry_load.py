@@ -367,37 +367,76 @@ def build_private_values_dict(
 ) -> dict[str, list[str]]:
     """Build the ``private_values`` dict consumed by ``exact_identity_scan``.
 
-    Used by the orchestrator's Phase 6 ``_phase_direct_privacy``.
-    Values are de-duplicated and only entries with ``len >= 3`` are
-    included (matching the legacy ``str(.. or '').strip()`` and
-    ``len(val) >= 3`` rules so the scanner contract is preserved).
+    v2: split entries into per-type buckets so the direct-privacy
+    report can produce ``hits_by_type`` taxonomy. Each bucket is
+    de-duplicated within itself; cross-bucket dedup happens via a
+    single ``seen`` set so the scanner only sees each private value
+    once. High-risk entity types (ticker / cik /
+    sec_accession_number / sec_primary_document) always bypass the
+    min_length gate via ``normalize_private_value`` so ``"F"``-style
+    tickers and short CIKs survive.
     """
-    out: dict[str, list[str]] = {"names": [], "ticker": []}
+    # Per-type buckets — values that don't fit a known category fall
+    # back to ``"names"`` so existing scanner consumers keep working.
+    out: dict[str, list[str]] = {
+        "names": [],
+        "ticker": [],
+        "company_name": [],
+        "cik": [],
+        "accession": [],
+        "person": [],
+        "product": [],
+        "platform": [],
+        "location": [],
+        "domain": [],
+        "url": [],
+        "xbrl_concept": [],
+        "rare_phrase": [],
+    }
     seen: set[str] = set()
 
     if fallback_ticker:
         seen.add(fallback_ticker)
         out["ticker"].append(fallback_ticker)
+        out["names"].append(fallback_ticker)
 
     if reg is None:
         return out
 
-    # Pass ``entity_type`` explicitly so the high-risk bypass in
-    # ``normalize_private_value`` (ticker / cik / sec_accession_number
-    # / sec_primary_document) covers single-character tickers like
-    # ``"F"`` and short CIK / accession values. The masker builds
-    # replacement patterns for those values WITHOUT a length filter,
-    # so the scanner MUST also accept them — otherwise hits on those
-    # surface would be silently missed (the bug the user spec was
-    # meant to eliminate).
+    # Map EntityType.values onto the per-type bucket keys used by
+    # ``DirectIdentifierAtlasBuilder`` so a downstream scanner report
+    # speaks the same taxonomy as the coverage report.
+    _ENTITY_TYPE_TO_BUCKET: dict[str, str] = {
+        "ticker": "ticker",
+        "cik": "cik",
+        "sec_accession_number": "accession",
+        "sec_primary_document": "accession",
+        "company": "company_name",
+        "former_company_name": "company_name",
+        "executive": "person",
+        "board_member": "person",
+        "product": "product",
+        "brand": "product",
+        "proprietary_platform": "platform",
+        "facility": "location",
+        "headquarters": "location",
+        "subsidiary": "company_name",
+        "company_domain": "domain",
+        "company_email_domain": "domain",
+    }
+
     for ent in reg.all_entities():
         v = normalize_private_value(ent.canonical_private_value, entity_type=ent.entity_type)
         if v and v not in seen:
-            out["names"].append(v)
             seen.add(v)
+            bucket = _ENTITY_TYPE_TO_BUCKET.get(ent.entity_type.value, "names")
+            out[bucket].append(v)
+            out["names"].append(v)
     for ali in reg.all_aliases():
         v = normalize_private_value(ali.private_alias_value, entity_type=ali.entity_type)
         if v and v not in seen:
-            out["names"].append(v)
             seen.add(v)
+            bucket = _ENTITY_TYPE_TO_BUCKET.get(ali.entity_type.value, "names")
+            out[bucket].append(v)
+            out["names"].append(v)
     return out
