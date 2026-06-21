@@ -2205,6 +2205,106 @@ def boundary_diag(ctx: click.Context) -> None:
     click.echo(json.dumps(diag, indent=2))
 
 
+@cli.command(name="reanonymize-run")
+@click.option(
+    "--source-run",
+    "source_run",
+    type=click.Path(exists=False, path_type=Path),
+    required=True,
+    help="Path to an existing pipeline-run directory produced by "
+    "`pipeline-run`. Must contain run_summary.json and originals/<TICKER>/.",
+)
+@click.option(
+    "--output-root",
+    "output_root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output directory. The orchestrator writes a fresh tree under it; "
+    "the source-run is never mutated.",
+)
+@click.option(
+    "--limit-forms",
+    "limit_forms",
+    default=None,
+    help='Comma-separated per-form cap, e.g. "10-K:1,10-Q:1,8-K:1". '
+    "Surrogates are limited BEFORE re-anonymization.",
+)
+@click.option(
+    "--limit-news",
+    "limit_news",
+    default=5,
+    show_default=True,
+    type=int,
+    help="At most this many news articles are processed.",
+)
+@click.pass_context
+def reanonymize_run(
+    ctx: click.Context,
+    source_run: Path,
+    output_root: Path,
+    limit_forms: str | None,
+    limit_news: int,
+) -> None:
+    """Re-run anonymization on a prior ``pipeline-run`` and write the release gate.
+
+    The orchestrator reads from ``--source-run`` (created by an earlier
+    ``fenrix-synth pipeline-run``) and writes a fresh ``public/surrogates/``,
+    ``public/numeric/classroom_safe/``, and ``qa/`` tree under ``--output-root``.
+
+    Required outputs:
+
+        public/surrogates/sec/*.md
+        public/surrogates/news/*.md
+        public/numeric/classroom_safe/{annual,quarterly,weekly,ratio}.json
+        qa/{direct_privacy,semantic_privacy,nvidia_attack,utility}_report.json
+        qa/release_gate.json
+
+    ``release_gate.json`` always contains ``beta_status`` and
+    ``release_safe``. If a gate surface is not implemented in this revision
+    the orchestrator writes an explicit ``INCOMPLETE`` stub report and
+    forces ``beta_status="INCOMPLETE", release_safe=false`` — the command
+    will not falsely claim PASS.
+    """
+    try:
+        from .reanonymize import InvalidSourceRunError, ReanonymizeOrchestrator
+    except ImportError as exc:  # pragma: no cover - import surface regression
+        click.echo(f"Error: reanonymize module unavailable: {exc}", err=True)
+        sys.exit(2)
+
+    try:
+        orchestrator = ReanonymizeOrchestrator(
+            source_run=source_run,
+            output_root=output_root,
+            limit_forms=limit_forms,
+            limit_news=limit_news,
+        )
+        result = orchestrator.run()
+    except InvalidSourceRunError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(2)
+    except Exception as e:  # noqa: BLE001
+        logger.error("reanonymize-run failed", extra={"error": str(e)}, exc_info=True)
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    rg = result.get("release_gate", {})
+    click.echo(f"reanonymize-run: ticker={result['ticker']}")
+    click.echo(f"  source-run: {result['source_run']}")
+    click.echo(f"  output-root: {result['output_root']}")
+    written = result.get("written", {})
+    click.echo(f"  sec surrogates: {len(written.get('sec_surrogates', []))}")
+    click.echo(f"  news surrogates: {len(written.get('news_surrogates', []))}")
+    click.echo(f"  numeric files: {written.get('numeric_files', [])}")
+    click.echo(f"  beta_status: {rg.get('beta_status')}")
+    click.echo(f"  release_safe: {rg.get('release_safe')}")
+    click.echo(f"  decision: {rg.get('decision')}")
+    if rg.get("beta_status") != "PASS":
+        # The user mandated INCOMPLETE → non-zero exit so a CI harness can
+        # gate the next step explicitly instead of silently shipping a
+        # release that was never declared safe.
+        sys.exit(1)
+
+
 @cli.command(name="pipeline-run")
 @click.option("--ticker", default=None, help="Single ticker to process (e.g., NVDA)")
 @click.option(

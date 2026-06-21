@@ -40,12 +40,55 @@ class TextAnonymizer:
         self.private_maps_dir = private_maps_dir
         self.suffix = suffix
 
-    def anonymize_all(self) -> list[dict[str, Any]]:
-        """Anonymize all text/HTML files in originals/sec/filings."""
+    def anonymize_all(
+        self,
+        selected_paths: list[Path] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Anonymize filings for ``<ticker>``.
+
+        Parameters
+        ----------
+        selected_paths:
+            Optional explicit list of HTML filings to process. When
+            ``None`` (the legacy default), every ``*.html`` and
+            ``*.htm`` file under ``originals_dir / sec / filings`` is
+            processed — preserving backwards compatibility for callers
+            that already enumerate the directory themselves. When a
+            non-empty list is supplied, ONLY those paths are processed,
+            in the order given.
+
+            The orchestrator passes this argument so that a
+            ``--limit-forms`` directive actually restricts work, instead
+            of being reported but ignored.
+        """
         manifests: list[dict[str, Any]] = []
-        filings_dir = self.originals_dir / "sec" / "filings"
-        if not filings_dir.exists():
-            return manifests
+        filings_dir = (
+            self.originals_dir / "sec" / "filings"
+        )  # Resolve the candidate list up-front so failures (missing
+        # directory, empty selection) fail closed with zero work done.
+        # SEC filings arrive as both ``*.html`` and ``*.htm`` (the latter
+        # is the historical SEC convention) — accept both extensions so
+        # real filings aren't silently dropped.
+        accepted_suffixes = (".html", ".htm")
+
+        def _is_filing(p: Path) -> bool:
+            return p.suffix.lower() in accepted_suffixes
+
+        if selected_paths is not None:
+            html_paths: list[Path] = [p for p in selected_paths if _is_filing(p)]
+            if not html_paths:
+                logger.info(
+                    "anonymize_all: no .html/.htm paths in selected_paths for %s",
+                    self.ticker,
+                )
+                return manifests
+        else:
+            if not filings_dir.exists():
+                return manifests
+            html_paths = sorted(list(filings_dir.glob("*.html")) + list(filings_dir.glob("*.htm")))
+            if not html_paths:
+                logger.warning("anonymize_all: no .html/.htm filings found under %s", filings_dir)
+                return manifests
 
         # Load atlas
         atlas_path = self.private_maps_dir / "identity_atlas.yaml"
@@ -68,7 +111,7 @@ class TextAnonymizer:
         accessions = self._extract_accessions_from_registry(reg)
         path_map = build_pseudonym_path_map(self.ticker, cik, accessions)
 
-        for html_path in filings_dir.glob("*.html"):
+        for html_path in html_paths:
             try:
                 raw_html = html_path.read_text(encoding="utf-8", errors="replace")
                 artifact_id = html_path.stem
