@@ -232,8 +232,8 @@ def bin_value(value: Any) -> str:
 EVENT_CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("shareholder", "shareholder meeting"),
     ("annual meeting", "shareholder meeting"),
-    ("auditor", "auditor/accounting matter"),
-    ("accounting", "auditor/accounting matter"),
+    ("auditor", "accounting and audit matter"),
+    ("accounting", "accounting and audit matter"),
     ("executive compensation", "executive compensation matter"),
     ("compensation", "executive compensation matter"),
     ("financing", "financing/capital markets matter"),
@@ -286,14 +286,14 @@ def build_recent_event_summary(
         f"* street address\n"
         f"* city/state/zip\n"
         f"* phone number\n"
-        f"* IRS employer identification number\n"
-        f"* SEC commission file number\n"
+        f"* IRS employer ID number\n"
+        f"* SEC filing identifier numbers\n"
         f"* accession number\n"
         f"* filing URL\n"
-        f"* officer/director/signer names\n"
-        f"* auditor names\n"
+        f"* leadership and signatory names\n"
+        f"* audit firm names\n"
         f"* vote tables and exact vote counts\n"
-        f"* raw filing headers and signatures\n"
+        f"* raw filing headers and execution blocks\n"
     )
     return body, "OK"
 

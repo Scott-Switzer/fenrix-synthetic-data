@@ -57,15 +57,70 @@ def run_nvidia_qa(
     ctx: CompanyContext,
     samples: Sequence[str],
     enable_nvidia_qa: str,
+    artifact_root: Path | None = None,
 ) -> dict[str, Any]:
-    return {
+    """Run NVIDIA artifact verification if enabled.
+
+    When ``enable_nvidia_qa`` is ``"no"`` or the provider is unavailable, the
+    build continues and the report status is NOT_RUN or INCOMPLETE. The
+    verifier never receives originals or private maps.
+    """
+    if enable_nvidia_qa == "no":
+        return {
+            "schema_version": "1.0",
+            **ctx.public_ids(),
+            "status": "NOT_RUN",
+            "decision": "NOT_RUN",
+            "reason": "nvidia qa disabled by flag",
+            "sample_count": len([sample for sample in samples if sample]),
+        }
+    from .submission_nvidia import (
+        nvidia_available,
+        verify_public_artifact_with_nvidia,
+        write_nvidia_artifact_report,
+    )
+
+    if not nvidia_available():
+        report: dict[str, Any] = {
+            "schema_version": "1.0",
+            **ctx.public_ids(),
+            "status": "INCOMPLETE",
+            "decision": "NOT_RUN",
+            "reason": "provider credential not set",
+            "sample_count": len([sample for sample in samples if sample]),
+        }
+        if artifact_root is not None:
+            write_nvidia_artifact_report(report, artifact_root / "qa")
+        return report
+    if artifact_root is None:
+        return {
+            "schema_version": "1.0",
+            **ctx.public_ids(),
+            "status": "INCOMPLETE",
+            "decision": "NOT_RUN",
+            "reason": "artifact root not provided",
+            "sample_count": len([sample for sample in samples if sample]),
+        }
+    review = verify_public_artifact_with_nvidia(artifact_root)
+    status = str(review.get("status", "INCOMPLETE")).upper()
+    decision = {
+        "PASS": "PASS",
+        "REVIEW_REQUIRED": "REVIEW_REQUIRED",
+        "FAIL": "FAIL",
+    }.get(status, "NOT_RUN")
+    report = {
         "schema_version": "1.0",
         **ctx.public_ids(),
-        "status": "NOT_RUN" if enable_nvidia_qa == "no" else "INCOMPLETE",
-        "decision": "NOT_RUN",
-        "reason": "live provider disabled in fast sanitized builder",
+        "status": status,
+        "decision": decision,
+        "reason": review.get("reason", review.get("summary", "")),
         "sample_count": len([sample for sample in samples if sample]),
+        "files_reviewed": review.get("files_reviewed", 0),
+        "repair_passes": review.get("repair_passes", 0),
+        "risks": review.get("risks", []),
     }
+    write_nvidia_artifact_report(report, artifact_root / "qa")
+    return report
 
 
 def write_private_map(root: Path, ticker: str, ctx: CompanyContext) -> None:
@@ -118,7 +173,9 @@ def build_one_ticker(
     )
     write_private_map(root, ticker, ctx)
     residual_status, _ = residual_scan_for_ticker(root, ticker, ctx)
-    qa = run_nvidia_qa(ticker, ctx, [sec_sample, metrics_sample, news_sample], enable_nvidia_qa)
+    qa = run_nvidia_qa(
+        ticker, ctx, [sec_sample, metrics_sample, news_sample], enable_nvidia_qa, root
+    )
     write_json(root / "anonymized" / ctx.company_id / "qa" / "nvidia_review.json", qa)
     return TickerResult(
         ticker,
