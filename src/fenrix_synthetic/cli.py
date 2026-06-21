@@ -2246,6 +2246,30 @@ def boundary_diag(ctx: click.Context) -> None:
     help="At most this many news articles are processed.",
 )
 @click.option(
+    "--nvidia-mode",
+    type=click.Choice(["smoke", "final_submission"]),
+    default="final_submission",
+    help="NVIDIA review budget: smoke = 1 artifact, 6/4 chunks; final = 3, 12/8.",
+)
+@click.option(
+    "--nvidia-max-artifacts",
+    type=int,
+    default=None,
+    help="Override per-run cap on artifacts sent to NVIDIA.",
+)
+@click.option(
+    "--nvidia-max-chunks-reviewed",
+    type=int,
+    default=None,
+    help="Override per-artifact cap on chunks reviewed.",
+)
+@click.option(
+    "--nvidia-max-chunks-rewritten",
+    type=int,
+    default=None,
+    help="Override per-artifact cap on chunks rewritten.",
+)
+@click.option(
     "--allow-incomplete",
     is_flag=True,
     default=False,
@@ -2264,6 +2288,10 @@ def reanonymize_run(
     limit_forms: str | None,
     limit_news: int,
     allow_incomplete: bool,
+    nvidia_mode: str = "final_submission",
+    nvidia_max_artifacts: int | None = None,
+    nvidia_max_chunks_reviewed: int | None = None,
+    nvidia_max_chunks_rewritten: int | None = None,
 ) -> None:
     """Re-run anonymization on a prior ``pipeline-run`` and write the release gate.
 
@@ -2298,6 +2326,10 @@ def reanonymize_run(
             limit_forms=limit_forms,
             limit_news=limit_news,
             allow_incomplete=allow_incomplete,
+            nvidia_mode=nvidia_mode,
+            nvidia_max_artifacts=nvidia_max_artifacts,
+            nvidia_max_chunks_reviewed=nvidia_max_chunks_reviewed,
+            nvidia_max_chunks_rewritten=nvidia_max_chunks_rewritten,
         )
         result = orchestrator.run()
     except InvalidSourceRunError as exc:

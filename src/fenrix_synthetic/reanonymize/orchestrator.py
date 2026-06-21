@@ -129,6 +129,10 @@ class ReanonymizeOrchestrator:
         limit_forms: str | None,
         limit_news: int,
         allow_incomplete: bool = False,
+        nvidia_mode: str | None = None,
+        nvidia_max_artifacts: int | None = None,
+        nvidia_max_chunks_reviewed: int | None = None,
+        nvidia_max_chunks_rewritten: int | None = None,
     ) -> None:
         # ``allow_incomplete`` is a forward-compat operator signal: the
         # orchestrator already always writes the release gate with an
@@ -142,6 +146,11 @@ class ReanonymizeOrchestrator:
         self.limit_news = max(0, int(limit_news))
         self.allow_incomplete = bool(allow_incomplete)
         self.form_limits = parse_form_limits(limit_forms)
+        # NVIDIA review budget — bounded to keep per-run API calls finite.
+        self.nvidia_mode = nvidia_mode or "final_submission"
+        self.nvidia_max_artifacts = nvidia_max_artifacts
+        self.nvidia_max_chunks_reviewed = nvidia_max_chunks_reviewed
+        self.nvidia_max_chunks_rewritten = nvidia_max_chunks_rewritten
         # Populated by ``_phase_atlas_load`` and consumed by
         # Phase 5 (``TextAnonymizer``) + Phase 6 (``_phase_direct_privacy``).
         # Setting up the slots here keeps the ``run()`` flow readable.
@@ -228,9 +237,101 @@ class ReanonymizeOrchestrator:
     # ── Public surface ───────────────────────────────────────────────
 
     def run(self) -> dict[str, Any]:
+        # Top-level backstop: if any phase raises before the final
+        # release gate writes ``qa/release_gate.json`` (and/or before
+        # Phase 9 emits ``qa/nvidia_attack_report.json``), the operator
+        # STILL gets strict fail-closed stubs so missing reports never
+        # mask a real failure. We compute a source_hash up front so the
+        # fail-closed gate can carry one without re-reading the path.
+        #
+        # SIGTERM is also trapped because CI shells use ``timeout N`` to
+        # cap runner cost; without the handler, SIGTERM kills before
+        # the exception-based backstop fires, leaving decision files
+        # missing. ``try/except Exception`` does NOT catch SIGTERM.
         ctx = self.validate()
-
         qa_root = self.output_root / self.QA_ROOT
+        import hashlib as _hashlib_top
+
+        _source_hash_top = _hashlib_top.sha256(str(ctx.source_run).encode("utf-8")).hexdigest()[:16]
+
+        # Install SIGTERM handler ONLY for the duration of run(); the
+        # original handler is restored in the ``finally`` clause so
+        # other unrelated signals remain untouched. We deliberately do
+        # NOT touch SIGINT (user Ctrl+C): that should abort the run
+        # immediately without writing fail-closed artifacts.
+        import signal as _signal
+
+        try:
+            _original_sigterm = _signal.getsignal(_signal.SIGTERM)
+        except (ValueError, AttributeError):  # pragma: no cover - non-main thread
+            _original_sigterm = None
+
+        def _sigterm_backstop(signum: int, frame: Any) -> None:  # noqa: ARG001
+            """Fail-closed on SIGTERM and pass the kill back to the OS.
+
+            Writes missing decision files via ``_ensure_decision_files_present``
+            (idempotent — does NOT clobber existing files). Then restores the
+            default SIGTERM handler and re-raises so the shell sees exit
+            code 143 (SIGTERM-killed). Any error raised inside this handler
+            is swallowed so the SIGTERM signal always reaches the OS.
+            """
+            try:
+                self._ensure_decision_files_present(
+                    qa_root=qa_root,
+                    source_hash=_source_hash_top,
+                    error_class="SIGTERM",
+                )
+            except BaseException:  # pragma: no cover - defensive
+                pass
+            # Restore default handler and re-raise the signal.
+            try:
+                _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+                import os as _os_term
+
+                _os_term.kill(_os_term.getpid(), _signal.SIGTERM)
+            except BaseException:  # pragma: no cover
+                # If we cannot re-raise, exit with a code that says we
+                # at least tried to write the fail-closed report.
+                raise SystemExit(143) from None
+
+        try:
+            _signal.signal(_signal.SIGTERM, _sigterm_backstop)
+        except (ValueError, AttributeError, OSError):  # pragma: no cover - non-main thread
+            pass
+
+        try:
+            return self._run_after_validate(ctx, qa_root)
+        except Exception as exc:
+            logger.exception(
+                "reanonymize-run pipeline interrupted before completion: %s",
+                exc,
+            )
+            # Backfill missing decision files so the operator has
+            # evidence of WHY the run stopped. We do NOT swallow the
+            # exception: a hard error is the truthful surface.
+            self._ensure_decision_files_present(
+                qa_root=qa_root,
+                source_hash=_source_hash_top,
+                error_class=exc.__class__.__name__,
+            )
+            raise
+        finally:
+            # Always restore the original SIGTERM handler so other
+            # unrelated work in the same Python process is unaffected.
+            if _original_sigterm is not None:
+                try:
+                    _signal.signal(_signal.SIGTERM, _original_sigterm)
+                except (ValueError, OSError):  # pragma: no cover
+                    pass
+
+    def _run_after_validate(self, ctx: RunContext, qa_root: Path) -> dict[str, Any]:
+        """Run the full phase sequence after Phase 1 has succeeded.
+
+        Extracted from ``run()`` so the top-level wrapper can manage
+        fail-closed backstop without re-indenting the entire phase
+        ladder. Returns the run-summary dict identical to the legacy
+        ``run()`` contract.
+        """
         # Phase 1.55 — harvest & write coverage BEFORE registry load.
         # On reload: builder MAY augment ``private_maps/<TICKER>/identity_atlas.yaml``
         # with conservative regex + deterministic finds so the
@@ -321,11 +422,24 @@ class ReanonymizeOrchestrator:
                 "final submission mode requires NVIDIA_API_KEY. "
                 "Set the environment variable or use --allow-incomplete for development."
             )
-        elif nvidia_api_key:
+        if nvidia_api_key:
             try:
+                from fenrix_synthetic.providers.nvidia_client import NVIDIABounds
                 from fenrix_synthetic.providers.nvidia_review import NVIDIAReviewAdapter
 
-                adapter = NVIDIAReviewAdapter()
+                # Build bounded-review caps from CLI overrides.
+                if self.nvidia_mode == "smoke":
+                    bounds = NVIDIABounds.smoke()
+                else:
+                    bounds = NVIDIABounds.final_submission()
+                if self.nvidia_max_artifacts is not None:
+                    bounds.max_artifacts_per_run = self.nvidia_max_artifacts
+                if self.nvidia_max_chunks_reviewed is not None:
+                    bounds.max_chunks_reviewed_per_artifact = self.nvidia_max_chunks_reviewed
+                if self.nvidia_max_chunks_rewritten is not None:
+                    bounds.max_chunks_rewritten_per_artifact = self.nvidia_max_chunks_rewritten
+
+                adapter = NVIDIAReviewAdapter(registry=self._preloaded_registry, bounds=bounds)
                 nvidia_report = adapter.review_batch(
                     anonymized_dir=public_root / "surrogates" / "sec",
                     ticker=ctx.ticker,
@@ -340,18 +454,23 @@ class ReanonymizeOrchestrator:
                         option=_orjson.OPT_SORT_KEYS | _orjson.OPT_INDENT_2,
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("NVIDIA review failed at runtime for %s", ctx.ticker)
-                nvidia_report = _write_stub_report(
-                    qa_root / "nvidia_attack_report.json",
-                    surfaces=["nvidia_review"],
-                    reason="NVIDIA review failed at runtime.",
+                nvidia_report = _write_fail_closed_nvidia_report(
+                    qa_root,
+                    mode=self.nvidia_mode,
+                    model=_os.environ.get("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct"),
+                    error_class=exc.__class__.__name__,
+                    reason="NVIDIA review failed at runtime",
                 )
         else:
-            nvidia_report = _write_stub_report(
-                qa_root / "nvidia_attack_report.json",
-                surfaces=["nvidia_review"],
-                reason="NVIDIA_API_KEY not configured.",
+            # dev allow_incomplete branch: still emit a fail-closed NOT_RUN stub so the file exists.
+            nvidia_report = _write_fail_closed_nvidia_report(
+                qa_root,
+                mode=self.nvidia_mode,
+                model=_os.environ.get("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct"),
+                error_class="NOT_RUN",
+                reason="NVIDIA_API_KEY not configured (allow_incomplete=True)",
             )
 
         # Phase 9 — release gate evaluation
@@ -363,9 +482,17 @@ class ReanonymizeOrchestrator:
             nvidia_report,
             sec_stat,
         )
-        (qa_root / "release_gate.json").write_text(
-            json.dumps(gate_payload, indent=2), encoding="utf-8"
-        )
+        # Atomic write (write to .tmp + os.replace) so a SIGTERM fired
+        # mid-serialize cannot leave a torn gate JSON on disk. The
+        # idempotent backstop helper would refuse to repair torn files
+        # because ``if not path.is_file()`` would see the partial
+        # output as existing.
+        import os as _os_replace_run
+
+        _gate_path = qa_root / "release_gate.json"
+        _gate_tmp = _gate_path.with_suffix(_gate_path.suffix + ".tmp")
+        _gate_tmp.write_text(json.dumps(gate_payload, indent=2), encoding="utf-8")
+        _os_replace_run.replace(_gate_tmp, _gate_path)
 
         return {
             "ticker": ctx.ticker,
@@ -629,6 +756,71 @@ class ReanonymizeOrchestrator:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not write merged atlas YAML: %s", exc)
+
+    def _ensure_decision_files_present(
+        self,
+        qa_root: Path,
+        source_hash: str,
+        error_class: str,
+    ) -> None:
+        """Backfill missing decision files with strict fail-closed stubs.
+
+        Ensures that after a pipeline crash the operator can ALWAYS see:
+
+        - ``qa/nvidia_attack_report.json`` — NVIDIA_REVIEW_INCOMPLETE stub.
+        - ``qa/release_gate.json`` — overall_release_decision=FAIL stub.
+        - ``qa/direct_privacy_report.json`` — only if missing; Phase 6
+          normally writes it.
+
+        Each stub carries an explicit ``error_class`` so the trace tells
+        the operator exactly which exception short-circuited the run.
+        No sensitive carrier (API key or raw source path) is emitted.
+        ``nvidia_mode`` is the orchestrator's configured mode and is
+        the only NVIDIA-context field needed downstream.
+        """
+        qa_root.mkdir(parents=True, exist_ok=True)
+
+        nvidia_path = qa_root / "nvidia_attack_report.json"
+        gate_path = qa_root / "release_gate.json"
+        direct_path = qa_root / "direct_privacy_report.json"
+
+        if not nvidia_path.is_file():
+            _write_fail_closed_nvidia_report(
+                qa_root,
+                mode=self.nvidia_mode,
+                model="meta/llama-3.1-70b-instruct",
+                error_class=error_class,
+                reason=f"Pipeline interrupted before NVIDIA review: {error_class}",
+            )
+
+        if not gate_path.is_file():
+            # We do not have the in-flight nvidia_report/direct_privacy/
+            # semantic_report dicts because the run died early; emit
+            # conservative stubs that always FAIL the overall gate.
+            _write_fail_closed_gate(
+                qa_root,
+                nvidia_report=None,
+                direct_privacy=None,
+                semantic_report=None,
+                error_class=error_class,
+                source_hash=source_hash,
+            )
+
+        if not direct_path.is_file():
+            payload = {
+                "schema_version": "1.0.0",
+                "document_id": "reanonymize_run",
+                "passed": False,
+                "blocking_failures": 1,
+                "evaluated_at": _utc_iso_now(),
+                "implementation_status": "fail_closed",
+                "reason": (f"Pipeline interrupted before direct-privacy phase: {error_class}"),
+                "post_mask_hits": 0,
+                "pre_mask_hits": 0,
+                "replacement_rate": 0.0,
+                "blocking_conditions": ["DIRECT_PRIVACY_INCOMPLETE"],
+            }
+            direct_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
     def _phase_atlas_load(self, ctx: RunContext, qa_root: Path) -> None:
         """Phase 1.5 — load the identity atlas and fail-closed on zero aliases.
@@ -1221,7 +1413,28 @@ class ReanonymizeOrchestrator:
         # four explicit decision fields below are the canonical
         # surfaces for new consumers.
         semantic_incomplete = False
-        nvidia_incomplete = nvidia_report.get("status") == "INCOMPLETE"
+        # Robust NVIDIA-incomplete detection — recognizes BOTH the
+        # legacy stub shape (``status in {INCOMPLETE, not_configured}``)
+        # AND the new fail-closed shape emitted by
+        # ``_write_fail_closed_nvidia_report`` (status="FAIL" with
+        # ``blocking_conditions`` carrying ``NVIDIA_REVIEW_INCOMPLETE``
+        # or ``nvidia_decision`` set by the fail-closed writer).
+        nvidia_status = nvidia_report.get("status")
+        nvidia_decision_field = nvidia_report.get("nvidia_decision", "")
+        nvidia_blocking = nvidia_report.get("blocking_conditions", []) or []
+        # Robust NVIDIA-incomplete detection. ANY payload emitted by
+        # ``_write_fail_closed_nvidia_report`` is treated as
+        # NVIDIA-incomplete; a real review verdict uses
+        # PASS/REVIEW/FAIL with non-empty decisions and may carry
+        # empty ``blocking_conditions``. The fail-closed writer sets
+        # ``status=\"FAIL\"`` so the first arm covers both NOT_RUN and
+        # PROVIDER_FAILURE shapes; the blocking_conditions arm is the
+        # most reliable detector.
+        nvidia_incomplete = (
+            nvidia_status in ("INCOMPLETE", "not_configured", "FAIL")
+            or "NVIDIA_REVIEW_INCOMPLETE" in nvidia_blocking
+            or "PROVIDER_FAILURE_OR_BLOCKED_PRECHECK_OR_INCOMPLETE" in nvidia_decision_field
+        )
 
         gate: ReleaseGateResult = evaluate_release_gate(
             text_attacks_blocked=direct_privacy.get("passed") is False,
@@ -1482,7 +1695,7 @@ class ReanonymizeOrchestrator:
         direct_privacy_decision = "FAIL" if exact_hits > 0 else "PASS"
         sem_verdict = semantic_report.get("overall_verdict", "NOT_RUN")
         semantic_privacy_decision = sem_verdict if sem_verdict in ("PASS", "FAIL") else "NOT_RUN"
-        nvidia_decision_label = "NOT_RUN"
+        nvidia_decision_label = nvidia_report.get("decision", "NOT_RUN")
         if direct_privacy_decision == "FAIL":
             overall_release_decision = "FAIL"
         elif semantic_privacy_decision == "FAIL":
@@ -1571,6 +1784,121 @@ def _compute_gate_hash(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()[:16]
+
+
+def _write_fail_closed_nvidia_report(
+    qa_root: Path,
+    mode: str,
+    model: str,
+    error_class: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Write a strict fail-closed NVIDIA report when review cannot complete.
+
+    Ensures the operator always has evidence: which mode, why it failed,
+    and proof that no API key appeared. Called from inside _phase_nvidia
+    on any failure path.
+    """
+    payload: dict[str, Any] = {
+        "schema_version": "1.0.0",
+        "status": "FAIL",
+        "implementation_status": "fail_closed",
+        "nvidia_mode": mode,
+        "model": model,
+        "gate_verdict": "FAIL",
+        "nvidia_decision": "PROVIDER_FAILURE_OR_BLOCKED_PRECHECK_OR_INCOMPLETE",
+        "release_safe": False,
+        "artifacts_considered": 0,
+        "artifacts_reviewed": 0,
+        "artifacts_skipped": 0,
+        "total_chunks": 0,
+        "risk_chunks_total": 0,
+        "chunks_reviewed": 0,
+        "chunks_rewritten": 0,
+        "chunks_failed": 0,
+        "chunks_skipped_due_to_cap": 0,
+        "max_confidence_before": None,
+        "max_confidence_after": None,
+        "direct_residual_count_before": 0,
+        "direct_residual_count_after": 0,
+        "blocking_conditions": ["NVIDIA_REVIEW_INCOMPLETE"],
+        "error_class": error_class,
+        "reason": reason,
+        "api_key_leaked": False,
+        "evaluated_at": _utc_iso_now(),
+    }
+    qa_root.mkdir(parents=True, exist_ok=True)
+    nvidia_path = qa_root / "nvidia_attack_report.json"
+    # Atomic write: serialize to a temp file then ``os.replace`` so a
+    # concurrent SIGTERM mid-write cannot leave a half-written JSON
+    # file observable to downstream tooling (atomic at the filesystem
+    # level — readers see either the previous file or the new file,
+    # never an inconsistent in-between state).
+    import os as _os_replace  # noqa: PLC0415
+
+    tmp_path = nvidia_path.with_suffix(nvidia_path.suffix + ".tmp")
+    tmp_path.write_bytes(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2))
+    _os_replace.replace(tmp_path, nvidia_path)
+    return payload
+
+
+def _write_fail_closed_gate(
+    qa_root: Path,
+    nvidia_report: dict[str, Any] | None,
+    direct_privacy: dict[str, Any] | None,
+    semantic_report: dict[str, Any] | None,
+    error_class: str,
+    source_hash: str,
+) -> dict[str, Any]:
+    """Build & write a release gate when Phase 10 itself cannot run."""
+    nvidia_decision = (nvidia_report or {}).get("nvidia_decision", "FAIL")
+    direct = direct_privacy is None or not direct_privacy.get("passed", True)
+    sem = semantic_report is None or (
+        semantic_report.get("overall_verdict", "NOT_RUN") not in ("PASS",)
+    )
+    overall = "FAIL"
+    blocking: list[str] = []
+    if direct:
+        blocking.append("DIRECT_PRIVACY_INCOMPLETE_OR_FAIL")
+    if sem:
+        blocking.append("SEMANTIC_PRIVACY_INCOMPLETE_OR_FAIL")
+    blocking.append("NVIDIA_REVIEW_INCOMPLETE")
+    payload = {
+        "schema_version": "1.0.0",
+        "ticker": "syn_unknown",
+        "source_hash": source_hash,
+        "direct_privacy_decision": "FAIL" if direct else "PASS",
+        "semantic_privacy_decision": ((semantic_report or {}).get("overall_verdict", "NOT_RUN")),
+        "nvidia_decision": nvidia_decision,
+        "overall_release_decision": overall,
+        "decision": overall,
+        "beta_status": "FAIL",
+        "release_safe": False,
+        "blocking_failures": len(blocking),
+        "blocking_conditions": blocking,
+        "conditions": [
+            {
+                "id": "release_gate_fail_closed",
+                "description": f"Pipeline interrupted before release gate phase: {error_class}",
+                "passed": False,
+                "blocking": True,
+                "evidence": {"error_class": error_class},
+            }
+        ],
+        "stubs_enforced": ["nvidia", "release_gate"],
+        "evaluated_at": _utc_iso_now(),
+    }
+    qa_root.mkdir(parents=True, exist_ok=True)
+    gate_path = qa_root / "release_gate.json"
+    # Atomic write — see note in _write_fail_closed_nvidia_report on
+    # why os.replace is preferred over write_text for fail-closed
+    # payloads (so SIGTERM mid-write cannot corrupt the file).
+    import os as _os_replace_gate  # noqa: PLC0415
+
+    tmp_path = gate_path.with_suffix(gate_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _os_replace_gate.replace(tmp_path, gate_path)
+    return payload
 
 
 def _write_stub_report(
