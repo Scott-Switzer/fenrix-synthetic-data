@@ -45,6 +45,7 @@ dev = [
     "types-PyYAML>=6.0",
     "nbformat>=5.7",
     "nbconvert>=7.0",
+    "ipykernel>=6.0",
 ]
 
 local-ner = [
