@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -194,3 +195,73 @@ def test_zip_validation_rejects_api_key_and_local_path(tmp_path: Path) -> None:
     assert not validation.ok
     assert validation.api_key_hits
     assert validation.local_path_hits
+
+
+def test_recent_event_summary_never_exports_sec_cover_page_fields() -> None:
+    builder = load_builder()
+    raw = """
+    FORM 8-K
+    UNITED STATES SECURITIES AND EXCHANGE COMMISSION
+    Exact name of registrant: Test Holdings, Inc.
+    (IRS Employer Identification No.) 04-2207613
+    (Commission File Number) 001-03482
+    50 Hudson Yards
+    New York, New York 10001
+    Mountain View, CA 94043
+    (650) 253-0000
+    (617) 390-1000
+    Address of principal executive offices
+    Registrant's telephone number, including area code
+    SIGNATURES
+    /s/ Some Officer
+    """
+    body, reason = builder.build_recent_event_summary(raw, "COMPANY_999", "8-K")
+
+    forbidden = [
+        "IRS Employer",
+        "Employer Identification",
+        "Commission File",
+        "Exact name of registrant",
+        "principal executive offices",
+        "Address of principal executive offices",
+        "Registrant",
+        "telephone number",
+        "FORM 8-K",
+        "FORM 10-Q",
+        "FORM 10-K",
+        "SIGNATURES",
+        "/s/",
+        "Hudson Yards",
+        "Mountain View",
+        "Framingham",
+        "Cochituate",
+        "New York, New York",
+        "CA 94043",
+        "253-0000",
+        "390-1000",
+        "04-2207613",
+        "001-03482",
+        "Test Holdings",
+        "Some Officer",
+        "650",
+        "617",
+    ]
+    for token in forbidden:
+        assert token not in body, f"leaked forbidden token: {token!r}"
+
+    assert re.search(r"\(\d{3}\)\s*\d{3}-\d{4}", body) is None
+    assert re.search(r"\b\d{2}-\d{7}\b", body) is None
+    assert (
+        re.search(
+            r"\b\d{1,5}\s+[A-Za-z0-9 .'-]+(?:Road|Street|Avenue|Ave|Blvd|Drive|Lane|Way|Yards)\b",
+            body,
+        )
+        is None
+    )
+    assert re.search(r"https?://\S+|\bwww\.\S+", body) is None
+
+    assert "Recent Event Summary" in body
+    assert "Identity Risk Removed" in body
+    assert "Source form: 8-K" in body
+    assert "Company: COMPANY_999" in body
+    assert reason == "OK"

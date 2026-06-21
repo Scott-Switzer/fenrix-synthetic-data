@@ -17,6 +17,7 @@ import requests
 from .submission_quality import (
     COMPANY_DATA,
     SEC_FILES,
+    build_recent_event_summary,
     html_to_text,
     scrub_text,
     section,
@@ -245,7 +246,7 @@ def collect_sec(
             )
         event_url = filing_url(ctx.cik or "", latest_row(rows, "8-K") or {}) if ctx.cik else None
         event_text = html_to_text(SECClient().get_text(event_url)) if event_url else ""
-        summaries["recent_event"] = summarize(event_text, ctx.private_map, "Recent Event")
+        summaries["recent_event"] = build_recent_event_summary(event_text, ctx.company_id, "8-K")
     except Exception as exc:  # noqa: BLE001
         failures.append(SourceFailure(ticker, "sec", "INCOMPLETE", safe_error(exc)))
     sample = ""

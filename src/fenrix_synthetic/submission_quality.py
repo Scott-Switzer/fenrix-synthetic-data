@@ -229,6 +229,75 @@ def bin_value(value: Any) -> str:
     return "mega"
 
 
+EVENT_CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("shareholder", "shareholder meeting"),
+    ("annual meeting", "shareholder meeting"),
+    ("auditor", "auditor/accounting matter"),
+    ("accounting", "auditor/accounting matter"),
+    ("executive compensation", "executive compensation matter"),
+    ("compensation", "executive compensation matter"),
+    ("financing", "financing/capital markets matter"),
+    ("debt", "financing/capital markets matter"),
+    ("note offering", "financing/capital markets matter"),
+    ("capital markets", "financing/capital markets matter"),
+    ("operational", "operational/business update"),
+    ("business update", "operational/business update"),
+    ("restructuring", "operational/business update"),
+)
+
+
+def infer_event_category(text: str) -> str:
+    lowered = re.sub(r"\s+", " ", text).lower()
+    for keyword, category in EVENT_CATEGORY_KEYWORDS:
+        if keyword in lowered:
+            return category
+    return "general current-report disclosure"
+
+
+def build_recent_event_summary(
+    event_text: str,
+    company_id: str,
+    source_form: str = "8-K",
+) -> tuple[str, str]:
+    """Build a safe, sanitized recent-event summary.
+
+    Never copies raw 8-K cover-page text into the public output. The summary
+    is a fixed template plus a coarse event category inferred from safe item
+    labels. Returns (markdown_body, status_reason).
+    """
+    category = infer_event_category(event_text) if event_text and event_text.strip() else ""
+    event_section = (
+        f"## Event Type\n\nRecent current-report filing.\n\nInferred event category: {category}.\n"
+        if category
+        else "## Event Type\n\nRecent current-report filing.\n"
+    )
+    body = (
+        f"# Recent Event Summary\n\n"
+        f"* Company: {company_id}\n"
+        f"* Source form: {source_form}\n"
+        f"* Summary status: OK\n"
+        f"* Relative filing period: RECENT_PERIOD\n\n"
+        f"{event_section}\n"
+        f"## Sanitized Summary\n\n"
+        f"A recent Form 8-K-style current report was available for this company. "
+        f"The public artifact does not include the raw filing body because "
+        f"current-report cover pages and signatures contain direct identifiers.\n\n"
+        f"## Identity Risk Removed\n\n"
+        f"* street address\n"
+        f"* city/state/zip\n"
+        f"* phone number\n"
+        f"* IRS employer identification number\n"
+        f"* SEC commission file number\n"
+        f"* accession number\n"
+        f"* filing URL\n"
+        f"* officer/director/signer names\n"
+        f"* auditor names\n"
+        f"* vote tables and exact vote counts\n"
+        f"* raw filing headers and signatures\n"
+    )
+    return body, "OK"
+
+
 def brief_topic(text: str) -> str:
     lowered = text.lower()
     if "earn" in lowered:
