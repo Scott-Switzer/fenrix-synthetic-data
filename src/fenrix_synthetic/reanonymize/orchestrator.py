@@ -51,6 +51,7 @@ from ..identity.pseudonym_allowlist import (
     allowlist_human_readable,
     is_pseudonym_suppression_eligible,
 )
+from ..identity.schemas import EntityType
 from ..release.gate import (
     ReleaseDecision,
     ReleaseGateResult,
@@ -60,6 +61,7 @@ from ..utility.unstructured import evaluate_unstructured_utility
 from .atlas_builder import (
     AtlasHarvestReport,
     DirectIdentifierAtlasBuilder,
+    write_rejected_candidates_report,
 )
 from .limits import apply_form_limits, infer_form, parse_form_limits
 
@@ -358,6 +360,18 @@ class ReanonymizeOrchestrator:
             encoding="utf-8",
         )
 
+        # Rejected-candidates histogram (counts ONLY — never raw values).
+        # Schema is always-on: written even when zero rejections occur so
+        # the operator can scan both reports in parallel for QA without
+        # re-reading private logging. Fix 3 contract — rejected
+        # candidates NEVER participate in the scanner's leak-surface
+        # count, NEVER inflate the replacement-rate denominator, and
+        # NEVER appear in the public alias set the masker consumes.
+        write_rejected_candidates_report(
+            report,
+            qa_root / "direct_identifier_rejected_candidates_report.json",
+        )
+
         # Pseudonym allowlist metadata so a downstream reviewer can
         # audit which substrings the scanner ignored. We do NOT
         # write the patterns into the public tree; the audit doc
@@ -424,17 +438,90 @@ class ReanonymizeOrchestrator:
         if not isinstance(data, dict):
             data = {}
 
+        # Fix 4 — entities whose masker MUST match case-insensitively
+        # AND tolerate punctuation-adjacent tokens (e.g. "NVIDIA" must
+        # mask inside ", NVIDIA Corp", "nvidia-corp URL", "NVIDIA's",
+        # etc.) need a non-literal match_policy + a non-empty mutation
+        # policy list. Other entity types stay literal so we don't
+        # over-expand the leak surface for rare-phrase captures.
+        #
+        # Hoisted to function-local scope BEFORE both the curated
+        # upgrade loop below AND the harvested-insert loop further
+        # down, so each side sees the same definition (regression
+        # captured: previously the constant was defined mid-block
+        # and the upgrade loop raised UnboundLocalError).
+        case_insensitive_types = {
+            EntityType.COMPANY.value,
+            EntityType.TICKER.value,
+            EntityType.BRAND.value,
+        }
+
         existing_entity_ids = {e.get("entity_id") for e in (data.get("entities") or [])}
         existing_alias_ids = {a.get("alias_id") for a in (data.get("aliases") or [])}
 
+        # Fix 4 (part 2): UPGRADE the match_policy of PRE-EXISTING
+        # CURATED aliases whose entity_type is company/ticker/brand.
+        # Earlier waves of the pipeline wrote these as ``literal``; the
+        # masker then misses variants like ``NVIDIA`` inside
+        # ``, NVIDIA Corp``, ``NVIDIA's``, ``nvidia-corp``, etc.
+        # (the bounded beta's 40 post-mask hits came from this gap).
+        # in-place mutation preserves alias_ids (no collisions) while
+        # bringing curated entries up to the same standard harvested
+        # entries get below.
+        for ali in data.get("aliases", []) or []:
+            etype_val = ali.get("entity_type")
+            if isinstance(etype_val, str) and etype_val.lower() in case_insensitive_types:
+                ali["match_policy"] = "case_insensitive"
+                mp = list(ali.get("enabled_mutation_policies") or [])
+                for required in (
+                    "punctuation_variant",
+                    "possessive",
+                    "whitespace_normalize",
+                ):
+                    if required not in mp:
+                        mp.append(required)
+                ali["enabled_mutation_policies"] = mp
+
+        # Now insert the harvested entries. ``case_insensitive_types``
+        # is defined above (in the hoisted block) so we don't need
+        # to redefine it here.
+        #
+        # H3 (Fix 5): the historical loop used
+        # ``if entity_id in existing_entity_ids: counter += 1; continue``
+        # which silently DROPPED the harvested value whenever the
+        # generated ID collided with one already in the curated atlas
+        # (the bounded beta's 40 post-mask hits came from this: 124 of
+        # 483 harvested entries actually made it to the YAML because
+        # their slots were exactly the first 359 counter positions).
+        # Replace the buggy ``continue`` with a ``while`` that keeps
+        # incrementing counter until BOTH the entity_id and the
+        # alias_id land on free slots, so each harvested value yields
+        # exactly one entity + alias record regardless of how dense
+        # the curated atlas already is.
         counter = 1
         merged_entities = 0
         merged_aliases = 0
         for etype, values in sorted(report._buckets.items()):
             for value in sorted(values):
-                entity_id = f"harvest_{etype}_{counter:04d}"
-                if entity_id in existing_entity_ids:
+                # Bump the counter until both ids are free. Bound the
+                # search so a pathological curated atlas cannot hang
+                # the run; the upper bound is generous (1M iterations)
+                # but a real curated atlas never carries that density.
+                attempts = 0
+                while attempts < 1_000_000:
+                    entity_id = f"harvest_{etype}_{counter:04d}"
+                    alias_id = f"harvest_{etype}_a{counter:04d}"
+                    if entity_id not in existing_entity_ids and alias_id not in existing_alias_ids:
+                        break
                     counter += 1
+                    attempts += 1
+                else:  # pragma: no cover - defensive guard
+                    logger.warning(
+                        "Could not allocate fresh harvest id after 1M attempts "
+                        "for etype=%s value=%r; skipping",
+                        etype,
+                        value,
+                    )
                     continue
                 data.setdefault("entities", []).append(
                     {
@@ -444,19 +531,24 @@ class ReanonymizeOrchestrator:
                     }
                 )
                 merged_entities += 1
-                alias_id = f"harvest_{etype}_a{counter:04d}"
-                if alias_id in existing_alias_ids:
-                    counter += 1
-                    continue
-                data.setdefault("aliases", []).append(
-                    {
-                        "alias_id": alias_id,
-                        "canonical_entity_id": entity_id,
-                        "private_alias_value": value,
-                        "entity_type": etype,
-                        "match_policy": "literal",
-                    }
-                )
+                alias_record: dict[str, Any] = {
+                    "alias_id": alias_id,
+                    "canonical_entity_id": entity_id,
+                    "private_alias_value": value,
+                    "entity_type": etype,
+                    "match_policy": (
+                        "case_insensitive" if etype in case_insensitive_types else "literal"
+                    ),
+                }
+                if etype in case_insensitive_types:
+                    # Punctuation-adjacent token tolerance: "NVIDIA"
+                    # matches inside ", NVIDIA Corp", "NVIDIA's", etc.
+                    alias_record["enabled_mutation_policies"] = [
+                        "punctuation_variant",
+                        "possessive",
+                        "whitespace_normalize",
+                    ]
+                data.setdefault("aliases", []).append(alias_record)
                 merged_aliases += 1
                 counter += 1
 

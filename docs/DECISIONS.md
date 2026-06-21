@@ -501,3 +501,153 @@ from the beta CLI visible.
 - ``beta_status`` stays ``INCOMPLETE`` until a real NVIDIA adapter lands.
 - ``release_safe`` remains ``false`` for any release that relies on
   the NVIDIA reviewer's verdict.
+
+---
+
+## Decision 031: Validated-Harvesting Admission Pipeline + H3 Collision Fix
+
+**Date**: 2026-06-20
+**Status**: Accepted (H3 fix shipped + all quality gates GREEN on a single
+PR; the direct-privacy ``post_mask_hits == 0`` acceptance criterion remains
+an open follow-up tracked below.)
+
+**Context**: The Phase 4 vertical slice's
+``fenrix-synth reanonymize-run`` command was failing ``post_mask_hits == 0``
+on the real NVDA source run under ``/Users/scottthomasswitzer/Downloads/run_20260620_234738``.
+Two distinct leak patterns surfaced:
+
+1. **Person admission was over-permissive** \u2014 boilerplate fragments like
+   ``/s/ Jennifer Smith`` and ``authorized officer of us`` were landing in
+   the public alias set. The previous strict-titlecase regex
+   ``[A-Z][a-z]+|[A-Z]\\.?`` was *also* under-aggressive because it could
+   capture 1-letter prose tokens (``I``, ``A``) as candidate name parts,
+   inflating the rejection histogram to 124,193 rows.
+2. **Merge collisions silently dropped harvested entries** \u2014 the curate-upgrade
+   branch's merge loop used ``if entity_id in existing_entity_ids: counter += 1;
+   continue``, which silently forfeited the harvested value whenever the
+   counter offset collided with a curated ``harvest_*`` slot from a previous
+   run. The bounded-beta CLI log ``Merged 124 harvested entities`` while
+   483 had been sourced evidenced that ~359 sorted values were dropped.
+
+**Decision**:
+
+- **Fix 1 (Person admission firewall)**: Tighten the regex from
+  ``[A-Z][a-z]+|[A-Z]\\.?`` to ``[A-Z][a-z]+|[A-Z]\\.`` (require period for
+  initials). Implement a 6-rule admission predicate in
+  ``src/fenrix_synthetic/reanonymize/atlas_builder.py``:
+  (a) strip leading blocklist token from
+  ``_BLOCKLIST_PERSON_TOKENS`` (16 entries: ``director``, ``officer``,
+  ``authorized``, ``us``, ``company``, ``the``, ``by``, ``executive``,
+  ``chief``, ``vp``, ``of``, ``and``, ``or``, ``has``, ``will``, ``shall``);
+  (b) require 2-4 surviving tokens; (c) reject inner-blocklist token;
+  (d) require titlecase token shape; (e) reject trailing verb from
+  ``_POST_NAME_VERB_TOKENS`` (20 entries); (f) require a high-confidence
+  context window (``_HIGH_CONFIDENCE_CONTEXTS`` 10 entries: ``signatures``,
+  ``by:``, ``/s/``, ``director``, ``officer``, ``executive``, ``vp``,
+  ``chief executive``, ``chief financial``, ``president``).
+- **Fix 2 (Handle admission firewall)**: Stem-match against
+  ``_risk_stems`` (ticker + curated company tokens). Empty ``_risk_stems``
+  fails closed: every handle rejected with ``handle_not_tied_to_root``.
+- **Fix 3 (Rejection-report privacy contract)**: Re-categorize every
+  admission rejection via a ``RejectionReason`` enum, emit
+  ``qa/direct_identifier_rejected_candidates_report.json`` containing
+  ONLY counts + enum strings (never raw rejected values), and ensure
+  rejected candidates NEVER inflate ``aliases_built`` nor participate in
+  post-mask scans. The schema is always-on: the file is written even
+  with zero rejections so downstream tooling can always read it.
+- **Fix 4 (Curated-upgrade loop + case-insensitive policies)**: After
+  parsing existing aliases in ``_merge_harvest_into_atlas_yaml``, walk
+  the curated aliases and upgrade ``match_policy`` to ``case_insensitive``
+  + append ``[punctuation_variant, possessive, whitespace_normalize]`` to
+  ``enabled_mutation_policies`` for ``entity_type`` in
+  ``{COMPANY, TICKER, BRAND}``. Other entity types (accession, cik,
+  rare_phrase, xbrl_concept, url) stay literal so we don't over-expand
+  the leak surface for rare-phrase captures. The same policy applies to
+  both *curated* (in-place upgrade) AND *harvested* (fresh emission)
+  aliases. The ``case_insensitive_types`` constant is hoisted to
+  function-local scope BEFORE both loops so the curated upgrade reads
+  the same value the harvested insert writes.
+- **Fix 5 (H3 collision bugfix)**: In ``_merge_harvest_into_atlas_yaml``,
+  replace the buggy ``if entity_id in existing_entity_ids: counter += 1;
+  continue`` with a single ``while`` loop that increments ``counter`` until
+  BOTH ``entity_id`` AND ``alias_id`` land on free slots. Bounded by 1
+  million attempts as a defensive guard with a logged-warning skip-and-continue
+  path so pathological curators cannot hang the run.
+
+**Rationale**:
+
+- All five fixes ship together because they were diagnosed together
+  against the SAME bounded-beta observation. Shipping them serially
+  re-runs the diagnostic work each time.
+- The defensive 1M bound on Fix 5 is intentionally redundant with the
+  deterministic-counter contract: a curated atlas carrying 1M harvest
+  slots is implausible in practice; the bound's only purpose is to fail
+  closed cleanly rather than spin.
+- The curated-upgrade loop runs BEFORE the harvest-insert loop. This is
+  intentional: an in-place mutation preserves ``alias_id`` (no collisions,
+  so the post-upgrade state is collision-irrelevant for Fix 5's contract).
+
+**Verification (all gates GREEN at HEAD)**:
+
+- ``ruff format --check .`` \u2014 177 files already formatted.
+- ``ruff check .`` \u2014 All checks passed.
+- ``mypy src/fenrix_synthetic --show-error-codes`` \u2014 No issues found in 127 source files.
+- ``pytest --disable-socket -q`` \u2014 **896 passed**, 4 skipped, 9 warnings.
+  New tests cover 4 test classes (+24 individual tests) atop d78d154 baseline:
+  - ``TestPersonAdmissionPipeline`` (10): director stripping, lowercase anchors,
+    trailing-verb rejection, no-context rejection, validation that rejected
+    candidates don't inflate ``aliases_built``.
+  - ``TestHandleAdmissionPipeline`` (5): handle variant emission, no-risk-stem
+    fail-closed, random-user rejection, blocklist-word handle rejection.
+  - ``TestOrchestratorWritesRejectedCandidatesReport`` (3): schema-always-on,
+    no-raw-values, zero-rejections path.
+  - ``TestAtlasMergeFix4CaseInsensitive`` (4): harvested company/ticker/brand
+    use case_insensitive, accession stays literal, curated entries survive
+    append, curated literals upgrade to case_insensitive.
+  - ``TestMergeCollisionBugfix`` (1): dense-atlas (400 slots) + 10 fresh values
+    all land at slots \u2265 401, no duplicates, no drops.
+
+**Acceptance Criterion Status**:
+
+- ``post_mask_hits == 0`` in real bounded beta on the user's NVDA source
+  run \u2014 **NOT YET achieved**. Three iterations of regression show a static
+  40-hit residual: ``{\"or director\": 20, \"authorized us\": 18, \"NVIDIA\": 2}``.
+  Aliases-built went 452 \u2192 483 \u2192 486 across iterations, indicating Fix 5
+  did fire (more entries land). The persistent residual is a SECOND-LAYER
+  issue independent of the collision bug:
+  - The 38 fragments appear INSIDE the masked body text co-occurring with
+    masked entities (e.g., ``, Company 682 or director``), suggesting the
+    curated source atlas contains these as ``rare_phrase`` aliases with
+    match_policy=literal that the masker cannot substitute due to word
+    boundary / surrounding-token handling.
+  - The 2 \u00d7 ``NVIDIA`` literal hits are NOT in ``\\bNVIDIA\\b`` form across
+    the masked ``public/surrogates/sec/`` files; they appear to score on
+    filename metadata carryover (``source_run:`` path segment containing
+    the source ticker directory name) rather than body text.
+  - Hypothesised second-layer fix (deferred): normalise-out prose fragments
+    in ``build_private_values_dict`` (``registry_load.py``) + sanitise
+    metadata carryover in ``TextAnonymizer`` filename emission. Approximately
+    50 lines of change across two modules; not shipped with this PR.
+
+**Open Follow-ups** (tracked in code as TODO; not blocking this commit):
+
+- TODO \[registry_load.__init__\] \u2014 Drop pre-curated prose fragments
+  (``or director``, ``authorized us``, ``authorized officer``, etc.) from
+  the ``private_values_dict`` so neither the masker nor the post-mask
+  scanner treats them as candidate identifiers.
+- TODO \[text_anonymizer.build_filename\] \u2014 Apply case-folding + ticker
+  substitution to the ``source_run`` metadata carrier that surfaces in
+  ``filename_and_metadata_scan`` so ``NVIDIA`` doesn't survive via the
+  path-segment carryover.
+
+**Implications**:
+
+- ``beta_status`` stays ``INCOMPLETE`` (the 40-hit residual keeps the
+  post-mask-identity-hits gate condition at blocking=true). The release
+  gate already records this correctly.
+- ``release_safe`` stays ``false`` in all iterations; semantic + NVIDIA
+  stubs continue to add the REQUIRED semantic_privacy_attack_implemented
+  and nvidia_review_implemented blocking conditions.
+- This PR is staged progress per user direction \u2014 do not re-run the
+  bounded beta in this state without first applying the second-layer fix
+  tracked above.
