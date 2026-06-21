@@ -5,7 +5,7 @@ import re
 import unicodedata
 
 from ..identity import EntityRegistry
-from ..identity.schemas import Alias, BoundaryPolicy, MatchPolicy, MutationPolicy
+from ..identity.schemas import Alias, BoundaryPolicy, EntityType, MatchPolicy, MutationPolicy
 
 
 class MatchEntry:
@@ -177,7 +177,15 @@ def get_patterns_for_alias(
     value = alias.private_alias_value
     entity = entity_registry.get_entity(alias.canonical_entity_id)
     replacement = entity.assigned_pseudonym if entity else "[REDACTED]"
-    priority = alias.priority
+    # Fix 3 (longest-first): boost the alias's intrinsic priority by
+    # the length of the matching value so when two candidates overlap
+    # the longer one wins in ``OverlapResolver.resolve``. Without this
+    # boost, a short alias (e.g.``NVDA``,len=4) could shadow a longer
+    # one (e.g. ``NVIDIA Corp``, len=11) whose match fully contains it,
+    # producing a partial replacement that leaves ``Corp`` visible
+    # (and re-introduces a literal-token leak surface for the scanner)
+    # .
+    priority = alias.priority + len(value)
 
     match_policy = alias.match_policy
     flags = re.IGNORECASE if match_policy == MatchPolicy.CASE_INSENSITIVE else 0
@@ -203,6 +211,32 @@ def get_patterns_for_alias(
         MatchPolicy.CANARY,
     ):
         patterns.append(("literal", _bounded(re.escape(value)), replacement, priority, flags))
+
+    # Fix 7 (social-handle masking): company/ticker/brand aliases
+    # also need to mask ``@<alias-substring>`` social-media handles
+    # embedded in URLs (Twitter, Flipboard, LinkedIn, etc.) where
+    # the literal pattern's `\b<value>\b` boundary correctly skips
+    # over cases like ``@NVIDIACorp`` because ``NVIDIA`` is a
+    # substring with no word-boundary on the trailing ``Corp`` side.
+    # The grammar ``@\w*<re.escape(value)>\w*`` matches the entire
+    # handle so the masker replaces ``@NVIDIACorp`` -> ``@Company 001``
+    # (or whichever pseudonym the company entity owns). Priorities
+    # intentionally exceed the literal pattern so on overlap the
+    # handle wins without leaving the @ glyph or a residual suffix.
+    if alias.entity_type in (
+        EntityType.COMPANY,
+        EntityType.TICKER,
+        EntityType.BRAND,
+    ):
+        patterns.append(
+            (
+                "social_handle",
+                f"@{re.escape(value)}\\w*",
+                replacement,
+                priority + 20,
+                flags,
+            )
+        )
 
     if match_policy == MatchPolicy.TICKER_EXACT:
         patterns.append(

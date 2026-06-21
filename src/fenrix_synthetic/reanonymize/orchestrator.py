@@ -795,10 +795,31 @@ class ReanonymizeOrchestrator:
         top_hit_ordered = sorted(top_hit_types.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
         top_hit_dict = dict(top_hit_ordered)
 
-        # Filename and metadata scan.
+        # Filename and metadata scan. The metadata dict carries an
+        # opaque source_hash (SHA-256 truncated to 16 hex chars) rather
+        # than the raw ``--source-run`` path \u2014 the bounded beta's
+        # 2 \xd7 ``NVIDIA`` hits came from ``filename_and_metadata_scan``
+        # matching the ``NVDA``/``NVIDIA`` literal tokens inside the
+        # str(source_run) string. The redacted form never carries any
+        # raw private value, so the scan can only match on the
+        # anonymized files themselves, not the leaked metadata carrier.
+        import hashlib
+
+        source_hash = hashlib.sha256(str(ctx.source_run).encode("utf-8")).hexdigest()[:16]
         filenames = [str(p) for p in sec_public_dir.iterdir() if p.is_file()]
         filename_res = filename_and_metadata_scan(
-            filenames, {"source_run": str(ctx.source_run)}, private_values
+            filenames,
+            # Fix 5 (metadata hygiene): drop ``ticker`` from the
+            # scanned metadata dict because ``filename_and_metadata_scan``
+            # runs ``metadata_text = str(metadata).lower()`` which
+            # exposed the source ticker text (e.g. ``'nvda'``) to the
+            # case-insensitive substring scanner and contributed 4 of
+            # the bounded beta's post-mask hits. ``source_hash`` is
+            # the SHA-256 truncated opaque identifier for the run; it
+            # carries NO raw identity and is the only key the scanner
+            # needs for run-correlation evidence.
+            {"source_hash": source_hash},
+            private_values,
         )
 
         # Compute replacement rate. Division-by-zero guard: if the
@@ -1298,10 +1319,25 @@ class ReanonymizeOrchestrator:
             conditions=conditions_payload,
         )
 
+        # Redact the raw ``--source-run`` path from the public release
+        # gate payload: replace ``source_run`` with an opaque
+        # ``source_hash`` (SHA-256 truncated to 16 hex chars). The
+        # bounded beta's 2 × ``NVIDIA`` hits ALSO carried over via the
+        # raw source_run appearing in release_gate.json when the
+        # post-scan path-metadata layer echoed the path through. By
+        # redaction at the public-payload boundary, downstream QA
+        # consumers can correlate per-run artefacts by hash without
+        # leaking the operator's filesystem layout or the source
+        # ticker directory name (which previously propagated via the
+        # path's ``<TICKER>`` segment).
+        import hashlib as _hashlib
+
+        _source_hash = _hashlib.sha256(str(ctx.source_run).encode("utf-8")).hexdigest()[:16]
+
         return {
             "schema_version": "1.0.0",
-            "ticker": ctx.ticker,
-            "source_run": str(ctx.source_run),
+            "ticker": "syn_" + hashlib.sha256(ctx.ticker.encode("utf-8")).hexdigest()[:8],
+            "source_hash": _source_hash,
             "decision": gate.decision.value,
             "beta_status": beta_status,
             "release_safe": release_safe,

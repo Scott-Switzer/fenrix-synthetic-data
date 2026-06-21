@@ -40,7 +40,7 @@ _COUNTER_PSEUDONYM_RE: Final[re.Pattern[str]] = re.compile(
     r"BoardMember|Subsidiary|BusinessSegment|Product|Brand|"
     r"ProprietaryPlatform|Facility|Headquarters|AcquisitionTarget|"
     r"JointVenture|Auditor|LawFirm|Customer|Supplier|Competitor|"
-    r"Regulator)\s+\d{1,4}$"
+    r"Regulator|Person|Region)\s+\d{1,4}$"
 )
 
 

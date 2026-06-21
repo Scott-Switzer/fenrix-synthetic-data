@@ -38,9 +38,7 @@ from ..identity.schemas import EntityType, MatchPolicy
 
 logger = logging.getLogger(__name__)
 
-
 # ── Canonicalization ──────────────────────────────────────────────────
-
 
 # High-risk entity types whose stored value can be very short
 # (single-char ticker like "F" / "T", 1-10 digit CIK, 18-digit
@@ -56,6 +54,42 @@ _HIGH_RISK_TYPES: frozenset[EntityType] = frozenset(
 
 _DEFAULT_MIN_LENGTH = 3
 _COLLAPSE_WHITESPACE_RE = re.compile(r"\s+")
+
+# Prose fragments that the harvester's admission pipeline rejects as
+# boilerplate (cf. ``atlas_builder._BLOCKLIST_PERSON_TOKENS``). Older
+# source atlases may have them written as curated ``rare_phrase``
+# entries by mistake; loading them would feed the post-mask scanner
+# exactly the phrases that the masker does NOT replace, producing
+# aggressive-but-meaningless post-mask hits. Treat them as if they
+# were empty values so the loader's existing fail-closed accounting
+# (``skipped_empty``) and the public QA report (``registry_load_report``
+# ``skipped_empty`` count) surface the leak without ever propagating it.
+#
+# Lowercase form is the comparison key: ``or director`` /
+# ``Authorized Us`` / ``AUTHORIZED OFFICER`` all land here. Adding
+# to this set is intentionally a code change (not a config change)
+# so the safety contract lives next to the loader it's protecting.
+_LOAD_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        "or director",
+        "authorized us",
+        "authorized officer",
+        "authorized officer of us",
+        "director of the company",
+        "chief executive officer",
+        "chief executive",
+        "vice president",
+        "by:",
+        "by :",
+        "/s/",
+    }
+)
+
+
+def _is_load_blocklisted(value: str) -> bool:
+    if not value:
+        return False
+    return value.strip().lower() in _LOAD_BLOCKLIST
 
 
 def normalize_private_value(
@@ -122,7 +156,6 @@ def private_value_collision_key(value: str) -> str:
 
 
 # ── Enum resolution (tolerant fallbacks) ─────────────────────────────
-
 
 _KNOWN_MATCH_POLICIES: dict[str, MatchPolicy] = {
     "literal": MatchPolicy.LITERAL,
@@ -282,10 +315,17 @@ def load_atlas(
     reg_meta = atlas_data.get("metadata", {}) or {}
     registry_id = str(reg_meta.get("registry_id") or f"reg-{ticker}")
     company_id = str(reg_meta.get("company_id") or ticker)
-    reg = EntityRegistry.create(company_id=company_id, registry_id=registry_id)
-
-    # Phase 1 — entities.
+    reg = EntityRegistry.create(
+        company_id=company_id, registry_id=registry_id
+    )  # Phase 1 — entities.
     seen_entity_ids: set[str] = set()
+    # Tracks entity_ids that Phase 1 deliberately dropped via the prose
+    # blocklist (Fix 1). Phase 2 uses this set to route alias-side
+    # orphans of those dropped entities into ``skipped_empty`` instead
+    # of ``load_errors``, so the prose-blocklist guard does not trip
+    # the fail-closed ``summary.blocking`` flag through spurious
+    # orphan load errors.
+    blocklisted_eids: set[str] = set()
     raw_entities = atlas_data.get("entities", []) or []
     for ent in raw_entities:
         if not isinstance(ent, dict):
@@ -297,6 +337,24 @@ def load_atlas(
         etype = _lookup_entity_type(ent.get("entity_type"))
         value = normalize_private_value(ent.get("canonical_private_value"), entity_type=etype)
         if not eid or not value:
+            summary.skipped_empty += 1
+            continue
+        # Fix 1 (prose-fragment drop): if the curator wrote a known
+        # boilerplate phrase as a curated ``rare_phrase`` entity, treat
+        # it as empty so the existing fail-closed accounting surfaces
+        # it. Loading the phrase would feed the post-mask scanner
+        # exactly the strings the masker does NOT replace, producing
+        # aggressive-but-meaningless blocking hits (``or director`` /
+        # ``authorized us`` survived into the public body because they
+        # were ALSO loaded as private values to scan against).
+        if _is_load_blocklisted(value):
+            logger.warning(
+                "Atlas entity value for %s matches prose blocklist (entity_id=%s); "
+                "treating as skipped_empty",
+                ticker,
+                eid,
+            )
+            blocklisted_eids.add(eid)
             summary.skipped_empty += 1
             continue
         if eid in seen_entity_ids:
@@ -335,6 +393,19 @@ def load_atlas(
             continue
         seen_alias_ids.add(aid)
         if not eid or eid not in reg.entities:
+            # Orphan-of-Fix-1 routing: an alias that legitimately
+            # points to a prose-blocklisted entity that Phase 1
+            # already dropped is silently skipped into
+            # ``skipped_empty`` rather than tripped as a structural
+            # ``load_error`` (which would fail-closed the run via
+            # ``summary.blocking``). A real missing-eid orphan (e.g.
+            # a typo in curated YAML that references an entity_id
+            # that was never declared) still counts as ``load_errors``
+            # so the loader's fail-closed contract is preserved for
+            # genuine atlas bugs.
+            if eid and eid in blocklisted_eids:
+                summary.skipped_empty += 1
+                continue
             logger.warning(
                 "alias %s for %s references unknown entity_id=%s; skipping",
                 aid,
@@ -344,6 +415,19 @@ def load_atlas(
             summary.load_errors += 1
             continue
         if not value:
+            summary.skipped_empty += 1
+            continue
+        # Fix 1 (prose-fragment drop): mirror the entity-side guard so
+        # a curator who wrote ``or director`` / ``authorized us`` as a
+        # ``rare_phrase`` ALIAS also cannot inject boilerplate into
+        # the post-mask scanner target list.
+        if _is_load_blocklisted(value):
+            logger.warning(
+                "Atlas alias value for %s matches prose blocklist (alias_id=%s); "
+                "treating as skipped_empty",
+                ticker,
+                aid,
+            )
             summary.skipped_empty += 1
             continue
         try:
