@@ -323,6 +323,14 @@ class NVIDIABounds:
     max_artifacts_per_run: int = _FINAL_MAX_ARTIFACTS
     max_chunks_reviewed_per_artifact: int = _FINAL_MAX_CHUNKS_REVIEWED
     max_chunks_rewritten_per_artifact: int = _FINAL_MAX_CHUNKS_REWRITTEN
+    # Optional size cap (chars per surrogate) for smoke runs. When set
+    # and the run is in ``smoke`` mode, the review adapter truncates
+    # each surrogate to at most this many characters BEFORE scrub +
+    # precheck + attacker passes, so bounded smoke runs finish under
+    # a known wall-clock budget even when the smallest legal surrogate
+    # is many MB. Defaults to ``None`` (no truncation) so the full-
+    # filing path is unchanged when omitted.
+    smoke_max_input_chars: int | None = None
 
     @classmethod
     def smoke(cls) -> NVIDIABounds:

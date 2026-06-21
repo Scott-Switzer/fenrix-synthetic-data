@@ -2270,6 +2270,17 @@ def boundary_diag(ctx: click.Context) -> None:
     help="Override per-artifact cap on chunks rewritten.",
 )
 @click.option(
+    "--nvidia-smoke-max-input-chars",
+    type=int,
+    default=None,
+    help=(
+        "Smoke mode only: cap each surrogate passed to the bounded "
+        "NVIDIA review to this many characters. Lets smoke runs finish "
+        "under a known wall-clock budget when the smallest legal "
+        "artifact is many MB. Ignored outside smoke mode."
+    ),
+)
+@click.option(
     "--allow-incomplete",
     is_flag=True,
     default=False,
@@ -2292,6 +2303,7 @@ def reanonymize_run(
     nvidia_max_artifacts: int | None = None,
     nvidia_max_chunks_reviewed: int | None = None,
     nvidia_max_chunks_rewritten: int | None = None,
+    nvidia_smoke_max_input_chars: int = 20000,
 ) -> None:
     """Re-run anonymization on a prior ``pipeline-run`` and write the release gate.
 
@@ -2330,6 +2342,7 @@ def reanonymize_run(
             nvidia_max_artifacts=nvidia_max_artifacts,
             nvidia_max_chunks_reviewed=nvidia_max_chunks_reviewed,
             nvidia_max_chunks_rewritten=nvidia_max_chunks_rewritten,
+            nvidia_smoke_max_input_chars=nvidia_smoke_max_input_chars,
         )
         result = orchestrator.run()
     except InvalidSourceRunError as exc:

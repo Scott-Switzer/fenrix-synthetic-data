@@ -53,6 +53,8 @@ from ..identity.pseudonym_allowlist import (
     is_pseudonym_suppression_eligible,
 )
 from ..identity.schemas import EntityType
+from ..providers.nvidia_client import NVIDIABounds
+from ..providers.nvidia_review import NVIDIAReviewAdapter
 from ..release.gate import (
     ReleaseDecision,
     ReleaseGateResult,
@@ -133,6 +135,7 @@ class ReanonymizeOrchestrator:
         nvidia_max_artifacts: int | None = None,
         nvidia_max_chunks_reviewed: int | None = None,
         nvidia_max_chunks_rewritten: int | None = None,
+        nvidia_smoke_max_input_chars: int | None = None,
     ) -> None:
         # ``allow_incomplete`` is a forward-compat operator signal: the
         # orchestrator already always writes the release gate with an
@@ -146,6 +149,9 @@ class ReanonymizeOrchestrator:
         self.limit_news = max(0, int(limit_news))
         self.allow_incomplete = bool(allow_incomplete)
         self.form_limits = parse_form_limits(limit_forms)
+        # Smoke-only char cap on each surrogate ingested by the bounded
+        # NVIDIA review. Defaults to ``None`` (full-filing path).
+        self.nvidia_smoke_max_input_chars = nvidia_smoke_max_input_chars
         # NVIDIA review budget — bounded to keep per-run API calls finite.
         self.nvidia_mode = nvidia_mode or "final_submission"
         self.nvidia_max_artifacts = nvidia_max_artifacts
@@ -424,9 +430,6 @@ class ReanonymizeOrchestrator:
             )
         if nvidia_api_key:
             try:
-                from fenrix_synthetic.providers.nvidia_client import NVIDIABounds
-                from fenrix_synthetic.providers.nvidia_review import NVIDIAReviewAdapter
-
                 # Build bounded-review caps from CLI overrides.
                 if self.nvidia_mode == "smoke":
                     bounds = NVIDIABounds.smoke()
@@ -438,6 +441,8 @@ class ReanonymizeOrchestrator:
                     bounds.max_chunks_reviewed_per_artifact = self.nvidia_max_chunks_reviewed
                 if self.nvidia_max_chunks_rewritten is not None:
                     bounds.max_chunks_rewritten_per_artifact = self.nvidia_max_chunks_rewritten
+                if self.nvidia_smoke_max_input_chars is not None and self.nvidia_mode == "smoke":
+                    bounds.smoke_max_input_chars = self.nvidia_smoke_max_input_chars
 
                 adapter = NVIDIAReviewAdapter(registry=self._preloaded_registry, bounds=bounds)
                 nvidia_report = adapter.review_batch(
@@ -945,7 +950,44 @@ class ReanonymizeOrchestrator:
                 "pre_replacement_count": 0,
             }
 
-        originals_dir = ctx.source_run / "originals"
+        # ── Phase 5 smoke bypass ──────────────────────────────
+        # When ``nvidia_mode == "smoke"`` AND a char cap is configured,
+        # slice each selected HTML to ``smoke_max_input_chars`` and write
+        # the excerpts under ``output_root/smoke_excerpts/sec/filings/``
+        # BEFORE invoking TextAnonymizer. ``originals_dir`` is then
+        # pointed at that excerpt root so the masker still runs end to
+        # end — just on a deterministic, character-bounded excerpt. This
+        # keeps Phase 6 + Phase 9 evidence meaningful (real MD outputs,
+        # not fake stubs) while bounding total smoke wall-clock inside a
+        # few seconds even when the only available filings are 1.1MB
+        # 10-Ks. Production runs (``mode == "final_submission"``) skip
+        # this branch because ``nvidia_smoke_max_input_chars`` is ``None``
+        # in that mode.
+        smoke_excerpt_used = False
+        smoke_excerpt_dir: Path | None = None
+        if self.nvidia_mode == "smoke" and self.nvidia_smoke_max_input_chars:
+            cap = int(self.nvidia_smoke_max_input_chars)
+            smoke_excerpt_dir = self.output_root / "smoke_excerpts"
+            excerpts = smoke_excerpt_dir / "sec" / "filings"
+            excerpts.mkdir(parents=True, exist_ok=True)
+            new_items: list[tuple[str | None, Path]] = []
+            for form, src_path in selection.items:
+                try:
+                    raw = src_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                excerpt_path = excerpts / src_path.name
+                excerpt_path.write_text(raw[:cap], encoding="utf-8", errors="replace")
+                new_items.append((form, excerpt_path))
+            if new_items:
+                selection = SecSurrogateSelection(items=new_items)
+                smoke_excerpt_used = True
+
+        originals_dir = (
+            smoke_excerpt_dir
+            if smoke_excerpt_used and smoke_excerpt_dir is not None
+            else ctx.source_run / "originals"
+        )
         # Phase 1.5 already loaded the registry; pass it through so the
         # anonymizer does NOT re-read the YAML again and the failure
         # surface is exactly one place (the orchestrator).

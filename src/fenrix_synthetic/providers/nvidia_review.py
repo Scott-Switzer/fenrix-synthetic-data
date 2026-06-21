@@ -78,10 +78,25 @@ class NVIDIAReviewAdapter:
             known_identifiers = [ticker]
 
         # ── Collect sample texts ────────────────────────────────────
+        # Optional smoke-only char cap. When NVIDIABounds carries a
+        # ``smoke_max_input_chars``, each surrogate is sliced AT THE
+        # READ BOUNDARY to that many characters BEFORE scrub +
+        # precheck + attacker passes. This keeps bounded smoke runs
+        # inside a known wall-clock budget even when the smallest
+        # legal surrogate is many MB. Phase 5 (TextAnonymizer) and
+        # Phase 6 (direct-residual scan) operate on the full file on
+        # disk so they remain unaffected.
+        smoke_cap = (
+            int(self._bounds.smoke_max_input_chars)
+            if self._bounds.smoke_max_input_chars and self._bounds.smoke_max_input_chars > 0
+            else None
+        )
         raw_artifacts: list[tuple[str, str]] = []
         for text_path in sorted(anonymized_dir.rglob("*.md")):
             try:
                 text = text_path.read_text(encoding="utf-8", errors="replace")
+                if smoke_cap is not None and len(text) > smoke_cap:
+                    text = text[:smoke_cap]
                 if len(text) > 500:
                     artifact_id = str(text_path.relative_to(anonymized_dir))
                     raw_artifacts.append((artifact_id, text))
