@@ -2731,6 +2731,70 @@ except ImportError:  # pragma: no cover
     pass
 
 
+# ── Professor bundle commands ──────────────────────────────────────────
+
+
+@cli.command(name="build-professor-bundle")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to professor bundle config YAML",
+)
+@click.option(
+    "--output-root",
+    type=click.Path(path_type=Path),
+    default=Path("runs/professor_bundle_latest"),
+    help="Output root directory",
+)
+@click.option("--strict", is_flag=True, default=False, help="Require all production stages")
+@click.option("--fast-fixtures", is_flag=True, default=False, help="Use fixture/mock providers")
+@click.option(
+    "--allow-provider-skip-for-local-dev",
+    is_flag=True,
+    default=False,
+    help="Allow PROVIDER_NOT_RUN (forces NOT_PROFESSOR_READY)",
+)
+def build_professor_bundle(
+    config_path: Path,
+    output_root: Path,
+    strict: bool,
+    fast_fixtures: bool,
+    allow_provider_skip_for_local_dev: bool,
+) -> None:
+    """Build a professor bundle with the mandatory 18-stage pipeline.
+
+    In --strict mode, all stages must PASS with real providers.
+    With --fast-fixtures, mock providers are used for offline testing.
+    With --allow-provider-skip-for-local-dev, PROVIDER_NOT_RUN is allowed
+    but the bundle is marked NOT_PROFESSOR_READY.
+    """
+    from .professor.orchestrator import ProfessorBundleConfig, ProfessorBundleOrchestrator
+
+    config = ProfessorBundleConfig.from_yaml(config_path)
+    config.output_root = output_root
+    config.strict = strict
+    config.fast_fixtures = fast_fixtures
+    config.allow_provider_skip = allow_provider_skip_for_local_dev
+
+    click.echo(f"Building professor bundle for {config.company_id}...")
+    click.echo(f"  Strict: {config.strict}")
+    click.echo(f"  Fast fixtures: {config.fast_fixtures}")
+    click.echo(f"  Output: {config.output_root}")
+
+    orchestrator = ProfessorBundleOrchestrator(config)
+    result = orchestrator.run()
+
+    click.echo(f"\nProfessor ready: {result['professor_ready']}")
+    click.echo(f"Beta status: {result['beta_status']}")
+    click.echo(f"ZIP: {result['zip_path']}")
+
+    if config.strict and not result["professor_ready"]:
+        click.echo("Strict mode: bundle is NOT professor-ready", err=True)
+        sys.exit(1)
+
+
 def main() -> None:  # type: ignore[no-any-return]
     """Main entry point."""
     cli()

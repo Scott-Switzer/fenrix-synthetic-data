@@ -118,6 +118,9 @@ def _is_allowed(path: Path) -> bool:
     for allowed in ALLOWED_PATHS:
         if allowed in str_path:
             return True
+    # The leak gate test itself contains real identifiers as its blocklist
+    if "test_public_identity_leak_gate" in str_path:
+        return True
     return False
 
 

@@ -1,0 +1,12 @@
+# Professor Bundle Fixture Configuration
+#
+# This config drives the fixture-based professor bundle build.
+# It uses mock providers for deterministic offline testing.
+# Real company mappings belong in gitignored private config only.
+
+company_id: "COMPANY_001"
+output_root: "runs/professor_bundle_fixture"
+strict: false
+fast_fixtures: true
+allow_provider_skip: false
+release_date: "2026-06-22"
