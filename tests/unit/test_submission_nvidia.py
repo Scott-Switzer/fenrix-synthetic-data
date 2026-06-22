@@ -16,8 +16,11 @@ from typing import Any
 
 from fenrix_synthetic.submission_nvidia import (
     _collect_public_files,
+    _is_pseudonym_only_risk,
     _parse_review_json,
+    _suppress_pseudonym_risks,
     nvidia_available,
+    rerun_nvidia_qa,
     verify_public_artifact_with_nvidia,
     write_nvidia_artifact_report,
 )
@@ -194,3 +197,113 @@ def test_repair_loop_regenerates_recent_event_summary(tmp_path: Path, monkeypatc
     repaired = leaky_path.read_text(encoding="utf-8")
     assert "IRS Employer" not in repaired
     assert "Recent Event Summary" in repaired
+
+
+def test_is_pseudonym_only_risk_detects_pseudonym_evidence() -> None:
+    assert _is_pseudonym_only_risk("* Company: COMPANY_001") is True
+    assert _is_pseudonym_only_risk("COMPANY_007 in recent event summary") is True
+    assert _is_pseudonym_only_risk("TICKER_003 and CIK_002 present") is True
+
+
+def test_is_pseudonym_only_risk_keeps_real_identifiers() -> None:
+    assert _is_pseudonym_only_risk("COMPANY_001 and 50 Hudson Yards") is False
+    assert _is_pseudonym_only_risk("COMPANY_001 (650) 253-0000") is False
+    assert _is_pseudonym_only_risk("COMPANY_001 https://example.com") is False
+    assert _is_pseudonym_only_risk("COMPANY_001 John Smith signed") is False
+    assert _is_pseudonym_only_risk("") is False
+    assert _is_pseudonym_only_risk("some random text without pseudonyms") is False
+
+
+def test_suppress_pseudonym_risks_drops_pseudonym_only() -> None:
+    report = {
+        "status": "REVIEW_REQUIRED",
+        "risks": [
+            {
+                "file": "anonymized/COMPANY_001/sec/recent_event_summary.md",
+                "risk_type": "direct_identifier",
+                "severity": "high",
+                "evidence": "* Company: COMPANY_001",
+                "recommended_fix": "Remove company identifier from summary.",
+            }
+        ],
+        "summary": "Residual identity risk detected.",
+    }
+    result = _suppress_pseudonym_risks(report)
+    assert result["status"] == "PASS"
+    assert len(result["risks"]) == 0
+    assert result.get("suppressed_pseudonym_risks") == 1
+
+
+def test_suppress_pseudonym_risks_keeps_real_identifier_risks() -> None:
+    report = {
+        "status": "REVIEW_REQUIRED",
+        "risks": [
+            {
+                "file": "anonymized/COMPANY_001/sec/recent_event_summary.md",
+                "risk_type": "direct_identifier",
+                "severity": "high",
+                "evidence": "COMPANY_001 and 50 Hudson Yards address",
+                "recommended_fix": "remove address",
+            }
+        ],
+        "summary": "real risk found",
+    }
+    result = _suppress_pseudonym_risks(report)
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert len(result["risks"]) == 1
+
+
+def test_suppress_pseudonym_risks_mixed_drops_only_pseudonym_only() -> None:
+    report = {
+        "status": "REVIEW_REQUIRED",
+        "risks": [
+            {
+                "file": "f1.md",
+                "risk_type": "direct_identifier",
+                "severity": "high",
+                "evidence": "* Company: COMPANY_001",
+                "recommended_fix": "remove",
+            },
+            {
+                "file": "f2.md",
+                "risk_type": "raw_filing_leak",
+                "severity": "high",
+                "evidence": "IRS Employer Identification No. 04-2207613",
+                "recommended_fix": "regenerate",
+            },
+        ],
+        "summary": "mixed risks",
+    }
+    result = _suppress_pseudonym_risks(report)
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert len(result["risks"]) == 1
+    assert result["risks"][0]["file"] == "f2.md"
+    assert result.get("suppressed_pseudonym_risks") == 1
+
+
+def test_rerun_nvidia_qa_updates_files(tmp_path: Path, monkeypatch) -> None:
+    """rerun_nvidia_qa updates per-company and bundle QA files without recollecting data."""
+    company_dir = tmp_path / "anonymized" / "COMPANY_001"
+    sec_dir = company_dir / "sec"
+    sec_dir.mkdir(parents=True)
+    (sec_dir / "recent_event_summary.md").write_text("# Recent Event Summary\n", encoding="utf-8")
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-fake-key")
+
+    def fake_call(company_id: str, chunks: list[dict[str, str]]) -> dict[str, Any]:
+        return {
+            "status": "PASS",
+            "risks": [],
+            "summary": "clean",
+        }
+
+    monkeypatch.setattr("fenrix_synthetic.submission_nvidia._call_nvidia", fake_call)
+    result = rerun_nvidia_qa(tmp_path)
+    assert result["status"] == "PASS"
+    review_path = tmp_path / "anonymized" / "COMPANY_001" / "qa" / "nvidia_review.json"
+    bundle_review_path = tmp_path / "qa" / "nvidia_artifact_review.json"
+    bundle_summary_path = tmp_path / "qa" / "nvidia_artifact_summary.md"
+    assert review_path.is_file()
+    assert bundle_review_path.is_file()
+    assert bundle_summary_path.is_file()
+    per_company = json.loads(review_path.read_text(encoding="utf-8"))
+    assert per_company["status"] == "PASS"

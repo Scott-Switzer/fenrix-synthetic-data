@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,8 @@ from .submission_quality import build_recent_event_summary
 NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
 DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
 MAX_REPAIR_PASSES = 2
+MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 2.0
 
 _FORBIDDEN_PAYLOAD_SUBSTRINGS = (
     "originals/",
@@ -51,7 +54,17 @@ _REVIEWER_SYSTEM_PROMPT = (
     "You are a privacy red-team reviewer for anonymized financial documents. "
     "Review the provided public artifact text only. Do NOT attempt to identify "
     "the real company. Flag whether the text appears searchable, identity-leaking, "
-    "raw-filing-like, XBRL-garbage, or unusable. "
+    "raw-filing-like, XBRL-garbage, or unusable.\n\n"
+    "IMPORTANT: Tokens like COMPANY_001, COMPANY_002, TICKER_001, CIK_001 and "
+    "similar COMPANY_NNN / TICKER_NNN / CIK_NNN patterns are intentional safe "
+    "pseudonyms. They are NOT direct identifiers. Do NOT classify these "
+    "pseudonyms as direct identifiers or identity risks.\n\n"
+    "Only classify as direct_identifier when REAL company names, REAL tickers, "
+    "REAL CIKs, REAL domains, REAL URLs, REAL people names, REAL addresses, "
+    "raw SEC filing IDs (accession numbers, file numbers), or raw issuer-specific "
+    "metadata appear in the text.\n\n"
+    "If the only evidence of a risk is a public pseudonym token like COMPANY_001, "
+    "the status must NOT be REVIEW_REQUIRED or FAIL.\n\n"
     "Respond with JSON only matching the schema: "
     '{"status":"PASS"|"REVIEW_REQUIRED"|"FAIL","risks":['
     '{"file":"...","risk_type":"direct_identifier|search_fingerprint|'
@@ -61,7 +74,59 @@ _REVIEWER_SYSTEM_PROMPT = (
 )
 
 
+_PSEUDONYM_RE = re.compile(r"\b(?:COMPANY|TICKER|CIK)_\d{3}\b")
+_REAL_IDENTIFIER_PATTERNS = [
+    re.compile(r"https?://\S+", re.I),
+    re.compile(r"\b\d{10}-\d{2}-\d{6}\b"),
+    re.compile(r"\b(?:000|001|002|003|005|033|333|811)-\d{4,8}\b"),
+    re.compile(
+        r"\b\d{1,6}\s+[A-Za-z0-9 .'-]+(?:Street|St\.|Avenue|Ave\.|Road|Rd\.|Boulevard|Blvd\.|Drive|Dr\.|Lane|Ln\.|Way|Plaza|Suite)\b",
+        re.I,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?![A-Za-z0-9])"
+    ),
+    re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b"),
+]
+
+
+def _is_pseudonym_only_risk(evidence: str) -> bool:
+    """Return True if the evidence contains only pseudonym tokens and no real identifiers."""
+    pseudonym_matches = _PSEUDONYM_RE.findall(evidence)
+    if not pseudonym_matches:
+        return False
+    stripped = _PSEUDONYM_RE.sub("", evidence)
+    for pattern in _REAL_IDENTIFIER_PATTERNS:
+        if pattern.search(stripped):
+            return False
+    return True
+
+
+def _suppress_pseudonym_risks(report: dict[str, Any]) -> dict[str, Any]:
+    """Drop risks whose evidence is only public pseudonym tokens.
+
+    If all risks are dropped, downgrade status from REVIEW_REQUIRED/FAIL to PASS.
+    """
+    risks = report.get("risks", [])
+    kept = [r for r in risks if not _is_pseudonym_only_risk(r.get("evidence", ""))]
+    dropped = len(risks) - len(kept)
+    report["risks"] = kept
+    if dropped > 0:
+        existing = report.get("suppressed_pseudonym_risks", 0)
+        report["suppressed_pseudonym_risks"] = existing + dropped
+    if not kept and report.get("status") in {"REVIEW_REQUIRED", "FAIL"}:
+        report["status"] = "PASS"
+        prev_summary = report.get("summary", "")
+        report["summary"] = (
+            f"All flagged risks were public pseudonym tokens (false positives). "
+            f"{prev_summary}".strip()
+        )
+    return report
+
+
 def nvidia_available() -> bool:
+    """Return True iff NVIDIA_API_KEY is present in the environment."""
+    return bool(os.environ.get("NVIDIA_API_KEY", "").strip())
     """Return True iff NVIDIA_API_KEY is present in the environment."""
     return bool(os.environ.get("NVIDIA_API_KEY", "").strip())
 
@@ -125,7 +190,7 @@ def _build_user_prompt(company_id: str, file_chunks: list[dict[str, str]]) -> st
 
 
 def _call_nvidia(company_id: str, file_chunks: list[dict[str, str]]) -> dict[str, Any]:
-    """Call NVIDIA chat completions. Returns parsed JSON or error dict."""
+    """Call NVIDIA chat completions with retry/backoff. Returns parsed JSON or error dict."""
     api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
     if not api_key:
         return {"status": "INCOMPLETE", "reason": "provider credential not set", "risks": []}
@@ -143,35 +208,56 @@ def _call_nvidia(company_id: str, file_chunks: list[dict[str, str]]) -> dict[str
         "temperature": 0.0,
         "max_tokens": 2048,
     }
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(NVIDIA_ENDPOINT, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-    except (httpx.HTTPError, ValueError, OSError) as exc:
-        return {
-            "status": "INCOMPLETE",
-            "reason": f"provider request failed: {type(exc).__name__}",
-            "risks": [],
-        }
-    content = ""
-    try:
-        content = data["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
-        return {
-            "status": "INCOMPLETE",
-            "reason": "malformed provider response: missing choices",
-            "risks": [],
-        }
-    parsed = _parse_review_json(content)
-    if parsed is None:
-        return {
-            "status": "INCOMPLETE",
-            "reason": "malformed provider response: JSON parse failed",
-            "raw_excerpt": content[:200],
-            "risks": [],
-        }
-    return parsed
+    last_exc_name = ""
+    for attempt in range(MAX_RETRIES):
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(NVIDIA_ENDPOINT, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPStatusError, ValueError) as exc:
+            last_exc_name = type(exc).__name__
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF_BASE ** (attempt + 1))
+                continue
+            return {
+                "status": "INCOMPLETE",
+                "reason": f"provider request failed: {last_exc_name}",
+                "risks": [],
+            }
+        except (httpx.TimeoutException, httpx.NetworkError, OSError) as exc:
+            last_exc_name = type(exc).__name__
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF_BASE ** (attempt + 1))
+                continue
+            return {
+                "status": "INCOMPLETE",
+                "reason": f"provider request failed: {last_exc_name}",
+                "risks": [],
+            }
+        content = ""
+        try:
+            content = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            return {
+                "status": "INCOMPLETE",
+                "reason": "malformed provider response: missing choices",
+                "risks": [],
+            }
+        parsed = _parse_review_json(content)
+        if parsed is None:
+            return {
+                "status": "INCOMPLETE",
+                "reason": "malformed provider response: JSON parse failed",
+                "raw_excerpt": content[:200],
+                "risks": [],
+            }
+        return _suppress_pseudonym_risks(parsed)
+    return {
+        "status": "INCOMPLETE",
+        "reason": f"provider request failed after {MAX_RETRIES} retries: {last_exc_name}",
+        "risks": [],
+    }
 
 
 def _parse_review_json(content: str) -> dict[str, Any] | None:
@@ -361,3 +447,63 @@ def _redact_report(report: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {"status": "INCOMPLETE", "reason": "report redaction failed"}
     return report
+
+
+def rerun_nvidia_qa(
+    artifact_root: Path,
+) -> dict[str, Any]:
+    """Rerun NVIDIA QA against an existing artifact's public files only.
+
+    Does NOT recollect SEC/yfinance data. Does NOT touch originals or
+    private_maps. Updates:
+    - qa/nvidia_artifact_review.json
+    - qa/nvidia_artifact_summary.md
+    - anonymized/COMPANY_*/qa/nvidia_review.json
+    """
+    artifact_root = Path(artifact_root)
+    anonymized_dir = artifact_root / "anonymized"
+    if not anonymized_dir.is_dir():
+        return {"status": "INCOMPLETE", "reason": "no anonymized directory found"}
+    company_dirs = sorted(
+        d for d in anonymized_dir.iterdir() if d.is_dir() and d.name.startswith("COMPANY_")
+    )
+    if not company_dirs:
+        return {"status": "INCOMPLETE", "reason": "no company directories found"}
+    last_report: dict[str, Any] = {
+        "schema_version": "1.0",
+        "status": "INCOMPLETE",
+        "reason": "no companies processed",
+        "risks": [],
+        "files_reviewed": 0,
+        "repair_passes": 0,
+    }
+    for company_dir in company_dirs:
+        report = verify_public_artifact_with_nvidia(artifact_root, company_dir=company_dir)
+        status = str(report.get("status", "INCOMPLETE")).upper()
+        company_id = report.get("company_id", company_dir.name)
+        decision = {
+            "PASS": "PASS",
+            "REVIEW_REQUIRED": "REVIEW_REQUIRED",
+            "FAIL": "FAIL",
+        }.get(status, "NOT_RUN")
+        per_company = {
+            "schema_version": "1.0",
+            "company_id": company_id,
+            "status": status,
+            "decision": decision,
+            "reason": report.get("reason", report.get("summary", "")),
+            "files_reviewed": report.get("files_reviewed", 0),
+            "repair_passes": report.get("repair_passes", 0),
+            "risks": report.get("risks", []),
+        }
+        if "suppressed_pseudonym_risks" in report:
+            per_company["suppressed_pseudonym_risks"] = report["suppressed_pseudonym_risks"]
+        qa_dir = company_dir / "qa"
+        qa_dir.mkdir(parents=True, exist_ok=True)
+        (qa_dir / "nvidia_review.json").write_text(
+            json.dumps(_redact_report(per_company), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        last_report = per_company
+    write_nvidia_artifact_report(last_report, artifact_root / "qa")
+    return last_report
