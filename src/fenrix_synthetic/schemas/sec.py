@@ -15,7 +15,7 @@ class CompanyReference(BaseModel):
     """Private company source reference with resolved CIK."""
 
     company_id: str = Field(..., description="Internal company ID, e.g., C001")
-    ticker: str = Field(..., description="Stock ticker symbol, e.g., HBAN")
+    ticker: str = Field(..., description="Stock ticker symbol, e.g., CHC")
     cik: str = Field(..., description="10-digit zero-padded SEC CIK")
     config_source: str = Field(default="config", description="Source of this reference")
     config_hash: str = Field(default="", description="SHA-256 of configuration used")

@@ -16,7 +16,7 @@ SEC_FILES = {
     "financial": "financial_statement_summary.md",
     "recent_event": "recent_event_summary.md",
 }
-DEFAULT_TICKERS = ["CL", "PEP", "TJX", "PM", "AMZN", "HBAN", "BLK", "GOOGL"]
+DEFAULT_TICKERS = ["CHC"]
 FORBIDDEN_ZIP_SUBSTRINGS = (
     "originals/",
     "private_maps/",
@@ -55,68 +55,39 @@ VOTE_RE = re.compile(
     r"\b(?:for\s+against\s+abstain|abstain|broker non-votes?|votes?)\b.*\d[\d,]{3,}",
     re.I,
 )
-TARGET_TICKER_RE = re.compile(r"\b(?:CL|PEP|TJX|PM|AMZN|HBAN|BLK|GOOGL)\b")
+TARGET_TICKER_RE = re.compile(r"\bCHC\b")
+# Canary-only company data for tracked code. Real company data lives in
+# gitignored private/company_data.py and is loaded at runtime via
+# load_private_company_data() when available.
 COMPANY_DATA: dict[str, dict[str, Any]] = {
-    "CL": {
-        "cik": "0000021665",
-        "aliases": ["Colgate-Palmolive Company", "Colgate-Palmolive", "Colgate", "Palmolive"],
-        "domains": ["colgatepalmolive.com", "colgate.com"],
-        "people": ["Noel Wallace", "John Cummings"],
-    },
-    "PEP": {
-        "cik": "0000077476",
-        "aliases": ["PepsiCo, Inc.", "PepsiCo", "Pepsi", "Frito-Lay", "Quaker Oats"],
-        "domains": ["pepsico.com", "pepsi.com"],
-        "people": ["Ramon Laguarta", "Hugh Johnston"],
-    },
-    "TJX": {
-        "cik": "0000109198",
-        "aliases": ["The TJX Companies, Inc.", "TJX Companies", "T.J. Maxx"],
-        "domains": ["tjx.com", "tjmaxx.com", "marshalls.com"],
-        "people": ["Ernie Herrman"],
-    },
-    "PM": {
-        "cik": "0001413329",
-        "aliases": [
-            "Philip Morris International Inc.",
-            "Philip Morris International",
-            "Philip Morris",
-            "PMI",
-        ],
-        "domains": ["pmi.com"],
-        "people": ["Jacek Olczak", "Emmanuel Babeau"],
-    },
-    "AMZN": {
-        "cik": "0001018724",
-        "aliases": ["Amazon.com, Inc.", "Amazon.com", "Amazon", "Amazon Web Services", "AWS"],
-        "domains": ["amazon.com", "aws.amazon.com"],
-        "people": ["Jeff Bezos", "Andy Jassy", "Brian Olsavsky"],
-    },
-    "HBAN": {
-        "cik": "0000049196",
-        "aliases": [
-            "Huntington Bancshares Incorporated",
-            "Huntington Bancshares",
-            "Huntington National Bank",
-            "Huntington Bank",
-            "Huntington",
-        ],
-        "domains": ["huntington.com"],
-        "people": ["Stephen Steinour"],
-    },
-    "BLK": {
-        "cik": "0001364742",
-        "aliases": ["BlackRock, Inc.", "BlackRock"],
-        "domains": ["blackrock.com", "ishares.com"],
-        "people": ["Larry Fink", "Robert Goldstein"],
-    },
-    "GOOGL": {
-        "cik": "0001652044",
-        "aliases": ["Alphabet Inc.", "Alphabet", "Google LLC", "Google"],
-        "domains": ["abc.xyz", "google.com", "youtube.com"],
-        "people": ["Sundar Pichai", "Ruth Porat"],
+    "CHC": {
+        "cik": "0000999999",
+        "aliases": ["Canary Holdings Corporation", "Canary Holdings", "Canary"],
+        "domains": ["canary-test.invalid"],
+        "people": ["Eleanor Testperson"],
     },
 }
+
+
+def load_private_company_data() -> dict[str, dict[str, Any]]:
+    """Load real company data from gitignored private module if available.
+
+    Returns an empty dict when the private module is absent (e.g. CI).
+    Production environments place real data in private/company_data.py.
+    """
+    try:
+        import private.company_data as _private  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    data: dict[str, dict[str, Any]] = getattr(_private, "COMPANY_DATA", {})
+    return data
+
+
+def get_company_data() -> dict[str, dict[str, Any]]:
+    """Merge canary COMPANY_DATA with private data (if available)."""
+    merged = dict(COMPANY_DATA)
+    merged.update(load_private_company_data())
+    return merged
 
 
 def html_to_text(html: str) -> str:

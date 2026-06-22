@@ -1052,7 +1052,7 @@ class ReanonymizeOrchestrator:
         # The private-values payload now comes from the SAME registry
         # Phase 1.5 loaded. Masker and scanner use the exact same set
         # of normalized strings, eliminating the historical asymmetry
-        # that produced 4735 leaked hits on the real NVDA run.
+        # that produced 4735 leaked hits on the real source run.
         private_values = build_private_values_dict(
             self._preloaded_registry, fallback_ticker=ctx.ticker
         )
@@ -1092,7 +1092,7 @@ class ReanonymizeOrchestrator:
         # opaque source_hash (SHA-256 truncated to 16 hex chars) rather
         # than the raw ``--source-run`` path \u2014 the bounded beta's
         # 2 \xd7 ``NVIDIA`` hits came from ``filename_and_metadata_scan``
-        # matching the ``NVDA``/``NVIDIA`` literal tokens inside the
+        # matching the ``SOURCE_TICKER``/``SOURCE_COMPANY`` literal tokens inside the
         # str(source_run) string. The redacted form never carries any
         # raw private value, so the scan can only match on the
         # anonymized files themselves, not the leaked metadata carrier.
@@ -1105,7 +1105,7 @@ class ReanonymizeOrchestrator:
             # Fix 5 (metadata hygiene): drop ``ticker`` from the
             # scanned metadata dict because ``filename_and_metadata_scan``
             # runs ``metadata_text = str(metadata).lower()`` which
-            # exposed the source ticker text (e.g. ``'nvda'``) to the
+            # exposed the source ticker text (e.g. ``'source_ticker'``) to the
             # case-insensitive substring scanner and contributed 4 of
             # the bounded beta's post-mask hits. ``source_hash`` is
             # the SHA-256 truncated opaque identifier for the run; it

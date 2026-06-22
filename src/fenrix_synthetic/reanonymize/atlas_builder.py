@@ -3,7 +3,7 @@
 WHY THIS MODULE EXISTS
 ======================
 The previous fail-closed run produced ``aliases_loaded=6`` from a real
-NVDA-class atlas. Six aliases cannot cover a single SEC 10-K's leak
+source-company-class atlas. Six aliases cannot cover a single SEC 10-K's leak
 surface. The fix is NOT another regex tweak inside the masker — it is a
 broader harvest from the run-folder's own metadata so the ``EntityRegistry``
 that ``TextAnonymizer`` consumes has real coverage.
@@ -102,7 +102,7 @@ _RARE_PHRASE_RE = re.compile(
 
 # ── Coverage thresholds (user spec) ───────────────────────────────────
 
-# For NVDA-scale filings the previous "6 aliases" outcome is treated as
+# For source-company-scale filings the previous "6 aliases" outcome is treated as
 # a critical coverage warning. Smaller test atlases are allowed via
 # the ``configured_minimum`` override.
 DEFAULT_CONFIGURED_MINIMUM = 50
@@ -629,7 +629,7 @@ class DirectIdentifierAtlasBuilder:
     # period was relaxed from ``\.\?`` to mandatory ``\.`` to
     # eliminate the pathological capture of standalone prose
     # capitals like ``I`` / ``A`` (these were producing 100k+ bogus
-    # ``person_invalid_token_shape`` rejections in real NVDA beta).
+    # ``person_invalid_token_shape`` rejections in real source beta).
     # Real SEC initials always carry the period so the constraint is
     # realistic; full titlecase words still match via the first
     # alternation. Boilerplate like "or director" / "authorized
@@ -713,7 +713,7 @@ class DirectIdentifierAtlasBuilder:
         """Per-rule-3: title-case name | initial-with-period |
         hyphenated title-case name.
 
-        ``NVDA`` (all-uppercase) and ``foo`` (lowercase) both fail.
+        ``SOURCE_TICKER`` (all-uppercase) and ``foo`` (lowercase) both fail.
         Case-insensitive blocklist (``Q.`` → ``q``) is checked
         separately by ``_is_blocklist_token``.
         """
@@ -829,7 +829,7 @@ class DirectIdentifierAtlasBuilder:
                     "code": "below_critical_threshold",
                     "msg": (
                         f"Only {report.aliases_built} aliases built. That's below the "
-                        f"critical threshold ({CRITICAL_ALIAS_THRESHOLD}) for NVDA-scale "
+                        f"critical threshold ({CRITICAL_ALIAS_THRESHOLD}) for source-company-scale "
                         "filings; direct privacy is likely to fail."
                     ),
                 }

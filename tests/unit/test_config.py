@@ -66,7 +66,7 @@ class TestLoadCompanyConfig:
         config_file.write_text("""
 companies:
   C001:
-    source_identity: "HBAN"
+    source_identity: "CHC"
     data_root: "data"
     raw_dir: "data/raw"
     bronze_dir: "data/bronze"
@@ -75,7 +75,7 @@ companies:
         config = load_company_config("C001", config_file)
         assert isinstance(config, CompanyConfig)
         assert config.company_id == "C001"
-        assert config.source_identity == "HBAN"
+        assert config.source_identity == "CHC"
 
     def test_load_config_missing_file(self, temp_dir: Path):
         with pytest.raises(FileNotFoundError):
@@ -98,7 +98,7 @@ companies:
         config_file.write_text("""
 companies:
   C001:
-    source_identity: "HBAN"
+    source_identity: "CHC"
     data_root: "custom_data"
     raw_dir: "custom_data/raw"
     bronze_dir: "custom_data/bronze"

@@ -129,3 +129,9 @@ Desktop.ini
 Scott.zip
 scripts/*
 !scripts/build_submission_fast.py
+
+# professor_alpha_v2 is a local reference only — never tracked (contains seeded test identifiers)
+src/fenrix_synthetic/professor_alpha_v2.py
+tests/unit/test_professor_alpha_v2.py
+scripts/build_professor_alpha_v2.py
+tests/fixtures/sec_leak_examples/

@@ -205,7 +205,7 @@ Each record:
 JSONL file at `unstructured/headlines.jsonl`:
 
 ```jsonl
-{"headline_id": "news-001", "text": "Huntington Bancshares reports Q3 earnings beat", "date": "2025-10-15", "source": "marketaux"}
+{"headline_id": "news-001", "text": "Canary Holdings reports Q3 earnings beat", "date": "2025-10-15", "source": "marketaux"}
 ```
 
 ---

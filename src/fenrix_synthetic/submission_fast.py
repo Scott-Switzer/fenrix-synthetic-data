@@ -15,9 +15,9 @@ from typing import Any
 import requests
 
 from .submission_quality import (
-    COMPANY_DATA,
     SEC_FILES,
     build_recent_event_summary,
+    get_company_data,
     html_to_text,
     scrub_text,
     section,
@@ -162,7 +162,7 @@ def load_yfinance() -> Any:
 
 
 def seed_context(ctx: CompanyContext) -> None:
-    data = COMPANY_DATA.get(ctx.ticker, {})
+    data = get_company_data().get(ctx.ticker, {})
     ctx.assign(ctx.ticker, "TICKER")
     if ctx.cik:
         ctx.assign(ctx.cik, "CIK")
@@ -209,7 +209,7 @@ def resolve_cik(ticker: str, client: SECClient) -> str | None:
                 return str(item.get("cik_str", "")).zfill(10)
     except Exception:
         pass
-    fallback = str(COMPANY_DATA.get(ticker, {}).get("cik", "")).zfill(10)
+    fallback = str(get_company_data().get(ticker, {}).get("cik", "")).zfill(10)
     return fallback or None
 
 

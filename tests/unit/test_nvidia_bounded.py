@@ -84,7 +84,7 @@ def test_risk_selector_detects_direct_patterns() -> None:
 
 @pytest.mark.skip(reason="covered by integration smoke; requires populated atlas")
 def test_risk_selector_with_registry_alias() -> None:
-    """Covered by orchestrator smoke with populated NVDA atlas."""
+    """Covered by orchestrator smoke with populated source atlas."""
     pass
 
 

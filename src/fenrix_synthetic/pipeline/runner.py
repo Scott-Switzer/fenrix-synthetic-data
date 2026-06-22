@@ -1040,8 +1040,15 @@ class PipelineRunner:
             "nvidia_reviews",
             "identity_atlas",
         ]
-        # Patterns that reveal real tickers — must use COMPANY_<hash> instead
-        ticker_leak_patterns = ["NVDA", "nvidia"]
+        # Patterns that reveal real tickers — must use COMPANY_<hash> instead.
+        # Detect any path segment that looks like a real ticker (2-5 uppercase
+        # letters, not COMPANY_-prefixed) in ZIP member names.
+        # This catches any real ticker without hardcoding a specific one.
+        import re as _re
+
+        _ticker_segment_re = _re.compile(
+            r"^(?!(COMPANY_|release/|qa/|public/|anonymized/|exports/|manifests/|originals/|private_maps/))([A-Z]{2,5})$"
+        )
         # Raw files that must never appear (but sanitized versions are OK)
         forbidden_files = {"run_summary.json", "resolved_config.json"}
         # Whitelisted sanitized files that share suffixes with forbidden files
@@ -1069,9 +1076,10 @@ class PipelineRunner:
                             issues.append(f"Raw file should not be in ZIP: {name}")
                             break
 
-                # Check for real tickers in member names
-                for ticker_pat in ticker_leak_patterns:
-                    if ticker_pat in name:
+                # Check for real tickers in member name path segments
+                parts = name.split("/")
+                for part in parts:
+                    if _ticker_segment_re.match(part):
                         issues.append(f"Real ticker in ZIP member name: {name}")
                         break
 

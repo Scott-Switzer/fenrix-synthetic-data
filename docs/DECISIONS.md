@@ -360,9 +360,9 @@ These schemes use different namespaces and are not cross-referenceable.
 **Date**: 2026-06-18
 **Status**: Accepted
 
-**Context**: C001 maps to HBAN in the private company config. No reviewed HBAN identity registry exists.
+**Context**: CANARY maps to a fictional canary company in the private company config. No reviewed real-company identity registry exists.
 
-**Decision**: The C001 implementation is demonstrated with synthetic canary values only. Actual C001 deterministic masking requires a reviewed private registry populated with real HBAN entities and aliases. Do not claim HBAN masking is complete.
+**Decision**: The CANARY implementation is demonstrated with synthetic canary values only. Actual real-company deterministic masking requires a reviewed private registry populated with real entities and aliases. Do not claim real-company masking is complete.
 
 **Rationale**: Claiming masking without a reviewed registry would be misleading. The synthetic demonstration proves the pipeline works; the actual masking depends on registry population.
 
@@ -412,9 +412,9 @@ These schemes use different namespaces and are not cross-referenceable.
 **Date**: 2026-06-19
 **Status**: Accepted
 
-**Context**: Using real C001/HBAN text in a live GLiNER test would leak real entities outside the privacy boundary.
+**Context**: Using real canary-company text in a live GLiNER test would leak real entities outside the privacy boundary.
 
-**Decision**: The committed synthetic benchmark (in `gliner/benchmark.py`) contains only synthetic entities that resemble but do not match real HBAN facts. Live smoke executes against the synthetic benchmark only. No C001/HBAN document is sent to the local model in any automated path.
+**Decision**: The committed synthetic benchmark (in `gliner/benchmark.py`) contains only synthetic entities that resemble but do not match real canary facts. Live smoke executes against the synthetic benchmark only. No canary document is sent to the local model in any automated path.
 
 **Rationale**: Synthetic-only execution keeps the milestone out of the privacy-hardened `data/` directories and makes the smoke reproducible across contributors.
 
@@ -513,7 +513,7 @@ an open follow-up tracked below.)
 
 **Context**: The Phase 4 vertical slice's
 ``fenrix-synth reanonymize-run`` command was failing ``post_mask_hits == 0``
-on the real NVDA source run under ``/Users/scottthomasswitzer/Downloads/run_20260620_234738``.
+on the real source-company source run under ``[PRIVATE_RUN_PATH]``.
 Two distinct leak patterns surfaced:
 
 1. **Person admission was over-permissive** \u2014 boilerplate fragments like
@@ -609,9 +609,9 @@ Two distinct leak patterns surfaced:
 
 **Acceptance Criterion Status**:
 
-- ``post_mask_hits == 0`` in real bounded beta on the user's NVDA source
+- ``post_mask_hits == 0`` in real bounded beta on the user's source-company
   run \u2014 **NOT YET achieved**. Three iterations of regression show a static
-  40-hit residual: ``{\"or director\": 20, \"authorized us\": 18, \"NVIDIA\": 2}``.
+  40-hit residual: ``{\"or director\": 20, \"authorized us\": 18, \"SOURCE_TICKER\": 2}``.
   Aliases-built went 452 \u2192 483 \u2192 486 across iterations, indicating Fix 5
   did fire (more entries land). The persistent residual is a SECOND-LAYER
   issue independent of the collision bug:
@@ -620,7 +620,7 @@ Two distinct leak patterns surfaced:
     curated source atlas contains these as ``rare_phrase`` aliases with
     match_policy=literal that the masker cannot substitute due to word
     boundary / surrounding-token handling.
-  - The 2 \u00d7 ``NVIDIA`` literal hits are NOT in ``\\bNVIDIA\\b`` form across
+  - The 2 \u00d7 source-ticker literal hits are NOT in ``\\bSOURCE_TICKER\\b`` form across
     the masked ``public/surrogates/sec/`` files; they appear to score on
     filename metadata carryover (``source_run:`` path segment containing
     the source ticker directory name) rather than body text.
@@ -637,7 +637,7 @@ Two distinct leak patterns surfaced:
   scanner treats them as candidate identifiers.
 - TODO \[text_anonymizer.build_filename\] \u2014 Apply case-folding + ticker
   substitution to the ``source_run`` metadata carrier that surfaces in
-  ``filename_and_metadata_scan`` so ``NVIDIA`` doesn't survive via the
+  ``filename_and_metadata_scan`` so the source ticker doesn't survive via the
   path-segment carryover.
 
 **Implications**:

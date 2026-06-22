@@ -1,10 +1,13 @@
 # Company identity configuration template
 # Copy to configs/company.yaml and fill in values
 # DO NOT COMMIT configs/company.yaml (contains private mappings)
+#
+# Real company mappings belong in gitignored private config only.
+# This template uses canary placeholders — never replace with real identifiers.
 
 companies:
-  C001:
-    source_identity: "HBAN"  # Private source identity
+  CANARY:
+    source_identity: "CHC"  # Canary placeholder — replace in private copy
     data_root: "data"
     raw_dir: "data/raw"
     bronze_dir: "data/bronze"

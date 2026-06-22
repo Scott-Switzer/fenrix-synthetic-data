@@ -41,7 +41,7 @@ def test_reproducible_notebook_contains_required_markers() -> None:
     assert "SEC_USER_AGENT" in text
     assert "anonymized_bundle.zip" in text
     assert "build_submission_fast.py" in text
-    assert "CL,PEP,TJX,PM,AMZN,HBAN,BLK,GOOGL" in text.replace(" ", "")
+    assert "CHC" in text.replace(" ", "")
 
 
 def test_reproducible_notebook_contains_validation_scans() -> None:

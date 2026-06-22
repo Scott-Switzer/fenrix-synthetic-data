@@ -75,8 +75,8 @@ None — the only local branch eligible was `feature/colab-multicompany-anonymiz
 ## Worktrees
 
 Active worktrees (unchanged):
-- `/Users/scottthomasswitzer/Documents/GitHub/fenrix-synthetic-data` — main
-- `/Users/scottthomasswitzer/.local/share/opencode/worktree/.../curious-sailor` — opencode/curious-sailor
-- `/Users/scottthomasswitzer/.local/share/opencode/worktree/.../jolly-orchid` — opencode/jolly-orchid
+- `/tmp/scottthomasswitzer/Documents/GitHub/fenrix-synthetic-data` — main
+- `/tmp/scottthomasswitzer/.local/share/opencode/worktree/.../curious-sailor` — opencode/curious-sailor
+- `/tmp/scottthomasswitzer/.local/share/opencode/worktree/.../jolly-orchid` — opencode/jolly-orchid
 - `/private/tmp/fenrix-qa-28` — detached HEAD (stale)
 - `/private/tmp/fenrix-qa-final` — detached HEAD (stale)

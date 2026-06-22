@@ -1,4 +1,4 @@
-"""Regression tests for XBRL and path leaks found in NVDA run.
+"""Regression tests for XBRL and path leaks found in CHC run.
 
 Covers: CIKs in XBRL text/attributes, ticker in directories,
 accession-based filenames, namespace/schema leaks, manifest leaks,

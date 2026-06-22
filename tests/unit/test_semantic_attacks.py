@@ -165,7 +165,7 @@ def test_structured_numeric_no_data_returns_pass(tmp_path: Path) -> None:
     res = structured_numeric_similarity_attack(
         public_numeric_dir=tmp_path,
         source_run=tmp_path,
-        ticker="NVDA",
+        ticker="CHC",
     )
     assert res.attack_type == "structured_numeric_similarity"
     assert res.passed is True
@@ -173,7 +173,7 @@ def test_structured_numeric_no_data_returns_pass(tmp_path: Path) -> None:
 
 
 def test_structured_numeric_different_distributions_pass(tmp_path: Path) -> None:
-    pub_root = tmp_path / "public_root" / "NVDA" / "classroom_safe"
+    pub_root = tmp_path / "public_root" / "CHC" / "classroom_safe"
     pub_root.mkdir(parents=True)
     public_payload = {
         "ticker_seed": "SYNTH_AX",
@@ -188,17 +188,17 @@ def test_structured_numeric_different_distributions_pass(tmp_path: Path) -> None
     }
     (pub_root / "annual_statements.json").write_text(json.dumps(public_payload))
     src_root = tmp_path / "src_root"
-    (src_root / "originals" / "NVDA" / "sec").mkdir(parents=True)
+    (src_root / "originals" / "CHC" / "sec").mkdir(parents=True)
     sec_html = (
         "Annual revenue was $50.0 billion in fiscal 2024. "
         "Total assets stand at $200.0 billion. "
         "Net income grew 15% year over year."
     )
-    (src_root / "originals" / "NVDA" / "sec" / "filing.html").write_text(sec_html)
+    (src_root / "originals" / "CHC" / "sec" / "filing.html").write_text(sec_html)
     res = structured_numeric_similarity_attack(
         public_numeric_dir=pub_root,
         source_run=src_root,
-        ticker="NVDA",
+        ticker="CHC",
         similarity_threshold=0.95,
     )
     assert res.passed is True

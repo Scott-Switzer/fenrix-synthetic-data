@@ -15,17 +15,17 @@ from fenrix_synthetic.anonymization.classroom_numeric_writer import (
 
 class TestDeterministicSeed:
     def test_seed_is_deterministic(self) -> None:
-        assert ClassroomNumericWriter._derive_seed("NVDA") == ClassroomNumericWriter._derive_seed(
-            "NVDA"
+        assert ClassroomNumericWriter._derive_seed("CHC") == ClassroomNumericWriter._derive_seed(
+            "CHC"
         )
-        assert ClassroomNumericWriter._derive_seed("NVDA") != ClassroomNumericWriter._derive_seed(
+        assert ClassroomNumericWriter._derive_seed("CHC") != ClassroomNumericWriter._derive_seed(
             "AAPL"
         )
 
 
 class TestAnnualStatements:
     def test_default_five_years(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         stmts = w.generate_annual_statements()
         assert len(stmts) == 5
         # Relative years: -5..-1
@@ -56,7 +56,7 @@ class TestAnnualStatements:
 
 class TestQuarterlyStatements:
     def test_default_eight_quarters(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         qs = w.generate_quarterly_statements()
         assert len(qs) == 8
         # Period labels relative
@@ -65,7 +65,7 @@ class TestQuarterlyStatements:
         assert labels[-1] == "Period -7"
 
     def test_periods_marked_relative(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         qs = w.generate_quarterly_statements()
         for q in qs:
             assert q["relative_period"] is True
@@ -79,7 +79,7 @@ class TestQuarterlyStatements:
 
 class TestWeeklyFeatures:
     def test_default_thirteen_weeks(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         f = w.generate_weekly_features()
         assert len(f) == 13
         for feat in f:
@@ -93,7 +93,7 @@ class TestWeeklyFeatures:
             }
 
     def test_no_exact_ohlcv_keys(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         for feat in w.generate_weekly_features():
             assert "open" not in feat
             assert "high" not in feat
@@ -105,7 +105,7 @@ class TestWeeklyFeatures:
 
 class TestRatioBuckets:
     def test_three_ratios_when_valid(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         annual = w.generate_annual_statements()
         ratios = w.generate_ratio_buckets(annual)
         assert "current_ratio" in ratios
@@ -121,13 +121,13 @@ class TestRatioBuckets:
             }
 
     def test_empty_statements_returns_empty(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         assert w.generate_ratio_buckets([]) == {}
 
 
 class TestRegimeClassification:
     def test_returns_enum_value(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         weekly = w.generate_weekly_features()
         regime = w.classify_regime(weekly)
         assert regime in {
@@ -138,13 +138,13 @@ class TestRegimeClassification:
         }
 
     def test_empty_weekly_returns_default(self) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         assert w.classify_regime([]) == RegimeLabel.MID_CYCLE.value
 
 
 class TestWritePackage:
     def test_writes_four_files(self, tmp_path: Path) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         pkg = w.write_package(tmp_path / "classroom_safe")
         assert pkg.annual_count == 5
         assert pkg.quarterly_count == 8
@@ -156,7 +156,7 @@ class TestWritePackage:
             assert Path(f).exists()
 
     def test_annual_payload_includes_validation_block(self, tmp_path: Path) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         w.write_package(tmp_path / "classroom_safe")
         d = json.loads((tmp_path / "classroom_safe" / "annual_statements.json").read_text())
         assert d["no_real_public_trajectory"] is True
@@ -164,13 +164,13 @@ class TestWritePackage:
         assert d["validation"]["all_accounting_identities_hold"] is True
         assert d["validation"]["violations"] == []
         # No real ticker leaked
-        assert d["ticker_seed"] == "NVDA"
+        assert d["ticker_seed"] == "CHC"
         # Statements marked relative
         for stmt in d["statements"]:
             assert stmt["relative_year"] < 0
 
     def test_quarterly_payload_no_real_trajectory(self, tmp_path: Path) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         w.write_package(tmp_path / "classroom_safe")
         d = json.loads((tmp_path / "classroom_safe" / "quarterly_statements.json").read_text())
         assert d["periods_labeled_relative"] is True
@@ -178,7 +178,7 @@ class TestWritePackage:
         assert d["validation"]["all_balance_equations_hold"] is True
 
     def test_weekly_features_no_exact_ohlcv(self, tmp_path: Path) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         w.write_package(tmp_path / "classroom_safe")
         d = json.loads((tmp_path / "classroom_safe" / "weekly_features.json").read_text())
         assert d["no_exact_ohlcv"] is True
@@ -189,7 +189,7 @@ class TestWritePackage:
             assert "relative_week" in f
 
     def test_ratio_index_includes_regime(self, tmp_path: Path) -> None:
-        w = ClassroomNumericWriter("NVDA")
+        w = ClassroomNumericWriter("CHC")
         w.write_package(tmp_path / "classroom_safe")
         d = json.loads((tmp_path / "classroom_safe" / "ratio_and_regime_index.json").read_text())
         assert "broad_regime_label" in d

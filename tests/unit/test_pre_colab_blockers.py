@@ -464,7 +464,7 @@ class TestSanitizedReleaseTree:
         run_summary = {
             "run_id": "test",
             "tickers": {
-                "NVDA": {
+                "CHC": {
                     "status": TickerStatus.COMPLETED_CLEAN.value,
                     "original_artifacts": 5,
                     "anonymized_artifacts": 3,
@@ -487,12 +487,12 @@ class TestSanitizedReleaseTree:
         qa_json = json.dumps(qa)
 
         # Must not contain raw ticker in JSON keys or values
-        assert "NVDA" not in qa_json, "Raw ticker 'NVDA' found in sanitized summary"
+        assert "CHC" not in qa_json, "Raw ticker 'CHC' found in sanitized summary"
         # nvidia_status is a status field name, not a ticker — that's OK
-        # But the ticker 'NVDA' itself must not appear
+        # But the ticker 'CHC' itself must not appear
 
         # Must have pseudonymous key
-        pseudo = f"COMPANY_{hashlib.sha256(b'NVDA').hexdigest()[:12]}"
+        pseudo = f"COMPANY_{hashlib.sha256(b'CHC').hexdigest()[:12]}"
         assert pseudo in qa["tickers"], f"Pseudonymous key '{pseudo}' not found in tickers"
 
     def test_release_verdict_no_real_ticker(self, tmp_path: Path) -> None:
@@ -500,7 +500,7 @@ class TestSanitizedReleaseTree:
         run_summary = {
             "run_id": "test",
             "tickers": {
-                "NVDA": {
+                "CHC": {
                     "status": TickerStatus.COMPLETED_CLEAN.value,
                     "coverage": {"overall": {"sources_successful": 2}},
                     "residual_exact_identifier_count": 0,
@@ -519,12 +519,12 @@ class TestSanitizedReleaseTree:
         gate.coverage_status = "clean"
         gate.finalize()
 
-        ticker_pseudonyms = {"NVDA": f"COMPANY_{hashlib.sha256(b'NVDA').hexdigest()[:12]}"}
+        ticker_pseudonyms = {"CHC": f"COMPANY_{hashlib.sha256(b'CHC').hexdigest()[:12]}"}
         verdict = PipelineRunner._build_release_verdict(run_summary, gate, ticker_pseudonyms)
 
         verdict_json = json.dumps(verdict)
-        assert "NVDA" not in verdict_json, "Raw ticker 'NVDA' found in release verdict"
-        pseudo = ticker_pseudonyms["NVDA"]
+        assert "CHC" not in verdict_json, "Raw ticker 'CHC' found in release verdict"
+        pseudo = ticker_pseudonyms["CHC"]
         assert pseudo in verdict["tickers"], f"Pseudonymous key '{pseudo}' not in verdict"
 
 
@@ -535,19 +535,19 @@ class TestZipLeakScan:
     """Prove the ZIP leak scanner catches all required issues."""
 
     def test_leak_scanner_blocks_ticker_in_name(self, tmp_path: Path) -> None:
-        """ZIP with NVDA in member name is blocked."""
+        """ZIP with CHC in member name is blocked."""
         from fenrix_synthetic.pipeline.runner import PipelineRunner
 
         # Create a ZIP with ticker in member name
         zip_path = tmp_path / "bad.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("release/NVDA/data.json", "{}")
+            zf.writestr("release/CHC/data.json", "{}")
 
         config = PipelineConfig.from_ticker("TEST", tmp_path, years=1)
         runner = PipelineRunner(config)
         issues = runner._scan_zip_for_leaks(zip_path)
         assert len(issues) > 0, "ZIP with ticker in member name should be flagged"
-        assert any("NVDA" in i for i in issues)
+        assert any("CHC" in i for i in issues)
 
     def test_leak_scanner_blocks_raw_run_summary(self, tmp_path: Path) -> None:
         """ZIP with raw run_summary.json is flagged."""
@@ -555,7 +555,7 @@ class TestZipLeakScan:
 
         zip_path = tmp_path / "bad2.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("run_summary.json", '{"ticker":"NVDA"}')
+            zf.writestr("run_summary.json", '{"ticker":"CHC"}')
 
         config = PipelineConfig.from_ticker("TEST", tmp_path, years=1)
         runner = PipelineRunner(config)

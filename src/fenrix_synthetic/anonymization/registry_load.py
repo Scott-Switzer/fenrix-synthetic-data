@@ -20,7 +20,7 @@ All integer-shaped IDs in YAML (CIKs / accessions / accession-as-int)
 are coerced to ``str(..).strip()`` at the loader boundary so the
 masker's string-key lookup NEVER misses them. This eliminates the
 ``add_alias`` silent-drop that previously caused zero aliases to load
-on real NVDA-class atlases.
+on real source-class atlases.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ def normalize_private_value(
       ``alias_id``, ``canonical_entity_id``) where short sequential
       integers like ``"1"`` are legitimate. Without this, the loader
       silent-dropped short IDs (the regression that produced 4735
-      exact-identity hits on real NVDA runs).
+      exact-identity hits on real source runs).
     - All other entity types default to ``min_length=3``; values
       shorter than that return ``""``.
 

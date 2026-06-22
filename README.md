@@ -2,7 +2,7 @@
 
 Reproducible company-level financial-data masking and re-identification testing system.
 
-Current vertical slice: **HBAN (C001)**
+Current vertical slice: **fictional canary company (CHC)** — real source mappings are private and gitignored.
 
 ## Milestone 0 - Repository Foundation (Complete)
 
@@ -54,20 +54,20 @@ cp configs/company.yaml.template configs/company.yaml
 Edit `configs/company.yaml`:
 ```yaml
 companies:
-  C001:
-    source_identity: "HBAN"  # Private source identity
+  CANARY:
+    source_identity: "CHC"  # Private source identity (canary placeholder in template)
     data_root: "data"
     raw_dir: "data/raw"
     bronze_dir: "data/bronze"
 ```
 
-**Never commit `configs/company.yaml`** - it's in `.gitignore`.
+**Never commit `configs/company.yaml`** - it's in `.gitignore`. Real company mappings belong in gitignored private config only.
 
 ### Campaign Configuration
 
 Edit `configs/campaign.yaml` to control pipeline execution:
 ```yaml
-company_id: "C001"
+company_id: "CANARY"
 stages:
   - "ingest"
   - "extract"
@@ -95,9 +95,9 @@ fenrix-synth hash-file path/to/file.txt
 fenrix-synth hash-json --json-input '{"key": "value"}'
 
 # Pipeline commands (placeholders for M1)
-fenrix-synth ingest --company C001
-fenrix-synth extract --company C001
-fenrix-synth campaign --company C001 --resume
+fenrix-synth ingest --company CANARY
+fenrix-synth extract --company CANARY
+fenrix-synth campaign --company CANARY --resume
 ```
 
 ## Project Structure
@@ -155,13 +155,13 @@ and stable pseudonym replacement.
 
 ```bash
 # Validate an identity registry YAML file
-fenrix-synth registry-validate --registry configs/examples/company_identity.example.yaml --company C001
+fenrix-synth registry-validate --registry configs/examples/company_identity.example.yaml --company CANARY
 
 # List entities and aliases
 fenrix-synth registry-inventory --registry configs/examples/company_identity.example.yaml
 
 # Run deterministic masking on a bronze document
-fenrix-synth mask --company C001 --data-root /tmp/c001-demo --bronze-artifact bronze-C001-000123456724000001 --masked-output /tmp/output.md --audit-output /tmp/audit.json --summary-output /tmp/summary.json
+fenrix-synth mask --company CANARY --data-root /tmp/canary-demo --bronze-artifact bronze-CANARY-000123456724000001 --masked-output /tmp/output.md --audit-output /tmp/audit.json --summary-output /tmp/summary.json
 
 # Run exact residual scan
 fenrix-synth scan --document /tmp/output.md --values scan-values.yaml
@@ -175,11 +175,12 @@ The test suite demonstrates the full pipeline with synthetic canary values:
 - `tests/fixtures/clean_document.md` - Clean document proving zero false positives
 - `tests/integration/test_masking_pipeline.py` - End-to-end synthetic pipeline verification
 
-### C001 Status
+### Canary Status
 
-⚠️ **Synthetic only.** The C001 implementation is demonstrated with canary values.
-Actual HBAN masking requires a reviewed private registry populated with real
-HBAN entities and aliases. Do not claim HBAN masking is complete.
+The implementation is demonstrated with synthetic canary values only.
+Actual masking of any real company requires a reviewed private registry
+populated with real entities and aliases. Do not claim real-company
+masking is complete without a reviewed private registry.
 
 ## Verification Commands
 
@@ -279,8 +280,8 @@ plain/truncated hashes of private values appear in sanitized outputs.
 ### Limitations
 
 Phase 3A does not establish anonymity or release safety. It provides deterministic
-evidence of coverage gaps. No reviewed real HBAN identity registry exists;
-synthetic C001 results do not prove real HBAN masking effectiveness.
+evidence of coverage gaps. No reviewed real-company identity registry exists;
+synthetic canary results do not prove real-company masking effectiveness.
 
 ## Phase 3B Core — Reviewed Provider-Neutral Entity Discovery (Current)
 
@@ -331,7 +332,7 @@ fenrix-synth discover3b --document /tmp/output.md --output /tmp/discovery_report
 Phase 3B Core does not establish anonymity or release safety. It provides a
 reviewed pipeline for provider-neutral entity discovery with deterministic
 offline testing. No real model execution exists — only the fake provider.
-No reviewed real HBAN identity registry exists.
+No reviewed real-company identity registry exists.
 
 ## Phase 3C — Optional Local GLiNER Discovery Adapter
 
@@ -383,7 +384,7 @@ directory tracked by git.
 
 `src/fenrix_synthetic/discovery/providers/gliner/benchmark.py` carries a
 committed, versioned, hashed benchmark of synthetic entities only. No
-real HBAN facts appear. Evaluation precision / recall / F1 (exact-span
+real company facts appear. Evaluation precision / recall / F1 (exact-span
 and relaxed-overlap), per-type metrics, hard-negative hits, and
 threshold sweep over `[0.30, 0.40, 0.50, 0.60, 0.70]` are recorded but
 do not feed CI.
@@ -392,12 +393,10 @@ do not feed CI.
 
 Phase 3C does **not** establish anonymity or release safety. Model
 confidence is not calibrated leakage probability. Threshold selection
-remains provisional. Local smoke is synthetic-only; no C001/HBAN
+remains provisional. Local smoke is synthetic-only; no real-company
 document is ever sent to a model in this milestone.
 
-## Milestone 1 - HBAN Extraction (Complete)
-
-## Milestone 1 - HBAN Extraction (Complete)
+## Milestone 1 - SEC Extraction (Complete)
 
 - SEC adapter interface with fixture loader
 - One filing download/hash verification

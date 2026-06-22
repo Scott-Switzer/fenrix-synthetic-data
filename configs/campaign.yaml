@@ -1,5 +1,6 @@
 # Campaign configuration
-company_id: "C001"
+# Uses canary placeholder — real company ID belongs in gitignored private config.
+company_id: "CANARY"
 stages:
   - "ingest"
   - "extract"

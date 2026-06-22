@@ -78,10 +78,10 @@ class LightweightFingerprint:
 
     Example::
 
-        g = LightweightFingerprint("NVDA")
+        g = LightweightFingerprint("CHC")
         g.add_entry(EntityType.COMPANY, "Acme Corporation")
         g.add_entry(EntityType.EXECUTIVE, "Jane Doe")
-        NewsSurrogateGenerator("NVDA", fingerprint_graph=g)
+        NewsSurrogateGenerator("CHC", fingerprint_graph=g)
     """
 
     def __init__(

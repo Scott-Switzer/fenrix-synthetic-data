@@ -5,7 +5,7 @@
 Build a reproducible company-level financial-data masking and
 re-identification testing system.
 
-The current vertical slice is HBAN.
+The current vertical slice uses a fictional canary company (CHC). Real source mappings are private and gitignored.
 
 ## Current Milestone
 
@@ -15,7 +15,7 @@ Completed:
 2. Source-reuse inventory
 3. Source provenance records
 4. Shared artifact and manifest schemas
-5. HBAN SEC filing discovery, download, extraction, and checkpointing
+5. Canary SEC filing discovery, download, extraction, and checkpointing
 6. Tests and an offline fixture-based demonstration
 
 Phase 2:
@@ -132,7 +132,7 @@ Before declaring work complete:
 1. Run formatting and linting (`ruff format --check`, `ruff check`)
 2. Run type checking (`mypy src/fenrix_synthetic`)
 3. Run the complete test suite (`pytest`)
-4. Run the offline HBAN fixture demonstration
+4. Run the offline canary fixture demonstration
 5. Inspect `git diff`
 6. Report exact commands and outcomes
 7. List anything mocked, deferred, or unverified

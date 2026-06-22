@@ -105,7 +105,7 @@ class TestIsUnsafeShortToken:
     def test_meaningful_tickers_allowed(self):
         assert is_unsafe_short_token("AAPL") is False
         assert is_unsafe_short_token("MSFT") is False
-        assert is_unsafe_short_token("GOOGL") is False
+        assert is_unsafe_short_token("CHC") is False
 
 
 class TestPatternsForAlias:

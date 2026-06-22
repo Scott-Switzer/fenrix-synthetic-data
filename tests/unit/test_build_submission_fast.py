@@ -40,12 +40,12 @@ def test_script_line_count_cap() -> None:
 
 def test_deterministic_pseudonyms_are_stable() -> None:
     builder = load_builder()
-    first = builder.CompanyContext("CL", 1, "0000021665")
-    second = builder.CompanyContext("CL", 1, "0000021665")
+    first = builder.CompanyContext("CHC", 1, "0000999999")
+    second = builder.CompanyContext("CHC", 1, "0000999999")
 
-    assert first.assign("Colgate-Palmolive Company", "COMPANY") == "COMPANY_001"
-    assert first.assign("CL", "TICKER") == "TICKER_001"
-    assert first.assign("0000021665", "CIK") == "CIK_001"
+    assert first.assign("Canary Holdings Corporation", "COMPANY") == "COMPANY_001"
+    assert first.assign("CHC", "TICKER") == "TICKER_001"
+    assert first.assign("0000999999", "CIK") == "CIK_001"
     assert first.assign("colgate.com", "DOMAIN") == "DOMAIN_001"
     assert second.assign("colgate.com", "DOMAIN") == "DOMAIN_001"
 
@@ -78,10 +78,10 @@ def test_xbrl_taxonomy_garbage_is_rejected() -> None:
 
 def test_raw_8k_identity_fields_are_scrubbed() -> None:
     builder = load_builder()
-    ctx = builder.CompanyContext("HBAN", 1, "0000049196")
+    ctx = builder.CompanyContext("CHC", 1, "0000999999")
     builder.seed_context(ctx)
     raw = """
-    Exact name of registrant: Huntington Bancshares Incorporated
+    Exact name of registrant: Canary Holdings Corporation
     41 South High Street, Columbus, Ohio 43287
     Phone: (614) 480-2265
     IRS Employer Identification No. 31-0724920
@@ -91,7 +91,7 @@ def test_raw_8k_identity_fields_are_scrubbed() -> None:
 
     clean = builder.scrub_text(raw, ctx.private_map)
 
-    assert "Huntington" not in clean
+    assert "Canary" not in clean
     assert "41 South High" not in clean
     assert "(614)" not in clean
     assert "31-0724920" not in clean
@@ -107,8 +107,8 @@ def test_raw_news_headline_url_and_ticker_prose_not_exported(tmp_path: Path, mon
         news = [
             {
                 "content": {
-                    "title": "HBAN shares jump after Huntington update",
-                    "summary": "Read more at https://example.com/HBAN for Huntington details.",
+                    "title": "CHC shares jump after Canary update",
+                    "summary": "Read more at https://example.com/CHC for Canary details.",
                 }
             }
         ]
@@ -119,20 +119,20 @@ def test_raw_news_headline_url_and_ticker_prose_not_exported(tmp_path: Path, mon
             return FakeTicker()
 
     monkeypatch.setattr(submission_sources, "load_yfinance", lambda: FakeYf)
-    ctx = builder.CompanyContext("HBAN", 1, "0000049196")
+    ctx = builder.CompanyContext("CHC", 1, "0000999999")
     builder.seed_context(ctx)
 
-    status, _, _, _ = builder.collect_news("HBAN", ctx, tmp_path, 5)
+    status, _, _, _ = builder.collect_news("CHC", ctx, tmp_path, 5)
     payload = json.loads(
         (tmp_path / "anonymized" / "COMPANY_001" / "news" / "news_briefs.json").read_text()
     )
     text = json.dumps(payload)
 
     assert status == "OK"
-    assert "HBAN shares jump" not in text
+    assert "CHC shares jump" not in text
     assert "https://example.com" not in text
-    assert "HBAN" not in text
-    assert "Huntington" not in text
+    assert "CHC" not in text
+    assert "Canary" not in text
     assert "sanitized_summary" in text
 
 
@@ -154,7 +154,7 @@ def test_exact_raw_fundamentals_not_exported(tmp_path: Path) -> None:
         balance_sheet = None
         cashflow = None
 
-    ctx = builder.CompanyContext("CL", 1, "0000021665")
+    ctx = builder.CompanyContext("CHC", 1, "0000999999")
     builder.write_binned_fundamentals(tmp_path / "fundamentals_binned.csv", FakeTicker(), ctx)
     text = (tmp_path / "fundamentals_binned.csv").read_text(encoding="utf-8")
 
@@ -165,10 +165,10 @@ def test_exact_raw_fundamentals_not_exported(tmp_path: Path) -> None:
 def test_zip_excludes_private_original_and_raw_paths(tmp_path: Path) -> None:
     builder = load_builder()
     write_public_shell(tmp_path, builder)
-    (tmp_path / "private_maps" / "CL").mkdir(parents=True)
-    (tmp_path / "private_maps" / "CL" / "identity_map.json").write_text("{}\n", encoding="utf-8")
-    (tmp_path / "originals" / "CL").mkdir(parents=True)
-    (tmp_path / "originals" / "CL" / "source.txt").write_text("source\n", encoding="utf-8")
+    (tmp_path / "private_maps" / "CHC").mkdir(parents=True)
+    (tmp_path / "private_maps" / "CHC" / "identity_map.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "originals" / "CHC").mkdir(parents=True)
+    (tmp_path / "originals" / "CHC" / "source.txt").write_text("source\n", encoding="utf-8")
     (tmp_path / "smoke_excerpts").mkdir()
     (tmp_path / "smoke_excerpts" / "raw.txt").write_text("raw\n", encoding="utf-8")
 

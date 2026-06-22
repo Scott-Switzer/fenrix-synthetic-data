@@ -896,16 +896,15 @@ class TestRecursivePrivacyScan:
     ) -> None:
         pkg = _build_and_get_package_dir(private_root, runner, cli_group)
         canaries = [
-            "Huntington",
-            "HBAN",
-            "huntington.com",
-            "0000049196",
-            "Steinour",
-            "Wasserman",
-            "Columbus, Ohio",
-            "41 South High Street",
-            "43215",
-            "Ernst & Young",
+            "Canary Holdings Corporation",
+            "CHC",
+            "canary-test.invalid",
+            "0000999999",
+            "Eleanor Testperson",
+            "Canary City",
+            "1 Canary Plaza",
+            "99999",
+            "Canary Audit LLP",
         ]
         for fpath in pkg.rglob("*"):
             if fpath.is_dir() or fpath.name == "checksums.sha256":

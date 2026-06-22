@@ -91,7 +91,7 @@ _TICKER_SYMBOL_RE = re.compile(
     r"\b(?:ticker|trading)\s+symbol\s*(?::|is)?\s*([A-Z]{1,5})\b", re.IGNORECASE
 )
 
-# Ticker: "Nasdaq: NVDA" / "NYSE: NVDA" / "NYSE Arca: NVDA"
+# Ticker: "Nasdaq: TICKER" / "NYSE: TICKER" / "NYSE Arca: TICKER"
 _EXCHANGE_TICKER_RE = re.compile(
     r"\b(?:NYSE|NASDAQ|NYSE\s*Arca)\s*:\s*([A-Z]{1,5})\b", re.IGNORECASE
 )  # SEC file numbers (333-XXXXXX, 001-XXXXX, etc.)

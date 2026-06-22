@@ -38,12 +38,12 @@ def _make_public_artifact(root: Path, company_id: str = "COMPANY_001") -> None:
 
 
 def _make_private_artifact(root: Path) -> None:
-    priv = root / "private_maps" / "CL"
+    priv = root / "private_maps" / "CHC"
     priv.mkdir(parents=True)
     (priv / "identity_map.json").write_text(
         '{"private": "SECRET_VALUE_NVAPI-LEAK"}\n', encoding="utf-8"
     )
-    orig = root / "originals" / "CL"
+    orig = root / "originals" / "CHC"
     orig.mkdir(parents=True)
     (orig / "raw.txt").write_text("raw source content\n", encoding="utf-8")
 
@@ -148,10 +148,10 @@ def test_build_writes_nvidia_artifact_review_json(tmp_path: Path, monkeypatch) -
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     import fenrix_synthetic.submission_package as submission_package
 
-    ctx = submission_package.CompanyContext("CL", 1, "0000021665")
+    ctx = submission_package.CompanyContext("CHC", 1, "0000999999")
     submission_package.seed_context(ctx)
     _make_public_artifact(tmp_path, "COMPANY_001")
-    qa = submission_package.run_nvidia_qa("CL", ctx, ["sample"], "auto", tmp_path)
+    qa = submission_package.run_nvidia_qa("CHC", ctx, ["sample"], "auto", tmp_path)
     assert qa["status"] == "INCOMPLETE"
     review_path = tmp_path / "qa" / "nvidia_artifact_review.json"
     summary_path = tmp_path / "qa" / "nvidia_artifact_summary.md"

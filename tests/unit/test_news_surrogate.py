@@ -53,32 +53,32 @@ SAMPLE_ARTICLES = [
 
 class TestEventClassification:
     def test_earnings_classification(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         assert (
             g.classify_event_type("Reported quarterly earnings with strong EPS")
             == "earnings_release"
         )
 
     def test_merger_classification(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         assert (
             g.classify_event_type("Company completes acquisition of small biotech")
             == "merger_acquisition"
         )
 
     def test_executive_change_classification(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         text = "New CFO appointed"
         assert g.classify_event_type(text) == "executive_change"
 
     def test_default_general_corporate(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         assert g.classify_event_type("Miscellaneous update") == "general_corporate"
 
 
 class TestDateGeneralization:
     def test_same_year_months_ago(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         # Use a fixed ref date so the test is deterministic
         ref = datetime(2026, 6, 20, tzinfo=UTC)
         result = g.generalize_date("2026-04-15T13:30:00Z", ref_date=ref)
@@ -86,17 +86,17 @@ class TestDateGeneralization:
         assert "2 months" in result or "ago" in result
 
     def test_prior_year(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         ref = datetime(2026, 6, 20, tzinfo=UTC)
         result = g.generalize_date("2024-08-01T09:00:00Z", ref_date=ref)
         assert "prior year" in result or "1 year" in result or "2024" in result
 
     def test_empty_timestamp(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         assert g.generalize_date("") == "[PERIOD DATE]"
 
     def test_unparseable_timestamp(self) -> None:
-        g = NewsSurrogateGenerator("NVDA")
+        g = NewsSurrogateGenerator("CHC")
         assert g.generalize_date("not a date") == "[PERIOD DATE]"
 
 

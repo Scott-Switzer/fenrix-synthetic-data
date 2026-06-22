@@ -1,6 +1,6 @@
 """Regression tests for privacy release gate failures.
 
-Covers all 8 failure categories from the NVDA Colab run analysis.
+Covers all 8 failure categories from the CHC Colab run analysis.
 Uses synthetic data only — no real company content.
 """
 
@@ -278,4 +278,4 @@ class TestReleaseQASummary:
         assert ts["exact_identifier_count"] == 0
         # No raw ticker in JSON keys
         assert "SYNTH_001" not in json.dumps(qa)
-        assert "NVDA" not in json.dumps(qa)
+        assert "CHC" not in json.dumps(qa)

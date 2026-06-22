@@ -1,10 +1,4 @@
 ticker,enabled
-CL,1
-PEP,1
-TJX,1
-PM,1
-AMZN,1
-HBAN,1
-BLK,1
-GOOGL,1
-NVDA,1
+# Real tickers belong in a gitignored private companies file (configs/companies.private.csv).
+# This tracked file ships only a canary placeholder so CI never sees real identifiers.
+CHC,1

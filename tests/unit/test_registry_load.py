@@ -1,6 +1,6 @@
 """Regression tests for the identity atlas loader.
 
-The previous failing flow ran on a real NVDA run folder, producing 4735
+The previous failing flow ran on a real CHC run folder, producing 4735
 exact-identity hits because ``TextAnonymizer._load_registry`` silently
 dropped aliases on integer-vs-string ID mismatches. These tests encode the
 contract that the loader MUST satisfy after the fix.
@@ -23,7 +23,7 @@ Contract under test (test-first discipline):
    BEFORE pub-dir mkdir so a downstream consumer cannot scrape
    un-masked surrogates if loading failed.
 
-All tests are offline. They run against the unit path; the live NVDA
+All tests are offline. They run against the unit path; the live CHC
 end-to-end is exercised separately on ~/Downloads/run_20260620_234738.
 """
 
@@ -148,8 +148,8 @@ class TestLoadAtlasIntCoercionRegression:
         """
         atlas = {
             "metadata": {
-                "registry_id": "reg-NVDA",
-                "company_id": "NVDA",
+                "registry_id": "reg-CHC",
+                "company_id": "CHC",
             },
             "entities": [
                 {
@@ -162,7 +162,7 @@ class TestLoadAtlasIntCoercionRegression:
                 {
                     "alias_id": 1,  # int on purpose — YAML native
                     "canonical_entity_id": 1045810,  # int on purpose
-                    "private_alias_value": "NVDA",
+                    "private_alias_value": "CHC",
                     "entity_type": "ticker",
                     "match_policy": "ticker_exact",
                 }
@@ -173,7 +173,7 @@ class TestLoadAtlasIntCoercionRegression:
 
         path.write_text(yaml.safe_dump(atlas), encoding="utf-8")
 
-        reg, summary = load_atlas(path, ticker="NVDA")
+        reg, summary = load_atlas(path, ticker="CHC")
         # The regression contract: aliases_loaded MUST be 1, not 0.
         assert summary.aliases_loaded == 1, (
             f"Regression: int-shaped alias ID silently dropped; summary={summary}"
@@ -184,11 +184,11 @@ class TestLoadAtlasIntCoercionRegression:
         # And the alias must be retrievable.
         aliases = reg.all_aliases()
         assert len(aliases) == 1
-        assert aliases[0].private_alias_value == "NVDA"
+        assert aliases[0].private_alias_value == "CHC"
 
     def test_int_accession_value_does_not_silently_drop(self, tmp_path: Path) -> None:
         atlas = {
-            "metadata": {"registry_id": "reg-NVDA", "company_id": "NVDA"},
+            "metadata": {"registry_id": "reg-CHC", "company_id": "CHC"},
             "entities": [
                 {
                     "entity_id": "0001045810-24-000029",
@@ -211,7 +211,7 @@ class TestLoadAtlasIntCoercionRegression:
 
         path.write_text(yaml.safe_dump(atlas), encoding="utf-8")
 
-        reg, summary = load_atlas(path, ticker="NVDA")
+        reg, summary = load_atlas(path, ticker="CHC")
         assert summary.aliases_loaded == 1
         assert summary.load_errors == 0
         assert reg.all_aliases()[0].private_alias_value == "104581024000029"
@@ -417,7 +417,7 @@ class TestRegistryLoadSummaryReport:
             skipped_empty=0,
             duplicates=0,
             load_errors=0,
-            atlas_path=Path("/secret/path/private_maps/NVDA/identity_atlas.yaml"),
+            atlas_path=Path("/secret/path/private_maps/CHC/identity_atlas.yaml"),
         )
         report: dict[str, Any] = s.to_report()
         # The full atlas path MUST NOT be present in the public QA report.

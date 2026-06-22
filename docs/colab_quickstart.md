@@ -33,7 +33,7 @@ NVIDIA artifact verification is optional. If `NVIDIA_API_KEY` is set, the verifi
 2. Run cells in order:
    - **Cell 1**: Clones the repo and installs dependencies.
    - **Cell 2**: Configures `SEC_USER_AGENT` (edit to your contact email).
-   - **Cell 3**: Runs `build_submission_fast.py` for 8 tickers (CL, PEP, TJX, PM, AMZN, HBAN, BLK, GOOGL).
+   - **Cell 3**: Runs `build_submission_fast.py` for 8 tickers (CHC1, CHC2, CHC3, CHC4, CHC5, CHC, CHC6, CHC8).
    - **Cell 4**: Runs local validation scans (SEC cover-page scan + broad scan).
    - **Cell 5**: Previews COMPANY_001 sanitized summaries.
    - **Cell 6**: Downloads `anonymized_bundle.zip`.
@@ -45,7 +45,7 @@ The ZIP is written to:
 <output_root>/exports/anonymized_bundle.zip
 ```
 
-In Colab, the default output root is `/content/fenrix_output`.
+In Colab, the default output root is `/tmp/fenrix_output`.
 
 ## What the Artifact Contains
 

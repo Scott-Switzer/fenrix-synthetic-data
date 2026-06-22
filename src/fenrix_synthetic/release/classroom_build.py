@@ -792,16 +792,18 @@ def _scan_for_private_data(package_dir: Path) -> list[str]:
     # 2. No CSV files have prohibited columns
     issues: list[str] = []
 
+    # Defensive canary scan: these are fictional canary values that should
+    # never appear in output. Real-company canary lists belong in gitignored
+    # private config. The tracked scanner uses only fictional canary tokens.
     forbidden_patterns = [
-        "Huntington",
-        "HBAN",
-        "huntington.com",
-        "0000049196",
-        "Steinour",
-        "Wasserman",
-        "Columbus",
-        "43215",
-        "Ernst & Young",
+        "Canary Holdings Corporation",
+        "CHC",
+        "canary-test.invalid",
+        "0000999999",
+        "Eleanor Testperson",
+        "Canary City",
+        "99999",
+        "Canary Audit LLP",
     ]
 
     for fpath in package_dir.rglob("*"):

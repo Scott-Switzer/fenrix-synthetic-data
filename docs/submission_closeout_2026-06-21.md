@@ -22,8 +22,8 @@ dbc398a feat: add fast NVIDIA smoke-slice primitive
 
 ## Artifact
 
-- Output folder: `/Users/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041`
-- ZIP path: `/Users/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041/exports/anonymized_bundle.zip`
+- Output folder: `/tmp/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041`
+- ZIP path: `/tmp/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041/exports/anonymized_bundle.zip`
 - ZIP byte size: `834258`
 - ZIP entry count: `183`
 - Artifact verdict: `PASS`
@@ -31,7 +31,7 @@ dbc398a feat: add fast NVIDIA smoke-slice primitive
 
 ## ZIP Structure Validation
 
-Command: `unzip -t /Users/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041/exports/anonymized_bundle.zip`
+Command: `unzip -t /tmp/scottthomasswitzer/Desktop/FENRIX_8_COMPANY_ANON_SUBMISSION_20260621_140041/exports/anonymized_bundle.zip`
 
 Result: `PASS`
 
@@ -71,8 +71,8 @@ Public text bodies scanned: `.md`, `.json`, `.csv`, `.txt`, `.sha256`.
 | --- | --- |
 | `nvapi-` | PASS: zero hits |
 | `NVIDIA_API_KEY` | PASS: zero hits |
-| `/Users/` | PASS: zero hits |
-| `/content/` | PASS: zero hits |
+| `/tmp/` | PASS: zero hits |
+| `/tmp/` | PASS: zero hits |
 | `private_maps` | PASS: zero hits |
 | `originals/` | PASS: zero hits |
 | `smoke_excerpts/` | PASS: zero hits |
@@ -81,10 +81,10 @@ Public text bodies scanned: `.md`, `.json`, `.csv`, `.txt`, `.sha256`.
 Harmless substring candidates were found only as non-standalone substrings in SEC excerpts:
 
 ```text
-BLK: anonymized/BLK/sec/latest_8_k_excerpt.md
+CHC6: anonymized/CHC6/sec/latest_8_k_excerpt.md
 CL: anonymized/CL/sec/latest_10_q_excerpt.md, anonymized/CL/sec/latest_8_k_excerpt.md
-HBAN: anonymized/HBAN/sec/latest_8_k_excerpt.md
-PEP: anonymized/PEP/sec/latest_10_q_excerpt.md, anonymized/PEP/sec/latest_8_k_excerpt.md
+CHC: anonymized/CHC/sec/latest_8_k_excerpt.md
+CHC2: anonymized/CHC2/sec/latest_10_q_excerpt.md, anonymized/CHC2/sec/latest_8_k_excerpt.md
 PM: anonymized/PM/sec/latest_8_k_excerpt.md
 ```
 
@@ -95,15 +95,15 @@ Validation bug fixed during closeout: public metadata bodies no longer include r
 | Input ticker | Public ticker ID | Metrics files | SEC files | News files | QA files | Metrics | SEC | News | Residual | NVIDIA |
 | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- |
 | CL | `TICKER_001` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
-| PEP | `TICKER_002` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
-| TJX | `TICKER_003` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
+| CHC2 | `TICKER_002` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
+| CHC3 | `TICKER_003` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
 | PM | `TICKER_004` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
-| AMZN | `TICKER_005` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
-| HBAN | `TICKER_006` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
-| BLK | `TICKER_007` | 10 | 5 | 1 | 1 | OK | INCOMPLETE | OK | PASS | INCOMPLETE |
-| GOOGL | `TICKER_008` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
+| CHC5 | `TICKER_005` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
+| CHC | `TICKER_006` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
+| CHC6 | `TICKER_007` | 10 | 5 | 1 | 1 | OK | INCOMPLETE | OK | PASS | INCOMPLETE |
+| CHC8 | `TICKER_008` | 10 | 9 | 1 | 1 | OK | OK | OK | PASS | INCOMPLETE |
 
-BLK SEC is documented as `INCOMPLETE` in `run_summary.json`; available SEC public files are present and included.
+CHC6 SEC is documented as `INCOMPLETE` in `run_summary.json`; available SEC public files are present and included.
 
 ## Docs Validation
 
@@ -117,7 +117,7 @@ BLK SEC is documented as `INCOMPLETE` in `run_summary.json`; available SEC publi
 
 ## Quality Gates
 
-All commands were run from `/Users/scottthomasswitzer/Documents/GitHub/fenrix-synthetic-data` using the repo `.venv`.
+All commands were run from `/tmp/scottthomasswitzer/Documents/GitHub/fenrix-synthetic-data` using the repo `.venv`.
 
 | Command | Result |
 | --- | --- |
@@ -139,7 +139,7 @@ Warnings remaining in tests:
 - No mathematical anonymity is claimed.
 - NVIDIA QA is `INCOMPLETE` because the bounded provider review did not run successfully/configure as a pass condition.
 - NVIDIA is not product-blocking for ZIP creation.
-- BLK SEC extraction is partial: SEC status is `INCOMPLETE`, but metrics/news/QA are present and the failure is documented.
+- CHC6 SEC extraction is partial: SEC status is `INCOMPLETE`, but metrics/news/QA are present and the failure is documented.
 - Residual scan is literal-only and does not prove semantic anonymity.
 - Numeric fingerprints, business model details, and public filing structure may remain identifying.
 - Public ZIP entry paths intentionally retain the required `anonymized/<ticker>/...` folder contract; public text metadata uses pseudonymized IDs.

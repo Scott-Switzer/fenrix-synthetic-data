@@ -51,10 +51,10 @@ class TestCompanyConfig:
     def test_valid_config(self):
         config = CompanyConfig(
             company_id="C001",
-            source_identity="HBAN",
+            source_identity="CHC",
         )
         assert config.company_id == "C001"
-        assert config.source_identity == "HBAN"
+        assert config.source_identity == "CHC"
 
     def test_config_with_custom_paths(self):
         config = CompanyConfig(
@@ -74,7 +74,7 @@ class TestCompanyConfig:
 
     def test_missing_company_id(self):
         with pytest.raises(ValidationError):
-            CompanyConfig(source_identity="HBAN")
+            CompanyConfig(source_identity="CHC")
 
 
 class TestSourceManifest:

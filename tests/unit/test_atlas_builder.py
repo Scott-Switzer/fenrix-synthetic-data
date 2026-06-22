@@ -96,13 +96,13 @@ class TestAtlasBuilderHarvest:
         # that asserted the now-removed ``or self.ticker`` fallback.
         run = _build_source_run(
             tmp_path,
-            ticker="NVDA",
-            run_summary={"run_id": "x", "ticker": "NVDA"},
+            ticker="CHC",
+            run_summary={"run_id": "x", "ticker": "CHC"},
         )
-        builder = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run)
+        builder = DirectIdentifierAtlasBuilder(ticker="CHC", source_run=run)
         report = builder.harvest()
         assert report.identifier_types.get("ticker", 0) >= 1
-        assert "NVDA" in report.to_report()["ticker"]
+        assert "CHC" in report.to_report()["ticker"]
 
     def test_run_summary_without_ticker_key_triggers_missing_required(self, tmp_path: Path) -> None:
         # Contract: WITHOUT an explicit ``ticker`` key (and WITHOUT a
@@ -151,17 +151,17 @@ class TestAtlasBuilderHarvest:
         # audit trail explains WHY the previous run failed.
         run = _build_source_run(
             tmp_path,
-            ticker="NVDA",
+            ticker="CHC",
             run_summary={
                 "run_id": "x",
-                "tickers": ["NVDA", "INTC"],
+                "tickers": ["CHC", "INTC"],
                 "status": "failed_privacy",
             },
         )
-        builder = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run)
+        builder = DirectIdentifierAtlasBuilder(ticker="CHC", source_run=run)
         report = builder.harvest()
         assert report.identifier_types.get("ticker", 0) >= 1
-        assert "NVDA" in report._buckets.get("ticker", set())
+        assert "CHC" in report._buckets.get("ticker", set())
         assert report.atlas_sources.get("run_status_failed_privacy") == 1
         # Negative assertion locks in the namespace rename — a future
         # regression to the OLD ``status:{X}`` key will surface here.
@@ -283,7 +283,7 @@ class TestAtlasBuilderCoverageWarnings:
         assert len(critical) >= 1
 
     def test_six_aliases_is_critical_for_nvda_like(self, tmp_path: Path) -> None:
-        # 6 aliases (matches the previous bounded-beta real NVDA outcome).
+        # 6 aliases (matches the previous bounded-beta real CHC outcome).
         # Override run_summary to empty so the fixture's default
         # ``tickers: [ticker]`` doesn't accidentally add one more
         # alias via the new harvester's ``tickers``-list support and
@@ -631,7 +631,7 @@ class TestHandleAdmissionPipeline:
         tmp_path: Path,
         body: str,
         *,
-        ticker: str = "NVDA",
+        ticker: str = "CHC",
         run_summary: dict | None = None,
         news_articles: list[dict] | None = None,
         atlas_entities: list[dict] | None = None,
@@ -649,13 +649,13 @@ class TestHandleAdmissionPipeline:
         return DirectIdentifierAtlasBuilder(ticker=ticker, source_run=run).harvest()
 
     def test_admit_nvidia_corp_handle_emits_four_variants(self, tmp_path: Path) -> None:
-        # ticker "NVDA" + company "Nvidia Corp" → risk_stems include
+        # ticker "CHC" + company "Nvidia Corp" → risk_stems include
         # ``nvidia`` (via company tokenisation) AND ``nvda``. The
         # "@NVIDIACorp" handle's h_stripped = "nvidia" matches.
         report = self._run_with_body_and_stems(
             tmp_path,
             "<html><body>Filed by @NVIDIACorp</body></html>",
-            ticker="NVDA",
+            ticker="CHC",
             atlas_entities=[
                 {
                     "entity_id": "ent_nvda",
@@ -736,7 +736,7 @@ class TestOrchestratorWritesRejectedCandidatesReport:
 
     @staticmethod
     def _drive_phase_atlas_build(
-        tmp_path: Path, *, ticker: str = "NVDA", filings: list[tuple[str, str]] | None = None
+        tmp_path: Path, *, ticker: str = "CHC", filings: list[tuple[str, str]] | None = None
     ) -> Path:
         """Drive ReanonymizeOrchestrator._phase_atlas_build with a hand-built
         ``RunContext`` so the test isolates Phase 1.55 from ``validate()`` +
@@ -772,7 +772,7 @@ class TestOrchestratorWritesRejectedCandidatesReport:
     def test_rejection_report_written_alongside_coverage(self, tmp_path: Path) -> None:
         qa_root = self._drive_phase_atlas_build(
             tmp_path,
-            filings=[("NVDA-1.htm", "<html><body>SIGNATURES\n/s/ Jennifer Smith\n</body></html>")],
+            filings=[("CHC-1.htm", "<html><body>SIGNATURES\n/s/ Jennifer Smith\n</body></html>")],
         )
         report_path = qa_root / "direct_identifier_rejected_candidates_report.json"
         coverage_path = qa_root / "direct_identifier_coverage_report.json"
@@ -780,7 +780,7 @@ class TestOrchestratorWritesRejectedCandidatesReport:
         assert coverage_path.is_file()
         payload = json.loads(report_path.read_text())
         assert payload["schema_version"] == "1.0.0"
-        assert payload["ticker"] == "NVDA"
+        assert payload["ticker"] == "CHC"
         assert "rejected_total" in payload
         assert "by_reason" in payload
 
@@ -792,7 +792,7 @@ class TestOrchestratorWritesRejectedCandidatesReport:
             tmp_path,
             filings=[
                 (
-                    "NVDA-1.htm",
+                    "CHC-1.htm",
                     "<html><body>SIGNATURES\n/s/ Jennifer Smith\nor director\n</body></html>",
                 )
             ],
@@ -812,7 +812,7 @@ class TestOrchestratorWritesRejectedCandidatesReport:
         qa_root = self._drive_phase_atlas_build(
             tmp_path,
             filings=[
-                ("NVDA-1.htm", "<html><body>No signatures block here.</body></html>"),
+                ("CHC-1.htm", "<html><body>No signatures block here.</body></html>"),
             ],
         )
         report_path = qa_root / "direct_identifier_rejected_candidates_report.json"
@@ -841,8 +841,8 @@ class TestAtlasMergeFix4CaseInsensitive:
 
         run = _build_source_run(
             tmp_path,
-            ticker="NVDA",
-            run_summary={"run_id": "x", "ticker": "NVDA"},
+            ticker="CHC",
+            run_summary={"run_id": "x", "ticker": "CHC"},
             atlas_entities=[
                 {
                     "entity_id": "ent_nvda",
@@ -857,7 +857,7 @@ class TestAtlasMergeFix4CaseInsensitive:
             ],
             atlas_aliases=[],
         )
-        report = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run).harvest()
+        report = DirectIdentifierAtlasBuilder(ticker="CHC", source_run=run).harvest()
         output_root = tmp_path / "out"
         o = ReanonymizeOrchestrator(
             source_run=run, output_root=output_root, limit_forms=None, limit_news=0
@@ -866,7 +866,7 @@ class TestAtlasMergeFix4CaseInsensitive:
         ctx = RunContext(
             source_run=run,
             output_root=output_root,
-            ticker="NVDA",
+            ticker="CHC",
             form_limits={},
             news_limit=0,
             discovered_forms={},
@@ -876,8 +876,7 @@ class TestAtlasMergeFix4CaseInsensitive:
         import yaml
 
         return (
-            yaml.safe_load((run / "private_maps" / "NVDA" / "identity_atlas.yaml").read_text())
-            or {}
+            yaml.safe_load((run / "private_maps" / "CHC" / "identity_atlas.yaml").read_text()) or {}
         )
 
     def test_harvested_company_ticker_brand_use_case_insensitive(self, tmp_path: Path) -> None:
@@ -956,8 +955,8 @@ class TestAtlasMergeFix4CaseInsensitive:
         # the bounded beta's 40 post-mask hits come back.
         run = _build_source_run(
             tmp_path,
-            ticker="NVDA",
-            run_summary={"run_id": "x", "ticker": "NVDA"},
+            ticker="CHC",
+            run_summary={"run_id": "x", "ticker": "CHC"},
             atlas_entities=[
                 {
                     "entity_id": "ent_literal_co",
@@ -976,7 +975,7 @@ class TestAtlasMergeFix4CaseInsensitive:
                 {
                     "alias_id": "ali_literal_ticker",
                     "canonical_entity_id": "ent_literal_co",
-                    "private_alias_value": "NVDA",
+                    "private_alias_value": "CHC",
                     "entity_type": "ticker",
                     "match_policy": "literal",  # deliberate: must be upgraded
                 },
@@ -987,7 +986,7 @@ class TestAtlasMergeFix4CaseInsensitive:
             RunContext,
         )
 
-        report = DirectIdentifierAtlasBuilder(ticker="NVDA", source_run=run).harvest()
+        report = DirectIdentifierAtlasBuilder(ticker="CHC", source_run=run).harvest()
         output_root = tmp_path / "out"
         o = ReanonymizeOrchestrator(
             source_run=run, output_root=output_root, limit_forms=None, limit_news=0
@@ -996,7 +995,7 @@ class TestAtlasMergeFix4CaseInsensitive:
         ctx = RunContext(
             source_run=run,
             output_root=output_root,
-            ticker="NVDA",
+            ticker="CHC",
             form_limits={},
             news_limit=0,
             discovered_forms={},
@@ -1007,8 +1006,7 @@ class TestAtlasMergeFix4CaseInsensitive:
         import yaml
 
         atlas = (
-            yaml.safe_load((run / "private_maps" / "NVDA" / "identity_atlas.yaml").read_text())
-            or {}
+            yaml.safe_load((run / "private_maps" / "CHC" / "identity_atlas.yaml").read_text()) or {}
         )
         # Find the curated (non-harvest) aliases and verify upgrade.
         curated = {

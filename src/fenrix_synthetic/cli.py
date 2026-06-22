@@ -326,7 +326,7 @@ def cli(ctx: click.Context, log_level: str, log_format: str, data_root: Path) ->
 
 
 @cli.command()
-@click.option("--company", required=True, help="Company ID (e.g., C001)")
+@click.option("--company", required=True, help="Company ID (e.g., CANARY)")
 @click.option(
     "--config",
     "config_path",
@@ -397,7 +397,7 @@ def extract(
 
 
 @cli.command()
-@click.option("--company", required=True, help="Company ID (e.g., C001)")
+@click.option("--company", required=True, help="Company ID (e.g., CANARY)")
 @click.option(
     "--config",
     "config_path",
@@ -412,7 +412,7 @@ def ingest(ctx: click.Context, company: str, config_path: Path | None) -> None:
 
 
 @cli.command()
-@click.option("--company", required=True, help="Company ID (e.g., C001)")
+@click.option("--company", required=True, help="Company ID (e.g., CANARY)")
 @click.option(
     "--config",
     "config_path",
@@ -605,7 +605,7 @@ def registry_inventory(registry_path: Path, sanitize: bool) -> None:
 @click.option(
     "--bronze-artifact",
     required=True,
-    help="Bronze artifact ID (e.g., bronze-C001-000123456724000001)",
+    help="Bronze artifact ID (e.g., bronze-CANARY-000123456724000001)",
 )
 @click.option(
     "--registry",
@@ -1012,7 +1012,7 @@ def providers_list() -> None:
     "--company",
     "company_id",
     default="provider-health-check",
-    help="Synthetic company tag for health-checking; never real C001/HBAN.",
+    help="Synthetic company tag for health-checking; never a real company.",
 )
 def providers_health(provider_name: str, config_path: Path | None, company_id: str) -> None:
     """Check discovery provider health and dependency status.
@@ -1089,7 +1089,7 @@ def providers_health(provider_name: str, config_path: Path | None, company_id: s
     "--company",
     "company_id",
     default="provider-prepare-check",
-    help="Synthetic company tag; never real C001/HBAN.",
+    help="Synthetic company tag; never a real company.",
 )
 def providers_prepare(
     provider_name: str,
@@ -2372,7 +2372,7 @@ def reanonymize_run(
 
 
 @cli.command(name="pipeline-run")
-@click.option("--ticker", default=None, help="Single ticker to process (e.g., NVDA)")
+@click.option("--ticker", default=None, help="Single ticker to process (e.g., CHC)")
 @click.option(
     "--companies-csv",
     type=click.Path(exists=True, path_type=Path),
@@ -2438,7 +2438,7 @@ def pipeline_run(
     """Run the full multi-company collection and anonymization pipeline.
 
     Example:
-        fenrix-synth pipeline-run --ticker NVDA --years 10 --output-root /data/fenrix
+        fenrix-synth pipeline-run --ticker CHC --years 10 --output-root /data/fenrix
     """
     if not ticker and not companies_csv:
         click.echo("Error: provide --ticker or --companies-csv", err=True)

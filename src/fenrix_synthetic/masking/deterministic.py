@@ -180,7 +180,7 @@ def get_patterns_for_alias(
     # Fix 3 (longest-first): boost the alias's intrinsic priority by
     # the length of the matching value so when two candidates overlap
     # the longer one wins in ``OverlapResolver.resolve``. Without this
-    # boost, a short alias (e.g.``NVDA``,len=4) could shadow a longer
+    # boost, a short alias (e.g.``CHC``,len=3) could shadow a longer
     # one (e.g. ``NVIDIA Corp``, len=11) whose match fully contains it,
     # producing a partial replacement that leaves ``Corp`` visible
     # (and re-introduces a literal-token leak surface for the scanner)

@@ -32,7 +32,7 @@ class FakeProviderConfig:
     """Synthetic-test fake-discovery-provider configuration.
 
     ``company_id`` is REQUIRED. Production code must NEVER silently assume
-    any C001/HBAN-like identifier. Callers explicitly supply a synthetic
+    any real-company-like identifier. Callers explicitly supply a synthetic
     fixture id (e.g. ``TEST-CO-001``).
     """
 
@@ -51,7 +51,7 @@ class FakeProviderConfig:
             raise ValueError(
                 "FakeProviderConfig.company_id is REQUIRED and must be a non-empty string. "
                 "Use a synthetic fixture identifier (e.g. 'TEST-CO-001'). "
-                "Production code must NEVER silently assume a real C001/HBAN id."
+                "Production code must NEVER silently assume a real company id."
             )
 
 

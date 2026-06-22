@@ -845,7 +845,7 @@ class TestOpaqueIdCollisions:
         # The opaque ID should not be a simple hash of any common private value
         import hashlib
 
-        for val in ["Acme Corp", "Jane Smith", "test@example.com", "HBAN"]:
+        for val in ["Acme Corp", "Jane Smith", "test@example.com", "CHC"]:
             private_hash = hashlib.sha256(val.encode()).hexdigest()[:16]
             assert opaque != private_hash, f"opaque_id equals hash of '{val}'"
 
@@ -885,7 +885,7 @@ class TestComprehensivePrivacyRegression:
         private_aliases = ["Acme", "Acme Corp", "J. Smith", "Beta"]
         private_urls = ["https://acme-corp.example", "https://example.com/private"]
         private_paths = ["/tmp/secrets/private.yaml", "configs/company.yaml"]
-        private_filenames = ["HBAN_private_registry.yaml", "secret_key.env"]
+        private_filenames = ["CHC_private_registry.yaml", "secret_key.env"]
 
         # ── Compute all hash forms of private values ──
         all_hash_forms: set[str] = set()

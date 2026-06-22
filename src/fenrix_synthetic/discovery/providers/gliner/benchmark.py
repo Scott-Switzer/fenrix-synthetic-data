@@ -1,7 +1,7 @@
 """Synthetic GLiNER entity-discovery benchmark dataset.
 
 All text and entity values in this committed benchmark are synthetic. No
-real HBAN or C001 facts appear here. Every expected span documents
+real company facts appear here. Every expected span documents
 whether a model hit should be blocking or not, so we can measure false
 positives on hard negatives.
 
@@ -56,7 +56,7 @@ class Benchmark:
     version: str = BENCHMARK_VERSION
     documents: list[BenchmarkDocument] = field(default_factory=list)
     notes: str = (
-        "All values are synthetic. No real HBAN facts appear here. "
+        "All values are synthetic. No real company facts appear here. "
         "hard_negatives must NOT be discovered as entities. "
         "Offsets are derived from fixture text at load time."
     )

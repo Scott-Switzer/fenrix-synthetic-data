@@ -35,8 +35,8 @@ Existing systems should continue to provide ingestion, structured data, model ro
 The first supported company is:
 
 ```text
-Internal company ID: C001
-Private source identity: HBAN
+Internal company ID: CANARY
+Private source identity: CHC (fictional canary; real mappings are gitignored)
 ```
 
 The initial implementation milestone is limited to:
@@ -45,7 +45,7 @@ The initial implementation milestone is limited to:
 2. Source-code reuse inventory
 3. Source provenance records
 4. Typed artifact and manifest schemas
-5. One HBAN SEC filing discovery and extraction pipeline
+5. One canary SEC filing discovery and extraction pipeline
 6. Deterministic checkpoints and resume behavior
 7. Offline fixture-based tests
 
@@ -153,7 +153,7 @@ The deployed application must not be modified during the initial worker mileston
 The initial storage system is file-based:
 
 * Local filesystem
-* Google Drive for private archives and checkpoints
+* Canary Search Drive for private archives and checkpoints
 * Parquet or JSONL for structured records
 * DuckDB for local analytical queries
 
@@ -404,12 +404,12 @@ Otherwise, the stage must run again.
 
 ---
 
-## 10. Initial HBAN Extraction Flow
+## 10. Initial Canary Extraction Flow
 
 The first implemented flow is intentionally smaller:
 
 ```text
-C001 company configuration
+CANARY company configuration
         |
         v
 SEC filing manifest
@@ -708,12 +708,12 @@ Tests fail unless all canaries are removed by the relevant masking stage.
 Identifiers should be tested in multiple forms:
 
 ```text
-BlackRock
+Canary
 BLACKROCK
 Black Rock
-BlackRock's
+Canary's
 Black-Rock
-NYSE: BLK
+NYSE: CHC6
 B1ackRock
 ```
 
@@ -752,7 +752,7 @@ Never commit:
 * Model weights
 * Generated embeddings
 * Restricted documents
-* Google Drive credentials
+* Canary Search Drive credentials
 
 Logs must redact values associated with names containing patterns such as:
 
@@ -814,20 +814,20 @@ Environment variables provide secrets.
 Target commands:
 
 ```bash
-fenrix-synth inventory --company C001
-fenrix-synth ingest --company C001
-fenrix-synth extract --company C001
-fenrix-synth registry build --company C001
-fenrix-synth mask --company C001
-fenrix-synth attack --company C001
-fenrix-synth report --company C001
+fenrix-synth inventory --company CANARY
+fenrix-synth ingest --company CANARY
+fenrix-synth extract --company CANARY
+fenrix-synth registry build --company CANARY
+fenrix-synth mask --company CANARY
+fenrix-synth attack --company CANARY
+fenrix-synth report --company CANARY
 ```
 
 Full campaign:
 
 ```bash
 fenrix-synth campaign run \
-  --company C001 \
+  --company CANARY \
   --resume \
   --stop-on-release-failure
 ```
@@ -866,7 +866,7 @@ Integration tests should use recorded or synthetic fixtures unless explicitly ma
 Deliver:
 
 * Python package
-* CLI
+* CHC1I
 * Configuration models
 * Manifest models
 * Artifact models
@@ -877,11 +877,11 @@ Deliver:
 * Checkpoint and resume primitives
 * Unit tests
 
-### Phase 1 — HBAN extraction
+### Phase 1 — CHC extraction
 
 Deliver:
 
-* C001 configuration
+* CANARY configuration
 * SEC adapter
 * Offline SEC fixture
 * Filing manifest
@@ -997,9 +997,9 @@ The repository foundation is complete only when:
 9. All tests run offline.
 10. Formatting, linting, type checking, and tests pass.
 
-The HBAN extraction vertical slice is complete only when:
+The CHC extraction vertical slice is complete only when:
 
-1. C001 resolves through a private company configuration.
+1. CANARY resolves through a private company configuration.
 2. One SEC filing is represented by a source manifest.
 3. Its source hash is verified.
 4. SEC HTML is converted into normalized text.
@@ -1027,4 +1027,4 @@ If the component is not required for the current milestone, defer it.
 
 The immediate objective is not to build the final platform.
 
-The immediate objective is to produce one real, traceable, tested HBAN extraction vertical slice that establishes the foundation for masking and re-identification testing.
+The immediate objective is to produce one real, traceable, tested CHC extraction vertical slice that establishes the foundation for masking and re-identification testing.
