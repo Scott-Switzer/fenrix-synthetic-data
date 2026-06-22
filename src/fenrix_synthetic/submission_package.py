@@ -101,7 +101,8 @@ def run_nvidia_qa(
             "reason": "artifact root not provided",
             "sample_count": len([sample for sample in samples if sample]),
         }
-    review = verify_public_artifact_with_nvidia(artifact_root)
+    company_dir = artifact_root / "anonymized" / ctx.company_id
+    review = verify_public_artifact_with_nvidia(artifact_root, company_dir=company_dir)
     status = str(review.get("status", "INCOMPLETE")).upper()
     decision = {
         "PASS": "PASS",

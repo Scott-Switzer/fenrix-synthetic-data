@@ -79,19 +79,30 @@ def _is_safe_for_payload(rel_path: str, text: str) -> bool:
 
 
 def _collect_public_files(
-    artifact_root: Path, max_chars_per_file: int = 6000
+    artifact_root: Path, max_chars_per_file: int = 6000, company_dir: Path | None = None
 ) -> list[dict[str, str]]:
-    """Collect sanitized public artifact text. Never includes originals/private maps."""
+    """Collect sanitized public artifact text. Never includes originals/private maps.
+
+    If ``company_dir`` is given, only that company's public files are collected.
+    """
     files: list[dict[str, str]] = []
-    public_dir = artifact_root / "anonymized"
-    if not public_dir.is_dir():
+    if company_dir is not None:
+        scan_root = company_dir
+        base = artifact_root
+    else:
+        public_dir = artifact_root / "anonymized"
+        if not public_dir.is_dir():
+            return files
+        scan_root = public_dir
+        base = artifact_root
+    if not scan_root.is_dir():
         return files
-    for path in sorted(public_dir.rglob("*")):
+    for path in sorted(scan_root.rglob("*")):
         if not path.is_file():
             continue
         if path.suffix.lower() not in {".md", ".json", ".csv", ".txt"}:
             continue
-        rel = path.relative_to(artifact_root).as_posix()
+        rel = path.relative_to(base).as_posix()
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -133,7 +144,7 @@ def _call_nvidia(company_id: str, file_chunks: list[dict[str, str]]) -> dict[str
         "max_tokens": 2048,
     }
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=120.0) as client:
             response = client.post(NVIDIA_ENDPOINT, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -249,16 +260,19 @@ def _infer_company_id_from_path(file_rel: str) -> str:
 
 
 def verify_public_artifact_with_nvidia(
-    artifact_root: Path, max_chars_per_file: int = 6000
+    artifact_root: Path,
+    max_chars_per_file: int = 6000,
+    company_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Verify the public artifact with NVIDIA. Returns a report dict.
 
     Never sends originals or private maps. If the provider is unavailable or
     returns malformed output, the report status is INCOMPLETE and no exception
-    is raised.
+    is raised. If ``company_dir`` is given, only that company's files are
+    reviewed.
     """
     artifact_root = Path(artifact_root)
-    file_chunks = _collect_public_files(artifact_root, max_chars_per_file)
+    file_chunks = _collect_public_files(artifact_root, max_chars_per_file, company_dir)
     if not file_chunks:
         return {
             "schema_version": "1.0",
@@ -292,7 +306,7 @@ def verify_public_artifact_with_nvidia(
                 repaired.append(risk.get("file", ""))
         if not repaired:
             break
-        file_chunks = _collect_public_files(artifact_root, max_chars_per_file)
+        file_chunks = _collect_public_files(artifact_root, max_chars_per_file, company_dir)
         report = _call_nvidia(company_id, file_chunks)
         report["schema_version"] = "1.0"
         report["company_id"] = company_id
