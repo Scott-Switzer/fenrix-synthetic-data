@@ -1,0 +1,113 @@
+# Professor Bundle Production Configuration
+#
+# This is an example configuration for production-mode builds.
+# Copy to configs/professor_bundle.production.yaml and fill in values.
+# DO NOT COMMIT configs/professor_bundle.production.yaml (contains private mappings).
+#
+# Real company identifiers are allowed ONLY in private/original/source areas.
+# They MUST NEVER appear in public output artifacts or ZIP exports.
+
+company_id: "YOUR_COMPANY_ID"
+output_root: "runs/professor_bundle_production"
+build_mode: "production"
+strict: true
+fast_fixtures: false
+allow_provider_skip: false
+release_date: "2026-06-22"
+
+# SEC provider settings
+sec:
+  provider_type: "OfficialSecApiProvider"
+  # Descriptive User-Agent (required by SEC policy, min 10 chars)
+  user_agent: "FenrixSyntheticData/0.1 contact@example.com"
+  # SEC fair-access: max requests per second (must be <= 10)
+  max_requests_per_second: 8
+  # SHA-256 keyed disk cache for SEC API responses
+  cache_enabled: true
+  cache_dir: ".fenrix_cache/sec"
+  # Whether live network is allowed (false = cache replay only)
+  live_network: false
+  # Optional: explicit CIK if not resolvable via ticker
+  # cik: "0000999999"
+  # Forms to fetch (10-K, 10-Q, 8-K)
+  forms:
+    - "10-K"
+    - "10-Q"
+    - "8-K"
+  # Maximum filings per form type
+  max_filings_per_form: 1
+
+# GLiNER provider settings
+gliner:
+  provider: "local"
+  # Model identifier (Hugging Face model ID)
+  model_id: "urchade/gliner_multi-v2.1"
+  # Confidence threshold for entity detection
+  threshold: 0.5
+  # Device: "cpu" or "cuda"
+  device: "cpu"
+  # Finance-specific entity labels
+  labels:
+    - "issuer"
+    - "subsidiary"
+    - "executive"
+    - "director"
+    - "customer"
+    - "supplier"
+    - "counterparty"
+    - "product"
+    - "brand"
+    - "geography"
+    - "facility"
+    - "regulator"
+    - "auditor"
+    - "lender"
+    - "litigation party"
+    - "merger/acquisition party"
+    - "business segment"
+    - "risk factor"
+    - "financial metric"
+    - "exchange"
+    - "ticker"
+    - "CIK"
+    - "accession number"
+    - "domain"
+    - "email"
+    - "phone"
+    - "address"
+    - "date"
+    - "money"
+    - "percentage"
+
+# NVIDIA review (optional - requires API key)
+nvidia:
+  enabled: false
+
+# Metrics synthesis (optional - requires SDV/CTGAN)
+metrics:
+  enabled: false
+
+# RAG/QA evaluation (optional)
+rag:
+  enabled: false
+
+# Classroom materials
+classroom:
+  enabled: true
+  min_exercises: 3
+
+# Output controls
+output:
+  # Exclude these paths from ZIP export
+  zip_exclude_prefixes:
+    - "private/"
+    - "originals/"
+    - "maps/"
+    - ".env"
+    - "smoke_excerpts"
+  # Include provenance keys in public artifacts
+  include_provenance_keys: true
+  # Include crosslinks in public output
+  include_crosslinks: true
+  # Include classroom materials
+  include_classroom_materials: true

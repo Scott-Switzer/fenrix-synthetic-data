@@ -182,7 +182,11 @@ def evaluate_classroom_gate(
     release_safe = decision == "PASS" and stage_registry.release_safe
     strict_fixture_ready = decision == "PASS" and stage_registry.strict_fixture_ready
     fixture_ready = decision == "PASS" and stage_registry.fixture_ready
-    beta_status = stage_registry.beta_status if decision == "PASS" else "NOT_PROFESSOR_READY"
+    beta_status = (
+        stage_registry.beta_status
+        if decision == "PASS"
+        else ("PRODUCTION_BLOCKED" if strict else "NOT_PROFESSOR_READY")
+    )
     non_production_conditions = stage_registry.non_production_conditions
 
     return {

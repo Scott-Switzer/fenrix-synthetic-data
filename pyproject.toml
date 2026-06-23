@@ -120,4 +120,5 @@ filterwarnings = [
 markers = [
     "local_model: tests that require an installed GLiNER/torch model and locally-cached weights",
     "local_package: tests that require the gliner package to be installed but do not download weights",
+    "live_sec: tests that require live SEC network (FENRIX_LIVE_SEC=1)",
 ]

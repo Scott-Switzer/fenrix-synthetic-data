@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,11 @@ from typing import Any
 
 import orjson
 
+from .entity_providers import (  # noqa: E402 - late import after base types
+    EntityDiscoveryError,
+    ProfessorEntityProvider,
+    create_gliner_provider,
+)
 from .evidence import (
     ClassroomCrossLink,
     DetectedEntity,
@@ -37,9 +43,11 @@ from .evidence import (
     compute_opaque_id,
     validate_public_artifact,
 )
-from .providers import MockGLiNERProvider, MockMetricsSynthesizer, MockNVIDIAReviewer
+from .providers import MockMetricsSynthesizer, MockNVIDIAReviewer
 from .sec_providers import (
     FixtureSecProvider,
+    SecProvider,
+    create_sec_provider,
     validate_10k_sections,
     validate_filing_date,
 )
@@ -64,6 +72,8 @@ class ProfessorBundleConfig:
         fast_fixtures: bool = True,
         allow_provider_skip: bool = False,
         release_date: str = "2026-06-22",
+        sec_provider: dict[str, Any] | None = None,
+        gliner_provider: dict[str, Any] | None = None,
     ) -> None:
         self.company_id = company_id
         self.output_root = output_root
@@ -71,6 +81,8 @@ class ProfessorBundleConfig:
         self.fast_fixtures = fast_fixtures
         self.allow_provider_skip = allow_provider_skip
         self.release_date = release_date
+        self.sec_provider = sec_provider or {}
+        self.gliner_provider = gliner_provider or {}
 
     @property
     def build_mode(self) -> BuildMode:
@@ -93,6 +105,11 @@ class ProfessorBundleConfig:
 
         with open(path) as f:
             data = yaml.safe_load(f) or {}
+
+        # Support both flat and nested config formats
+        sec_config = data.get("sec", {})
+        gliner_config = data.get("gliner", {})
+
         return cls(
             company_id=data.get("company_id", "COMPANY_001"),
             output_root=Path(data.get("output_root", "runs/professor_bundle_fixture")),
@@ -100,6 +117,8 @@ class ProfessorBundleConfig:
             fast_fixtures=data.get("fast_fixtures", True),
             allow_provider_skip=data.get("allow_provider_skip", False),
             release_date=data.get("release_date", "2026-06-22"),
+            sec_provider=sec_config,
+            gliner_provider=gliner_config,
         )
 
 
@@ -109,10 +128,46 @@ class ProfessorBundleOrchestrator:
     def __init__(self, config: ProfessorBundleConfig) -> None:
         self.config = config
         self.registry = StageRegistry(build_mode=config.build_mode)
-        self.sec_provider = FixtureSecProvider()
-        self.gliner_provider = MockGLiNERProvider() if config.fast_fixtures else None
-        self.nvidia_reviewer = MockNVIDIAReviewer() if config.fast_fixtures else None
-        self.metrics_synthesizer = MockMetricsSynthesizer() if config.fast_fixtures else None
+
+        # Choose SEC provider based on build mode and config
+        if config.fast_fixtures:
+            self.sec_provider: SecProvider = FixtureSecProvider()
+        else:
+            sec_type = config.sec_provider.get("provider_type", "OfficialSecApiProvider")
+            sec_config = {
+                "user_agent": config.sec_provider.get(
+                    "user_agent",
+                    "FenrixSyntheticData/0.1 contact@example.com",
+                ),
+                "cache_dir": config.sec_provider.get("cache_dir", ".fenrix_cache/sec"),
+                "cik": config.sec_provider.get("cik"),
+                "max_requests_per_second": config.sec_provider.get("max_requests_per_second", 8),
+                "live_network": config.sec_provider.get("live_network", False),
+            }
+            self.sec_provider = create_sec_provider(sec_type, sec_config)
+
+        # Choose GLiNER provider based on build mode and config
+        self._gliner_load_error: str | None = None
+        if config.fast_fixtures:
+            self.gliner_provider: ProfessorEntityProvider | None = create_gliner_provider(
+                "mock", {}
+            )
+        else:
+            gliner_type = config.gliner_provider.get("provider", "local")
+            try:
+                self.gliner_provider = create_gliner_provider(
+                    gliner_type,
+                    {
+                        **config.gliner_provider,
+                        "company_id": config.company_id,
+                    },
+                )
+            except (ImportError, EntityDiscoveryError) as e:
+                self.gliner_provider = None
+                self._gliner_load_error = str(e)
+
+        self.nvidia_reviewer: Any = MockNVIDIAReviewer() if config.fast_fixtures else None
+        self.metrics_synthesizer: Any = MockMetricsSynthesizer() if config.fast_fixtures else None
 
         # Evidence storage (private)
         self._filings: list[SourceFiling] = []
@@ -142,30 +197,60 @@ class ProfessorBundleOrchestrator:
             d.mkdir(parents=True, exist_ok=True)
 
         # ── Run all 18 stages ──────────────────────────────────────────
+        # Wrap in try/except so a critical stage failure still writes the
+        # gate report rather than crashing without structured output.
 
-        self._run_stage_source_ingestion()
-        self._run_stage_sec_parse()
-        self._run_stage_section_extract()
-        self._run_stage_entity_detect_gliner()
-        self._run_stage_entity_detect_rules()
-        self._run_stage_entity_resolve()
-        self._run_stage_deidentify()
-        self._run_stage_private_evidence_build(private_dir)
-        self._run_stage_synthetic_profile_build()
-        self._run_stage_filing_reconstruct(public_dir)
-        self._run_stage_metric_synthesis(public_dir)
-        self._run_stage_metric_evaluation(qa_dir)
-        self._run_stage_news_reconstruct(public_dir)
-        self._run_stage_crosslink_build(public_dir)
-        self._run_stage_pedagogy_build(public_dir)
-        self._run_stage_rag_index_build(qa_dir)
-        self._run_stage_adversarial_qa(qa_dir)
+        stage_crashed = False
+        try:
+            self._run_stage_source_ingestion()
+            self._run_stage_sec_parse()
+            self._run_stage_section_extract()
+            self._run_stage_entity_detect_gliner()
+            self._run_stage_entity_detect_rules()
+            self._run_stage_entity_resolve()
+            self._run_stage_deidentify()
+            self._run_stage_private_evidence_build(private_dir)
+            self._run_stage_synthetic_profile_build()
+            self._run_stage_filing_reconstruct(public_dir)
+            self._run_stage_metric_synthesis(public_dir)
+            self._run_stage_metric_evaluation(qa_dir)
+            self._run_stage_news_reconstruct(public_dir)
+            self._run_stage_crosslink_build(public_dir)
+            self._run_stage_pedagogy_build(public_dir)
+            self._run_stage_rag_index_build(qa_dir)
+            self._run_stage_adversarial_qa(qa_dir)
+        except Exception as exc:
+            stage_crashed = True
+            self._register(
+                ProfessorStage.RELEASE_GATE,
+                StageStatus.FAIL,
+                failures=[f"Pipeline crashed: {exc}"],
+                provider_name="PipelineCrashHandler",
+                provider_kind=ProviderKind.REAL,
+            )
+            # Save what we have so gate reports exist
+            self.registry.save(qa_dir / "stage_registry.json")
 
-        # Write checksums BEFORE gate evaluation so gate can verify them
-        self._write_checksums()
+        if not stage_crashed:
+            # Write checksums before gate evaluation
+            self._write_checksums()
 
-        # Run release gate (writes classroom_gate_report.json + final stage_registry.json)
-        self._run_stage_release_gate(qa_dir)
+            # Run release gate (writes classroom_gate_report.json + final stage_registry.json)
+            self._run_stage_release_gate(qa_dir)
+        else:
+            # Gate already registered as FAIL; write a minimal gate report
+            self._write_checksums()
+            gate_result = {
+                "decision": "FAIL",
+                "blocking_failures": ["Pipeline crashed: see stage_registry.json"],
+                "professor_ready": False,
+                "release_safe": False,
+                "beta_status": "PRODUCTION_BLOCKED",
+                "build_mode": self.config.build_mode.value,
+            }
+            (qa_dir / "classroom_gate_report.json").write_bytes(
+                orjson.dumps(gate_result, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+            )
 
         # Write run summary and inventory BEFORE ZIP so they can be included
         self._write_run_summary(started_at)
@@ -179,7 +264,7 @@ class ProfessorBundleOrchestrator:
             "release_safe": self.registry.release_safe,
             "strict_fixture_ready": self.registry.strict_fixture_ready,
             "fixture_ready": self.registry.fixture_ready,
-            "beta_status": self.registry.beta_status,
+            "beta_status": _read_gate_beta_status(qa_dir) or self.registry.beta_status,
             "build_mode": self.config.build_mode.value,
             "output_root": str(self.config.output_root),
             "zip_path": str(exports_dir / "anonymized_bundle.zip"),
@@ -301,11 +386,14 @@ class ProfessorBundleOrchestrator:
     def _run_stage_entity_detect_gliner(self) -> None:
         """Stage 4: ENTITY_DETECT_GLINER — run GLiNER on all sections."""
         if self.gliner_provider is None:
+            failures = ["GLiNER provider not available"]
+            if self._gliner_load_error:
+                failures.append(self._gliner_load_error)
             if self.config.strict:
                 self._register(
                     ProfessorStage.ENTITY_DETECT_GLINER,
                     StageStatus.PROVIDER_NOT_RUN,
-                    failures=["GLiNER provider not available in strict mode"],
+                    failures=failures,
                 )
                 return
             elif self.config.allow_provider_skip:
@@ -321,9 +409,13 @@ class ProfessorBundleOrchestrator:
         for section in self._sections:
             section_entities = self.gliner_provider.discover_entities(
                 text=section.text_content,
-                company_id=section.company_id,
-                source_artifact_id=section.section_id,
                 labels=["company", "executive", "product", "ticker", "domain"],
+                artifact_path=section.section_id,
+                section_name=section.item_id,
+                provenance_key=build_provenance_key(
+                    section.company_id, "ENTITY", "GLINER", "", section.section_id[:8]
+                ),
+                threshold=0.5,
             )
             entities.extend(section_entities)
         self._entities.extend(entities)
@@ -331,7 +423,7 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ENTITY_DETECT_GLINER,
             StageStatus.PASS,
             evidence_count=len(entities),
-            provider_name=self.gliner_provider.__class__.__name__,
+            provider_name=self.gliner_provider.provider_name,
             provider_kind=ProviderKind.FIXTURE
             if self.config.build_mode == BuildMode.FIXTURE
             else ProviderKind.REAL,
@@ -642,7 +734,10 @@ class ProfessorBundleOrchestrator:
         news_dir.mkdir(parents=True, exist_ok=True)
 
         # Produce synthetic news surrogates from fixture
-        fixture_news = self.sec_provider._fixture.get("news", [])
+        if isinstance(self.sec_provider, FixtureSecProvider):
+            fixture_news: list[dict[str, Any]] = self.sec_provider._fixture.get("news", [])
+        else:
+            fixture_news = []
         for i, _news_item in enumerate(fixture_news):
             news_id = f"news_{i + 1:03d}"
             surrogate = (
@@ -968,18 +1063,57 @@ class ProfessorBundleOrchestrator:
             orjson.dumps(qa_report, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
         )
 
-        # Entity audit report
+        # SEC provider report
+        sec_report = self.sec_provider.get_provider_report()
+        (qa_dir / "sec_provider_report.json").write_bytes(
+            orjson.dumps(sec_report, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+        )
+
+        # Entity audit report (merged rules + GLiNER)
+        gliner_entities = [e for e in self._entities if e.detection_method == "gliner"]
+        rules_entities = [e for e in self._entities if e.detection_method == "rules"]
         audit_report = {
             "total_artifacts_audited": len(self._sanitized_sections) + len(self._sanitized_tables),
-            "gliner_audit_count": len(
-                [e for e in self._entities if e.detection_method == "gliner"]
-            ),
-            "rules_audit_count": len([e for e in self._entities if e.detection_method == "rules"]),
+            "gliner_audit_count": len(gliner_entities),
+            "rules_audit_count": len(rules_entities),
             "all_artifacts_audited": True,
             "status": "PASS",
         }
         (qa_dir / "entity_audit_report.json").write_bytes(
             orjson.dumps(audit_report, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+        )
+
+        # GLiNER-specific audit report
+        gliner_audit: dict[str, Any] = {
+            "provider_name": "",
+            "provider_kind": "fixture",
+            "model_id": "",
+            "model_version": "",
+            "threshold": 0.0,
+            "labels_requested": [],
+            "artifacts_scanned": 0,
+            "sections_scanned": 0,
+            "spans_detected_by_label": {},
+            "empty_artifact_count": 0,
+            "failed_artifact_count": 0,
+            "coverage_summary": "no gliner provider",
+            "provenance_keys": [],
+            "warnings": [],
+        }
+        if self.gliner_provider is not None and hasattr(self.gliner_provider, "get_audit_report"):
+            gliner_audit = self.gliner_provider.get_audit_report()  # type: ignore[union-attr]
+        elif self.gliner_provider is not None:
+            gliner_audit.update(
+                {
+                    "provider_name": self.gliner_provider.provider_name,
+                    "model_id": getattr(self.gliner_provider, "model_name", ""),
+                    "artifacts_scanned": len(self._sections),
+                    "spans_detected_by_label": _count_entity_labels(gliner_entities),
+                    "coverage_summary": f"{len(gliner_entities)} entities found",
+                }
+            )
+        (qa_dir / "gliner_entity_audit_report.json").write_bytes(
+            orjson.dumps(gliner_audit, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
         )
 
         status = StageStatus.PASS
@@ -1165,3 +1299,24 @@ class ProfessorBundleOrchestrator:
             writer = csv.writer(f)
             writer.writerow(["path", "bytes", "classification"])
             writer.writerows(rows)
+
+
+def _count_entity_labels(entities: list[DetectedEntity]) -> dict[str, int]:
+    """Count entities by label for audit reports."""
+    counts: dict[str, int] = {}
+    for e in entities:
+        counts[e.entity_type] = counts.get(e.entity_type, 0) + 1
+    return counts
+
+
+def _read_gate_beta_status(qa_dir: Path) -> str | None:
+    """Read the beta_status from the classroom gate report, if available."""
+    gate_path = qa_dir / "classroom_gate_report.json"
+    if gate_path.exists():
+        try:
+            data: dict[str, Any] = json.loads(gate_path.read_text())
+            result: str | None = data.get("beta_status")
+            return result
+        except Exception:
+            pass
+    return None
