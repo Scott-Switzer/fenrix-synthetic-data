@@ -104,11 +104,25 @@ class TestClassroomGateSeededFailures:
         reg_path = clean_bundle / "qa" / "stage_registry.json"
         reg_data = json.loads(reg_path.read_text())
         reg_data["stages"]["ENTITY_DETECT_GLINER"]["status"] = "PROVIDER_NOT_RUN"
+        # Set build_mode to production for this test
+        reg_data["build_mode"] = "production"
         reg_path.write_text(json.dumps(reg_data))
 
         result = evaluate_classroom_gate(clean_bundle, "2026-06-22", strict=True)
         assert result["decision"] == "FAIL"
-        assert any("provider_not_run_in_strict_mode" in f for f in result["blocking_failures"])
+        assert any("provider_not_run_in_production_mode" in f for f in result["blocking_failures"])
+
+    def test_production_mode_blocks_mock_provider(self, clean_bundle: Path) -> None:
+        """Production mode blocks when a stage uses a mock provider."""
+        reg_path = clean_bundle / "qa" / "stage_registry.json"
+        reg_data = json.loads(reg_path.read_text())
+        reg_data["stages"]["ENTITY_DETECT_GLINER"]["provider_kind"] = "mock"
+        reg_data["build_mode"] = "production"
+        reg_path.write_text(json.dumps(reg_data))
+
+        result = evaluate_classroom_gate(clean_bundle, "2026-06-22", strict=True)
+        assert result["decision"] == "FAIL"
+        assert any("mock_provider_in_production_mode" in f for f in result["blocking_failures"])
 
     def test_non_strict_allows_provider_not_run(self, clean_bundle: Path) -> None:
         """In non-strict mode, PROVIDER_NOT_RUN doesn't block (but professor_ready stays False)."""

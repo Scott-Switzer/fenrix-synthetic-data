@@ -3,7 +3,13 @@
 Evaluates whether a professor bundle meets all blocking conditions for release.
 Blocks on: missing mandatory stages, identity leaks, missing GLiNER/rules audit,
 missing evidence boundary, missing metric reports, missing cross-links,
-missing pedagogy, empty-evidence QA pass, checksum drift, etc.
+missing pedagogy, empty-evidence QA pass, checksum drift, mock providers in
+production mode, etc.
+
+Readiness semantics:
+- Fixture mode: can produce strict_fixture_ready=true, never professor_ready=true.
+- Local-dev mode: can skip providers, never professor_ready=true.
+- Production mode: professor_ready=true only with all real providers passing.
 
 Usage:
     python -m fenrix_synthetic.release.classroom_gate \\
@@ -14,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import zipfile
@@ -23,7 +30,14 @@ from typing import Any
 import click
 import orjson
 
-from ..professor.stages import ProfessorStage, StageRegistry, StageStatus
+from ..professor.stages import (
+    BuildMode,
+    ProfessorStage,
+    ProviderKind,
+    StageRegistry,
+    StageStatus,
+    StageStatusRecord,
+)
 
 
 def evaluate_classroom_gate(
@@ -34,14 +48,14 @@ def evaluate_classroom_gate(
 ) -> dict[str, Any]:
     """Evaluate the classroom release gate.
 
-    Returns a gate report dict with decision, blocking_failures, and warnings.
+    Returns a gate report dict with decision, blocking_failures, warnings,
+    and split readiness fields (professor_ready, strict_fixture_ready, etc.).
     """
     blocking_failures: list[str] = []
     warnings: list[str] = []
 
     # ── Check 1: Stage registry ──────────────────────────────────────
     if stage_registry is None:
-        # Try to load from file
         registry_path = bundle_root / "qa" / "stage_registry.json"
         if registry_path.exists():
             registry_data = json.loads(registry_path.read_text())
@@ -49,6 +63,8 @@ def evaluate_classroom_gate(
         else:
             blocking_failures.append("stage_registry_missing")
             stage_registry = StageRegistry()
+
+    build_mode = stage_registry.build_mode
 
     if not stage_registry.all_stages_present:
         present = set(stage_registry._records.keys())
@@ -64,15 +80,29 @@ def evaluate_classroom_gate(
         if failed:
             blocking_failures.append(f"failed_stages: {failed}")
 
-    if stage_registry.has_provider_not_run:
-        if strict:
-            not_run = [
-                s.value
-                for s in ProfessorStage
-                if (rec := stage_registry.get(s)) is not None
-                and rec.status == StageStatus.PROVIDER_NOT_RUN
-            ]
-            blocking_failures.append(f"provider_not_run_in_strict_mode: {not_run}")
+    # PROVIDER_NOT_RUN is always blocking in production mode
+    if stage_registry.has_provider_not_run and build_mode == BuildMode.PRODUCTION:
+        not_run = [
+            s.value
+            for s in ProfessorStage
+            if (rec := stage_registry.get(s)) is not None
+            and rec.status == StageStatus.PROVIDER_NOT_RUN
+        ]
+        blocking_failures.append(f"provider_not_run_in_production_mode: {not_run}")
+
+    # Mock/fixture/skipped providers are blocking in production mode
+    if build_mode == BuildMode.PRODUCTION and stage_registry.has_mock_providers:
+        mock_stages = [
+            s.value
+            for s in ProfessorStage
+            if (rec := stage_registry.get(s)) is not None
+            and rec.provider_kind in {ProviderKind.MOCK, ProviderKind.FIXTURE, ProviderKind.SKIPPED}
+        ]
+        blocking_failures.append(f"mock_provider_in_production_mode: {mock_stages}")
+
+    # Missing provider provenance is blocking in production mode
+    if build_mode == BuildMode.PRODUCTION and stage_registry.has_missing_provider_provenance:
+        blocking_failures.append("missing_provider_provenance_in_production_mode")
 
     if stage_registry.has_evidence_gaps:
         warnings.append("evidence_gaps_in_some_stages")
@@ -94,8 +124,6 @@ def evaluate_classroom_gate(
         "metrics_schema_report.json",
         "rag_index_report.json",
         "adversarial_qa_report.json",
-        # classroom_gate_report.json is written by this gate itself —
-        # not checked here to avoid chicken-and-egg.
     ]
     for req_file in required_qa_files:
         if not (qa_dir / req_file).exists():
@@ -114,7 +142,6 @@ def evaluate_classroom_gate(
         if not (public_dir / doc).exists():
             blocking_failures.append(f"missing_classroom_doc: {doc}")
 
-    # Check per-company LEARNING_GUIDE.md and crosslinks.json
     company_dirs = (
         list((public_dir / "anonymized").iterdir()) if (public_dir / "anonymized").exists() else []
     )
@@ -136,9 +163,6 @@ def evaluate_classroom_gate(
                 blocking_failures.append("empty_evidence_qa_pass")
 
     # ── Check 6: ZIP excludes private paths ──────────────────────────
-    # The ZIP is created AFTER the gate evaluates (orchestrator creates
-    # it only after gate approval). If the ZIP exists, validate its contents.
-    # If it doesn't exist yet, that's not a blocking failure.
     zip_path = bundle_root / "exports" / "anonymized_bundle.zip"
     if zip_path.exists():
         zip_issues = _validate_zip_contents(zip_path)
@@ -148,20 +172,30 @@ def evaluate_classroom_gate(
     if not (bundle_root / "checksums.sha256").exists():
         blocking_failures.append("missing_checksums")
 
-    # ── Determine decision ───────────────────────────────────────────
+    # ── Determine decision and readiness fields ──────────────────────
     decision = "FAIL" if blocking_failures else "PASS"
     if not blocking_failures and warnings:
         decision = "REVIEW_REQUIRED"
 
+    # Split readiness fields from the registry
     professor_ready = decision == "PASS" and stage_registry.professor_ready
-    beta_status = "PROFESSOR_READY" if professor_ready else "NOT_PROFESSOR_READY"
+    release_safe = decision == "PASS" and stage_registry.release_safe
+    strict_fixture_ready = decision == "PASS" and stage_registry.strict_fixture_ready
+    fixture_ready = decision == "PASS" and stage_registry.fixture_ready
+    beta_status = stage_registry.beta_status if decision == "PASS" else "NOT_PROFESSOR_READY"
+    non_production_conditions = stage_registry.non_production_conditions
 
     return {
         "decision": decision,
+        "build_mode": build_mode.value,
         "professor_ready": professor_ready,
+        "release_safe": release_safe,
+        "fixture_ready": fixture_ready,
+        "strict_fixture_ready": strict_fixture_ready,
         "beta_status": beta_status,
         "blocking_failures": blocking_failures,
         "warnings": warnings,
+        "non_production_conditions": non_production_conditions,
         "strict_mode": strict,
         "release_date": release_date,
         "gate_hash": _compute_gate_hash(decision, blocking_failures, warnings),
@@ -170,7 +204,14 @@ def evaluate_classroom_gate(
 
 def _reconstruct_registry(data: dict[str, Any]) -> StageRegistry:
     """Reconstruct a StageRegistry from serialized data."""
-    registry = StageRegistry()
+    # Reconstruct build mode
+    build_mode_str = data.get("build_mode", "production")
+    try:
+        build_mode = BuildMode(build_mode_str)
+    except ValueError:
+        build_mode = BuildMode.PRODUCTION
+
+    registry = StageRegistry(build_mode=build_mode)
     for stage_name, stage_data in data.get("stages", {}).items():
         try:
             stage = ProfessorStage(stage_name)
@@ -181,7 +222,13 @@ def _reconstruct_registry(data: dict[str, Any]) -> StageRegistry:
             status = StageStatus(status_str)
         except ValueError:
             status = StageStatus.FAIL
-        from ..professor.stages import StageStatusRecord
+
+        # Reconstruct provider kind
+        provider_kind_str = stage_data.get("provider_kind", "real")
+        try:
+            provider_kind = ProviderKind(provider_kind_str)
+        except ValueError:
+            provider_kind = ProviderKind.REAL
 
         registry.register(
             StageStatusRecord(
@@ -190,6 +237,11 @@ def _reconstruct_registry(data: dict[str, Any]) -> StageRegistry:
                 evidence_count=stage_data.get("evidence_count", 0),
                 warnings=stage_data.get("warnings", []),
                 failures=stage_data.get("failures", []),
+                provider_name=stage_data.get("provider_name", ""),
+                provider_kind=provider_kind,
+                provider_version=stage_data.get("provider_version", ""),
+                provider_config_hash=stage_data.get("provider_config_hash", ""),
+                is_production_provider=stage_data.get("is_production_provider", True),
             )
         )
     return registry
@@ -237,8 +289,6 @@ def _validate_zip_contents(zip_path: Path) -> list[str]:
 
 def _compute_gate_hash(decision: str, failures: list[str], warnings: list[str]) -> str:
     """Compute a deterministic hash of the gate state."""
-    import hashlib
-
     content = json.dumps(
         {"decision": decision, "failures": sorted(failures), "warnings": sorted(warnings)},
         sort_keys=True,
@@ -267,8 +317,13 @@ def main(bundle_root: Path, release_date: str, output: Path, strict: bool) -> No
     output.write_bytes(orjson.dumps(result, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2))
 
     click.echo(f"Decision: {result['decision']}")
+    click.echo(f"Build mode: {result['build_mode']}")
     click.echo(f"Professor ready: {result['professor_ready']}")
+    click.echo(f"Release safe: {result['release_safe']}")
+    click.echo(f"Strict fixture ready: {result['strict_fixture_ready']}")
     click.echo(f"Beta status: {result['beta_status']}")
+    if result["non_production_conditions"]:
+        click.echo(f"Non-production conditions: {', '.join(result['non_production_conditions'])}")
     if result["blocking_failures"]:
         click.echo(f"Blocking failures ({len(result['blocking_failures'])}):")
         for f in result["blocking_failures"]:

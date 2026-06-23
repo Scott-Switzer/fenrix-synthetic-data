@@ -95,8 +95,8 @@ runs/professor_bundle_fixture/
 
 | Mode | NVIDIA | CI behavior | Bundle status |
 |------|--------|-------------|---------------|
-| `--strict` | Real API key required | Cannot run in default CI | `professor_ready=true` only if all stages PASS |
-| `--fast-fixtures` | Mock provider | Runs in CI | `professor_ready=true` (mock providers pass) |
+| `--strict` | Real API key required | Cannot run in default CI | `professor_ready=true` only if all stages PASS with real providers |
+| `--fast-fixtures` | Mock provider | Runs in CI | `strict_fixture_ready=true` (mock providers pass), `professor_ready=false` |
 | `--allow-provider-skip-for-local-dev` | Absent → PROVIDER_NOT_RUN | Runs in CI | `professor_ready=false`, `beta_status=NOT_PROFESSOR_READY` |
 
 ### Tests Added
@@ -136,6 +136,7 @@ runs/professor_bundle_fixture/
 
 ### Verdict
 
-`STRICT_FIXTURE_PIPELINE_READY` — the fixture build passes all 18 stages,
+`STRICT_FIXTURE_PIPELINE_READY_NON_PRODUCTION` — the fixture build passes all 19 stages,
 produces a real ZIP with real artifacts, and the gate returns PASS with
-`professor_ready=true`.
+`strict_fixture_ready=true`, `professor_ready=false`, `release_safe=false`,
+`beta_status=STRICT_FIXTURE_READY`.

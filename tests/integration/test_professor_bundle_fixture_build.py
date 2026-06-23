@@ -33,7 +33,10 @@ def bundle_output(tmp_path: Path) -> Path:
     )
     orchestrator = ProfessorBundleOrchestrator(config)
     result = orchestrator.run()
-    assert result["professor_ready"] is True
+    # Fixture mode should NOT be professor_ready but SHOULD be strict_fixture_ready
+    assert result["professor_ready"] is False
+    assert result["strict_fixture_ready"] is True
+    assert result["build_mode"] == "fixture"
     return config.output_root
 
 
@@ -113,7 +116,10 @@ class TestProfessorBundleFixtureBuild:
         gate_path = bundle_output / "qa" / "classroom_gate_report.json"
         gate = json.loads(gate_path.read_text())
         assert gate["decision"] == "PASS"
-        assert gate["professor_ready"] is True
+        # Fixture mode: strict_fixture_ready=True, professor_ready=False
+        assert gate["strict_fixture_ready"] is True
+        assert gate["professor_ready"] is False
+        assert gate["build_mode"] == "fixture"
         assert gate["blocking_failures"] == []
 
     def test_stage_registry_has_all_stages(self, bundle_output: Path) -> None:
@@ -121,7 +127,10 @@ class TestProfessorBundleFixtureBuild:
         reg = json.loads(reg_path.read_text())
         assert reg["all_stages_present"] is True
         assert reg["all_stages_pass"] is True
-        assert reg["professor_ready"] is True
+        assert reg["strict_fixture_ready"] is True
+        assert reg["professor_ready"] is False
+        assert reg["build_mode"] == "fixture"
+        assert reg["beta_status"] == "STRICT_FIXTURE_READY"
 
     def test_checksums_file_exists(self, bundle_output: Path) -> None:
         assert (bundle_output / "checksums.sha256").exists()
@@ -132,8 +141,11 @@ class TestProfessorBundleFixtureBuild:
     def test_run_summary_exists(self, bundle_output: Path) -> None:
         summary_path = bundle_output / "run_summary.json"
         summary = json.loads(summary_path.read_text())
-        assert summary["professor_ready"] is True
-        assert summary["beta_status"] == "PROFESSOR_READY"
+        assert summary["strict_fixture_ready"] is True
+        assert summary["professor_ready"] is False
+        assert summary["beta_status"] == "STRICT_FIXTURE_READY"
+        assert summary["build_mode"] == "fixture"
+        assert summary["strict_fixture_ready"] is True
 
     def test_private_evidence_dir_exists(self, bundle_output: Path) -> None:
         evidence_path = bundle_output / "private" / "evidence" / "evidence_graph.json"
@@ -181,5 +193,7 @@ class TestProfessorBundleFixtureBuild:
             ],
         )
         assert result.exit_code == 0, result.output
-        assert "Professor ready: True" in result.output
+        assert "Strict fixture ready: True" in result.output
+        assert "Professor ready: False" in result.output
+        assert "Release safe: False" in result.output
         assert (tmp_path / "cli_bundle" / "exports" / "anonymized_bundle.zip").exists()

@@ -84,6 +84,7 @@ ALLOWED_PATHS: frozenset[str] = frozenset(
         "tests/fixtures/",
         "configs/examples/",
         "pyproject.toml",
+        "docs/professor_bundle_pr1.md",
     }
 )
 

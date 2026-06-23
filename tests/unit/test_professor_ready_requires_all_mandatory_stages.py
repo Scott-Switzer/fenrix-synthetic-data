@@ -5,7 +5,9 @@ from __future__ import annotations
 from fenrix_synthetic.professor.stages import (
     ALL_MANDATORY_STAGES,
     STAGES_REQUIRING_EVIDENCE,
+    BuildMode,
     ProfessorStage,
+    ProviderKind,
     StageRegistry,
     StageStatus,
     StageStatusRecord,
@@ -19,7 +21,7 @@ def _make_registry(
     zero_evidence: set[ProfessorStage] | None = None,
 ) -> StageRegistry:
     """Build a registry with configurable stage states."""
-    reg = StageRegistry()
+    reg = StageRegistry(build_mode=BuildMode.PRODUCTION)
     skip = skip or set()
     fail = fail or set()
     not_run = not_run or set()
@@ -41,7 +43,17 @@ def _make_registry(
             else (0 if stage not in STAGES_REQUIRING_EVIDENCE else 10)
         )
 
-        reg.register(StageStatusRecord(stage=stage, status=status, evidence_count=evidence))
+        reg.register(
+            StageStatusRecord(
+                stage=stage,
+                status=status,
+                evidence_count=evidence,
+                provider_name="TestProvider",
+                provider_kind=ProviderKind.REAL,
+                provider_version="1.0",
+                provider_config_hash="abc123",
+            )
+        )
     return reg
 
 

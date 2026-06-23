@@ -5,7 +5,9 @@ from __future__ import annotations
 from fenrix_synthetic.professor.stages import (
     ALL_MANDATORY_STAGES,
     STAGES_REQUIRING_EVIDENCE,
+    BuildMode,
     ProfessorStage,
+    ProviderKind,
     StageRegistry,
     StageStatus,
     StageStatusRecord,
@@ -14,13 +16,17 @@ from fenrix_synthetic.professor.stages import (
 
 def _all_pass_registry() -> StageRegistry:
     """Build a registry where all stages PASS with evidence."""
-    reg = StageRegistry()
+    reg = StageRegistry(build_mode=BuildMode.PRODUCTION)
     for stage in ALL_MANDATORY_STAGES:
         reg.register(
             StageStatusRecord(
                 stage=stage,
                 status=StageStatus.PASS,
                 evidence_count=10 if stage in STAGES_REQUIRING_EVIDENCE else 0,
+                provider_name="TestProvider",
+                provider_kind=ProviderKind.REAL,
+                provider_version="1.0",
+                provider_config_hash="abc123",
             )
         )
     return reg

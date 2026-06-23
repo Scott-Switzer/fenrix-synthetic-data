@@ -1,12 +1,16 @@
 """Professor-bundle pipeline stage registry.
 
-Defines the 18 mandatory stages, their status records, and the registry
+Defines the 19 mandatory stages, their status records, and the registry
 that validates all stages ran before a bundle can be marked professor-ready.
 
 Hard contract:
-- In strict mode, PROVIDER_NOT_RUN is a blocking failure.
+- In production mode, PROVIDER_NOT_RUN is a blocking failure.
+- In production mode, any mock/fixture/skipped provider is a blocking failure.
 - professor_ready=true is impossible if any mandatory stage is missing,
-  FAIL, PROVIDER_NOT_RUN, or has evidence_count=0 where evidence is required.
+  FAIL, PROVIDER_NOT_RUN, has evidence_count=0 where evidence is required,
+  or uses a non-production provider.
+- Fixture mode can produce strict_fixture_ready=true but never professor_ready=true.
+- Local-dev mode can skip providers but cannot claim professor readiness.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from pydantic import BaseModel, Field
 
 
 class ProfessorStage(StrEnum):
-    """The 18 mandatory professor-bundle pipeline stages."""
+    """The 19 mandatory professor-bundle pipeline stages."""
 
     SOURCE_INGESTION = "SOURCE_INGESTION"
     SEC_PARSE = "SEC_PARSE"
@@ -56,6 +60,29 @@ class StageStatus(StrEnum):
     RUNNING = "RUNNING"
 
 
+class BuildMode(StrEnum):
+    """Build mode determines what providers are allowed and what readiness
+    statuses are achievable.
+
+    - fixture: mock/fixture providers allowed; professor_ready always False.
+    - local_dev: providers may be skipped; professor_ready always False.
+    - production: only real providers; professor_ready achievable.
+    """
+
+    FIXTURE = "fixture"
+    LOCAL_DEV = "local_dev"
+    PRODUCTION = "production"
+
+
+class ProviderKind(StrEnum):
+    """Kind of provider used by a stage."""
+
+    REAL = "real"
+    MOCK = "mock"
+    FIXTURE = "fixture"
+    SKIPPED = "skipped"
+
+
 # Stages that require evidence_count > 0 for professor_ready
 STAGES_REQUIRING_EVIDENCE: frozenset[ProfessorStage] = frozenset(
     {
@@ -80,9 +107,22 @@ STAGES_REQUIRING_EVIDENCE: frozenset[ProfessorStage] = frozenset(
 
 ALL_MANDATORY_STAGES: tuple[ProfessorStage, ...] = tuple(ProfessorStage)
 
+# Provider kinds that are NOT production-grade
+NON_PRODUCTION_PROVIDER_KINDS: frozenset[ProviderKind] = frozenset(
+    {
+        ProviderKind.MOCK,
+        ProviderKind.FIXTURE,
+        ProviderKind.SKIPPED,
+    }
+)
+
 
 class StageStatusRecord(BaseModel):
-    """Status record for a single pipeline stage execution."""
+    """Status record for a single pipeline stage execution.
+
+    Includes provider provenance so the gate can distinguish real
+    production providers from mock/fixture/skipped providers.
+    """
 
     stage: ProfessorStage
     status: StageStatus
@@ -94,6 +134,13 @@ class StageStatusRecord(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
 
+    # Provider provenance
+    provider_name: str = ""
+    provider_kind: ProviderKind = ProviderKind.REAL
+    provider_version: str = ""
+    provider_config_hash: str = ""
+    is_production_provider: bool = True
+
     model_config = {"use_enum_values": True}
 
 
@@ -102,10 +149,23 @@ class StageRegistry:
 
     Validates that all mandatory stages ran and produced evidence before
     the bundle can be marked professor-ready.
+
+    Readiness semantics:
+    - professor_ready: True only in production mode with all real providers
+      passing with evidence.
+    - strict_fixture_ready: True in fixture mode when all stages pass (with
+      mock providers allowed).
+    - fixture_ready: True in fixture mode when the bundle is structurally
+      complete (may have skipped providers).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, build_mode: BuildMode = BuildMode.PRODUCTION) -> None:
         self._records: dict[ProfessorStage, StageStatusRecord] = {}
+        self._build_mode = build_mode
+
+    @property
+    def build_mode(self) -> BuildMode:
+        return self._build_mode
 
     def register(self, record: StageStatusRecord) -> None:
         """Register or update a stage record."""
@@ -133,8 +193,7 @@ class StageRegistry:
     def has_provider_not_run(self) -> bool:
         """Check if any stage has PROVIDER_NOT_RUN status."""
         return any(
-            self._records.get(s) is not None
-            and self._records[s].status == StageStatus.PROVIDER_NOT_RUN
+            (rec := self._records.get(s)) is not None and rec.status == StageStatus.PROVIDER_NOT_RUN
             for s in ALL_MANDATORY_STAGES
         )
 
@@ -148,42 +207,115 @@ class StageRegistry:
         return False
 
     @property
+    def has_mock_providers(self) -> bool:
+        """Check if any stage used a mock or fixture provider."""
+        return any(
+            (rec := self._records.get(s)) is not None
+            and rec.provider_kind in NON_PRODUCTION_PROVIDER_KINDS
+            for s in ALL_MANDATORY_STAGES
+        )
+
+    @property
+    def has_missing_provider_provenance(self) -> bool:
+        """Check if any stage is missing provider provenance fields."""
+        return any(
+            (rec := self._records.get(s)) is not None
+            and (not rec.provider_name or not rec.provider_kind)
+            for s in ALL_MANDATORY_STAGES
+        )
+
+    @property
+    def non_production_conditions(self) -> list[str]:
+        """List of non-production conditions present in this registry."""
+        conditions: list[str] = []
+        if self._build_mode == BuildMode.FIXTURE:
+            conditions.append("build_mode_is_fixture")
+        if self._build_mode == BuildMode.LOCAL_DEV:
+            conditions.append("build_mode_is_local_dev")
+        if self.has_mock_providers:
+            conditions.append("mock_provider_used")
+        if self.has_provider_not_run:
+            conditions.append("provider_not_run")
+        if self.has_missing_provider_provenance:
+            conditions.append("missing_provider_provenance")
+        return conditions
+
+    @property
     def professor_ready(self) -> bool:
-        """Determine if the bundle is professor-ready.
+        """Determine if the bundle is professor-ready (production mode only).
 
         professor_ready is true ONLY when:
-        1. All mandatory stages are present
-        2. All mandatory stages have PASS status
-        3. No stage has PROVIDER_NOT_RUN
-        4. All evidence-requiring stages have evidence_count > 0
+        1. Build mode is production
+        2. All mandatory stages are present
+        3. All mandatory stages have PASS status
+        4. No stage has PROVIDER_NOT_RUN
+        5. All evidence-requiring stages have evidence_count > 0
+        6. No mock/fixture/skipped providers used
+        7. No missing provider provenance
         """
         return (
-            self.all_stages_present
+            self._build_mode == BuildMode.PRODUCTION
+            and self.all_stages_present
             and self.all_stages_pass
             and not self.has_provider_not_run
+            and not self.has_evidence_gaps
+            and not self.has_mock_providers
+            and not self.has_missing_provider_provenance
+        )
+
+    @property
+    def release_safe(self) -> bool:
+        """Release safe mirrors professor_ready."""
+        return self.professor_ready
+
+    @property
+    def strict_fixture_ready(self) -> bool:
+        """True in fixture mode when all stages pass with evidence.
+
+        Mock providers are allowed; the bundle proves the architecture
+        works but is NOT production-ready.
+        """
+        return (
+            self._build_mode == BuildMode.FIXTURE
+            and self.all_stages_present
+            and self.all_stages_pass
             and not self.has_evidence_gaps
         )
 
     @property
+    def fixture_ready(self) -> bool:
+        """True in fixture mode when the bundle is structurally complete."""
+        return self._build_mode == BuildMode.FIXTURE and self.all_stages_present
+
+    @property
     def beta_status(self) -> str:
-        """Determine beta status string."""
+        """Determine beta status string based on build mode and readiness."""
         if self.professor_ready:
             return "PROFESSOR_READY"
-        if self.has_provider_not_run:
-            return "NOT_PROFESSOR_READY"
-        if not self.all_stages_pass:
-            return "NOT_PROFESSOR_READY"
+        if self.strict_fixture_ready:
+            return "STRICT_FIXTURE_READY"
+        if self.fixture_ready:
+            return "FIXTURE_READY"
+        if self._build_mode == BuildMode.LOCAL_DEV:
+            return "LOCAL_DEV_NOT_READY"
         return "NOT_PROFESSOR_READY"
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize registry to dict for JSON output."""
         return {
+            "build_mode": self._build_mode.value,
             "professor_ready": self.professor_ready,
+            "release_safe": self.release_safe,
+            "fixture_ready": self.fixture_ready,
+            "strict_fixture_ready": self.strict_fixture_ready,
             "beta_status": self.beta_status,
             "all_stages_present": self.all_stages_present,
             "all_stages_pass": self.all_stages_pass,
             "has_provider_not_run": self.has_provider_not_run,
             "has_evidence_gaps": self.has_evidence_gaps,
+            "has_mock_providers": self.has_mock_providers,
+            "has_missing_provider_provenance": self.has_missing_provider_provenance,
+            "non_production_conditions": self.non_production_conditions,
             "stages": {rec.stage: rec.model_dump() for rec in self._records.values()},
         }
 

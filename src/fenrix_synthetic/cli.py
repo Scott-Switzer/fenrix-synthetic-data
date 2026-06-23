@@ -2786,12 +2786,20 @@ def build_professor_bundle(
     orchestrator = ProfessorBundleOrchestrator(config)
     result = orchestrator.run()
 
-    click.echo(f"\nProfessor ready: {result['professor_ready']}")
+    click.echo(f"\nBuild mode: {result.get('build_mode', 'production')}")
+    click.echo(f"Professor ready: {result['professor_ready']}")
+    click.echo(f"Release safe: {result.get('release_safe', False)}")
+    click.echo(f"Strict fixture ready: {result.get('strict_fixture_ready', False)}")
     click.echo(f"Beta status: {result['beta_status']}")
     click.echo(f"ZIP: {result['zip_path']}")
 
+    # Exit code logic
     if config.strict and not result["professor_ready"]:
         click.echo("Strict mode: bundle is NOT professor-ready", err=True)
+        sys.exit(1)
+    # For fixture mode, exit with 0 if strict_fixture_ready is True
+    if config.fast_fixtures and not result.get("strict_fixture_ready", False):
+        click.echo("Fixture mode: bundle is NOT strict fixture ready", err=True)
         sys.exit(1)
 
 

@@ -43,7 +43,14 @@ from .sec_providers import (
     validate_10k_sections,
     validate_filing_date,
 )
-from .stages import ProfessorStage, StageRegistry, StageStatus, StageStatusRecord
+from .stages import (
+    BuildMode,
+    ProfessorStage,
+    ProviderKind,
+    StageRegistry,
+    StageStatus,
+    StageStatusRecord,
+)
 
 
 class ProfessorBundleConfig:
@@ -65,6 +72,20 @@ class ProfessorBundleConfig:
         self.allow_provider_skip = allow_provider_skip
         self.release_date = release_date
 
+    @property
+    def build_mode(self) -> BuildMode:
+        """Determine build mode from flags.
+
+        - --fast-fixtures → fixture
+        - --allow-provider-skip-for-local-dev → local_dev
+        - --strict (no fixture/local-dev flags) → production
+        """
+        if self.fast_fixtures:
+            return BuildMode.FIXTURE
+        if self.allow_provider_skip:
+            return BuildMode.LOCAL_DEV
+        return BuildMode.PRODUCTION
+
     @classmethod
     def from_yaml(cls, path: Path) -> ProfessorBundleConfig:
         """Load config from YAML file."""
@@ -83,11 +104,11 @@ class ProfessorBundleConfig:
 
 
 class ProfessorBundleOrchestrator:
-    """Orchestrates the 18-stage professor-bundle pipeline."""
+    """Orchestrates the 19-stage professor-bundle pipeline."""
 
     def __init__(self, config: ProfessorBundleConfig) -> None:
         self.config = config
-        self.registry = StageRegistry()
+        self.registry = StageRegistry(build_mode=config.build_mode)
         self.sec_provider = FixtureSecProvider()
         self.gliner_provider = MockGLiNERProvider() if config.fast_fixtures else None
         self.nvidia_reviewer = MockNVIDIAReviewer() if config.fast_fixtures else None
@@ -155,7 +176,11 @@ class ProfessorBundleOrchestrator:
 
         return {
             "professor_ready": self.registry.professor_ready,
+            "release_safe": self.registry.release_safe,
+            "strict_fixture_ready": self.registry.strict_fixture_ready,
+            "fixture_ready": self.registry.fixture_ready,
             "beta_status": self.registry.beta_status,
+            "build_mode": self.config.build_mode.value,
             "output_root": str(self.config.output_root),
             "zip_path": str(exports_dir / "anonymized_bundle.zip"),
         }
@@ -170,8 +195,29 @@ class ProfessorBundleOrchestrator:
         outputs: list[str] | None = None,
         warnings: list[str] | None = None,
         failures: list[str] | None = None,
+        provider_name: str = "",
+        provider_kind: ProviderKind | None = None,
+        provider_version: str = "",
     ) -> None:
-        """Register a stage result."""
+        """Register a stage result with provider provenance.
+
+        If provider_kind is not specified, it defaults based on build mode:
+        - fixture mode → ProviderKind.FIXTURE
+        - local_dev mode → ProviderKind.SKIPPED (if PROVIDER_NOT_RUN) or ProviderKind.REAL
+        - production mode → ProviderKind.REAL
+        """
+        if provider_kind is None:
+            if status == StageStatus.PROVIDER_NOT_RUN:
+                provider_kind = ProviderKind.SKIPPED
+            elif self.config.build_mode == BuildMode.FIXTURE:
+                provider_kind = ProviderKind.FIXTURE
+            elif self.config.build_mode == BuildMode.LOCAL_DEV:
+                provider_kind = ProviderKind.REAL
+            else:
+                provider_kind = ProviderKind.REAL
+
+        is_production = provider_kind == ProviderKind.REAL
+
         self.registry.register(
             StageStatusRecord(
                 stage=stage,
@@ -180,6 +226,10 @@ class ProfessorBundleOrchestrator:
                 outputs=outputs or [],
                 warnings=warnings or [],
                 failures=failures or [],
+                provider_name=provider_name,
+                provider_kind=provider_kind,
+                provider_version=provider_version,
+                is_production_provider=is_production,
             )
         )
 
@@ -192,6 +242,10 @@ class ProfessorBundleOrchestrator:
             StageStatus.PASS,
             evidence_count=len(filings),
             outputs=[f.filing_id for f in filings],
+            provider_name=self.sec_provider.__class__.__name__,
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_sec_parse(self) -> None:
@@ -225,6 +279,10 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.SEC_PARSE,
             StageStatus.PASS,
             evidence_count=len(self._sections) + len(self._tables),
+            provider_name=self.sec_provider.__class__.__name__,
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_section_extract(self) -> None:
@@ -234,6 +292,10 @@ class ProfessorBundleOrchestrator:
             StageStatus.PASS,
             evidence_count=len(self._sections),
             outputs=[s.section_id for s in self._sections],
+            provider_name=self.sec_provider.__class__.__name__,
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_entity_detect_gliner(self) -> None:
@@ -269,6 +331,10 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ENTITY_DETECT_GLINER,
             StageStatus.PASS,
             evidence_count=len(entities),
+            provider_name=self.gliner_provider.__class__.__name__,
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_entity_detect_rules(self) -> None:
@@ -308,6 +374,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ENTITY_DETECT_RULES,
             StageStatus.PASS,
             evidence_count=len(rules_entities),
+            provider_name="RegexRulesProvider",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_entity_resolve(self) -> None:
@@ -324,6 +392,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ENTITY_RESOLVE,
             StageStatus.PASS,
             evidence_count=len(resolved),
+            provider_name="DeduplicationResolver",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_deidentify(self) -> None:
@@ -401,6 +471,8 @@ class ProfessorBundleOrchestrator:
             StageStatus.PASS,
             evidence_count=len(replacements),
             outputs=[r.replacement_id for r in replacements],
+            provider_name="DeterministicMasker",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_private_evidence_build(self, private_dir: Path) -> None:
@@ -435,6 +507,8 @@ class ProfessorBundleOrchestrator:
             StageStatus.PASS,
             evidence_count=len(self._filings) + len(self._sections) + len(self._entities),
             outputs=[str(evidence_dir / "evidence_graph.json")],
+            provider_name="EvidenceGraphBuilder",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_synthetic_profile_build(self) -> None:
@@ -456,6 +530,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.SYNTHETIC_PROFILE_BUILD,
             StageStatus.PASS,
             evidence_count=1,
+            provider_name="SyntheticProfileBuilder",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_filing_reconstruct(self, public_dir: Path) -> None:
@@ -485,6 +561,8 @@ class ProfessorBundleOrchestrator:
             StageStatus.PASS,
             evidence_count=len(self._sanitized_sections) + len(self._sanitized_tables),
             outputs=[str(sec_dir)],
+            provider_name="FilingReconstructor",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_metric_synthesis(self, public_dir: Path) -> None:
@@ -521,6 +599,10 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.METRIC_SYNTHESIS,
             StageStatus.PASS,
             evidence_count=total_rows,
+            provider_name=self.metrics_synthesizer.__class__.__name__,
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_metric_evaluation(self, qa_dir: Path) -> None:
@@ -550,6 +632,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.METRIC_EVALUATION,
             StageStatus.PASS,
             evidence_count=3,  # three reports
+            provider_name="MetricsEvaluator",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_news_reconstruct(self, public_dir: Path) -> None:
@@ -576,6 +660,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.NEWS_RECONSTRUCT,
             StageStatus.PASS,
             evidence_count=len(fixture_news),
+            provider_name="NewsSurrogateGenerator",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_crosslink_build(self, public_dir: Path) -> None:
@@ -637,6 +723,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.CROSSLINK_BUILD,
             StageStatus.PASS,
             evidence_count=len(links),
+            provider_name="CrosslinkBuilder",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_pedagogy_build(self, public_dir: Path) -> None:
@@ -782,6 +870,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.PEDAGOGY_BUILD,
             StageStatus.PASS,
             evidence_count=len(exercises) + 6,  # exercises + 6 docs
+            provider_name="PedagogyBuilder",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_rag_index_build(self, qa_dir: Path) -> None:
@@ -818,6 +908,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.RAG_INDEX_BUILD,
             StageStatus.PASS,
             evidence_count=len(index_entries),
+            provider_name="RAGIndexBuilder",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_adversarial_qa(self, qa_dir: Path) -> None:
@@ -898,6 +990,10 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ADVERSARIAL_QA,
             status,
             evidence_count=len(qa_report),
+            provider_name="AdversarialQAOrchestrator",
+            provider_kind=ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL,
         )
 
     def _run_stage_release_gate(self, qa_dir: Path) -> None:
@@ -914,6 +1010,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.RELEASE_GATE,
             StageStatus.PASS,
             evidence_count=1,
+            provider_name="ClassroomGateEvaluator",
+            provider_kind=ProviderKind.REAL,
         )
 
         # Register ZIP_EXPORT as PASS (it will run next, packaging approved artifacts)
@@ -921,6 +1019,8 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.ZIP_EXPORT,
             StageStatus.PASS,
             evidence_count=1,
+            provider_name="ZipExporter",
+            provider_kind=ProviderKind.REAL,
         )
 
         # Save registry with all 19 stages
@@ -982,6 +1082,16 @@ class ProfessorBundleOrchestrator:
                 if filepath.exists():
                     zf.write(filepath, top_file)
 
+            # For fixture builds, add a marker file to the ZIP
+            if self.config.build_mode == BuildMode.FIXTURE:
+                fixture_marker = (
+                    "THIS IS A FIXTURE BUILD / NOT PROFESSOR READY\n\n"
+                    "This bundle was built with --fast-fixtures using mock providers.\n"
+                    "It demonstrates the pipeline architecture but is NOT production-ready.\n"
+                    "See run_summary.json for build_mode=fixture and strict_fixture_ready=true.\n"
+                )
+                zf.writestr("FIXTURE_BUILD_NOT_PROFESSOR_READY.txt", fixture_marker)
+
         # Verify ZIP excludes private paths
         with zipfile.ZipFile(zip_path, "r") as zf:
             for name in zf.namelist():
@@ -1008,8 +1118,13 @@ class ProfessorBundleOrchestrator:
             "company_id": self.config.company_id,
             "strict": self.config.strict,
             "fast_fixtures": self.config.fast_fixtures,
+            "build_mode": self.config.build_mode.value,
             "professor_ready": self.registry.professor_ready,
+            "release_safe": self.registry.release_safe,
+            "strict_fixture_ready": self.registry.strict_fixture_ready,
+            "fixture_ready": self.registry.fixture_ready,
             "beta_status": self.registry.beta_status,
+            "non_production_conditions": self.registry.non_production_conditions,
             "stage_count": len(self.registry._records),
             "all_stages_pass": self.registry.all_stages_pass,
         }
