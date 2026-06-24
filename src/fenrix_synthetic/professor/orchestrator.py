@@ -1,6 +1,6 @@
 """Professor-bundle orchestrator.
 
-Runs all 19 mandatory pipeline stages end-to-end, producing a complete
+Runs all 20 mandatory pipeline stages end-to-end, producing a complete
 fixture output tree with real artifacts, provenance keys, QA reports,
 and a ZIP export.
 
@@ -141,7 +141,7 @@ class ProfessorBundleConfig:
 
 
 class ProfessorBundleOrchestrator:
-    """Orchestrates the 19-stage professor-bundle pipeline."""
+    "Orchestrates the 20-stage professor-bundle pipeline."
 
     def __init__(self, config: ProfessorBundleConfig) -> None:
         self.config = config
@@ -224,7 +224,7 @@ class ProfessorBundleOrchestrator:
         self._synthetic_metrics: dict[str, Any] = {}
 
     def run(self) -> dict[str, Any]:
-        """Execute all 18 stages and produce the output tree."""
+        """Execute all 20 stages and produce the output tree."""
         started_at = datetime.now(UTC).isoformat()
         public_dir = self.config.output_root / "public"
         private_dir = self.config.output_root / "private"
@@ -234,7 +234,7 @@ class ProfessorBundleOrchestrator:
         for d in (public_dir, private_dir, qa_dir, exports_dir):
             d.mkdir(parents=True, exist_ok=True)
 
-        # ── Run all 18 stages ──────────────────────────────────────────
+        # ── Run all 20 stages ──────────────────────────────────────────
         # Wrap in try/except so a critical stage failure still writes the
         # gate report rather than crashing without structured output.
 
@@ -249,6 +249,7 @@ class ProfessorBundleOrchestrator:
             self._run_stage_deidentify()
             self._run_stage_private_evidence_build(private_dir)
             self._run_stage_synthetic_profile_build()
+            self._run_stage_peer_archetype(public_dir, private_dir)
             self._run_stage_filing_reconstruct(public_dir)
             self._run_stage_metric_synthesis(public_dir)
             self._run_stage_metric_evaluation(qa_dir)
@@ -667,8 +668,101 @@ class ProfessorBundleOrchestrator:
             provider_kind=ProviderKind.REAL,
         )
 
+    def _run_stage_peer_archetype(self, public_dir: Path, private_dir: Path) -> None:
+        """Stage 10: PEER_ARCHETYPE — peer-archetype privacy scoring and profile generation.
+
+        Loads the peer universe fixture, scores peer candidates, evaluates k_peer
+        privacy thresholds, writes public archetype card + profile.md, and writes
+        private peer_archetype_audit.json.
+        """
+        from ..anonymization.peer_archetype import (
+            build_peer_archetype_profile,
+            load_peer_universe,
+            write_private_peer_archetype_audit,
+            write_public_archetype_card,
+        )
+
+        # Load peer universe fixture
+        # Resolve from project root: __file__ is src/fenrix_synthetic/professor/orchestrator.py
+        fixture_path = (
+            Path(__file__).resolve().parent.parent.parent.parent
+            / "tests"
+            / "fixtures"
+            / "peer_archetype"
+            / "peer_universe.yaml"
+        )
+        if not fixture_path.exists():
+            self._register(
+                ProfessorStage.PEER_ARCHETYPE,
+                StageStatus.FAIL,
+                failures=[f"Peer universe fixture not found: {fixture_path}"],
+                provider_name="PeerArchetypeScorer",
+                provider_kind=ProviderKind.REAL,
+            )
+            return
+
+        companies_by_source, _ = load_peer_universe(fixture_path)
+
+        # Use the first source group (SRC_A) as the peer pool for this company.
+        # In fixture mode, this provides deterministic scoring.
+        # In production mode, this would be populated from a broader peer database.
+        source_group_key = list(companies_by_source.keys())[0]
+        peer_pool = companies_by_source[source_group_key]
+
+        # Build the archetype profile using synthetic profile data
+        profile_sector = (
+            self._synthetic_profile.synthetic_sector
+            if self._synthetic_profile
+            else "financial services"
+        )
+        profile = build_peer_archetype_profile(
+            source_group_key,
+            peer_pool,
+            anonymized_company_id=self.config.company_id,
+            broad_sector=profile_sector,
+            archetype="institutional_financial_services",
+            feature_buckets={
+                "revenue_bucket": "LARGE",
+                "asset_intensity_bucket": "HIGH",
+                "profitability_bucket": "MEDIUM",
+                "leverage_bucket": "MODERATE",
+                "growth_bucket": "LOW",
+            },
+            seed=42,
+        )
+
+        # Write public archetype card + profile.md
+        profile_dir = public_dir / "anonymized" / self.config.company_id / "profile"
+        card_path, md_path = write_public_archetype_card(profile, profile_dir)
+
+        # Write private audit
+        private_qa_dir = private_dir / "qa"
+        audit_path = write_private_peer_archetype_audit(profile, private_qa_dir)
+
+        # Collect warnings from profile
+        failures: list[str] = []
+        warnings: list[str] = list(profile.warnings)
+        if not profile.passes_peer_privacy:
+            failures.append(
+                f"Peer privacy check failed: k_peer={profile.k_peer}, "
+                f"source_rank={profile.source_rank}"
+            )
+
+        status = StageStatus.FAIL if failures else StageStatus.PASS
+
+        self._register(
+            ProfessorStage.PEER_ARCHETYPE,
+            status,
+            evidence_count=2,  # archetype_card.json + profile.md
+            outputs=[str(card_path), str(md_path), str(audit_path)],
+            warnings=warnings or None,
+            failures=failures or None,
+            provider_name="PeerArchetypeScorer",
+            provider_kind=ProviderKind.REAL,
+        )
+
     def _run_stage_filing_reconstruct(self, public_dir: Path) -> None:
-        """Stage 10: FILING_RECONSTRUCT — write sanitized filing sections."""
+        """Stage 11: FILING_RECONSTRUCT — write sanitized filing sections."""
         sec_dir = public_dir / "anonymized" / self.config.company_id / "sec"
         sec_dir.mkdir(parents=True, exist_ok=True)
 

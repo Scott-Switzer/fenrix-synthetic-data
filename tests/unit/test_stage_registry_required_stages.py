@@ -33,8 +33,8 @@ def _all_pass_registry() -> StageRegistry:
 
 
 class TestStageRegistryRequiredStages:
-    def test_all_18_stages_defined(self) -> None:
-        assert len(ALL_MANDATORY_STAGES) == 19  # 18 + ZIP_EXPORT
+    def test_all_mandatory_stages_defined(self) -> None:
+        assert len(ALL_MANDATORY_STAGES) == 20  # 19 original + PEER_ARCHETYPE
 
     def test_all_stages_pass_makes_professor_ready(self) -> None:
         reg = _all_pass_registry()
@@ -101,4 +101,4 @@ class TestStageRegistryRequiredStages:
         assert "professor_ready" in data
         assert "beta_status" in data
         assert "stages" in data
-        assert len(data["stages"]) == 19
+        assert len(data["stages"]) == 20  # 19 original + PEER_ARCHETYPE

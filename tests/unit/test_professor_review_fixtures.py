@@ -7,7 +7,7 @@ These tests encode:
 - Fixture loads and validates
 - All known leak classes are represented
 - Professor guesses are attack evidence, not ground truth
-- PepsiCo/COMPANY_002 is the only exact hit in V2
+- COMPANY_002 is the only exact hit in V2
 - V3 release gates must treat exact hits as blocking and peer-category
   guesses as risk warnings
 
@@ -275,7 +275,7 @@ class TestV3ReleaseGateBehavior:
     ) -> None:
         """The one exact hit in V2 represents a blocking-level failure for V3.
 
-        V3 should produce ZERO exact hits. V2's single exact hit (PepsiCo)
+        V3 should produce ZERO exact hits. V2's single exact hit
         is the proof that the V2 pipeline was not release-safe.
         """
         exact_hits = [

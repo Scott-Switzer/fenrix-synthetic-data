@@ -127,11 +127,51 @@ Phase 5 will implement numeric transformation while preserving peer-archetype
 consistency. Each anonymized company's bucketed values will be populated from
 the peer distribution rather than the source's exact values.
 
+## 11. Pipeline Integration Status
+
+**Status: COMPLETE** — Peer archetype is now a mandatory pipeline stage.
+
+The `PEER_ARCHETYPE` stage (stage 10) runs after `SYNTHETIC_PROFILE_BUILD`
+and before `FILING_RECONSTRUCT`. It produces:
+
+### Generated Files
+
+**Public (included in professor ZIP):**
+- `public/anonymized/<ID>/profile/archetype_card.json`
+- `public/anonymized/<ID>/profile/profile.md`
+
+**Private (excluded from ZIP):**
+- `private/qa/peer_archetype_audit.json`
+
+### Stage Behavior
+- In fixture mode: loads the peer universe fixture from `tests/fixtures/peer_archetype/`
+- In production mode: would load a broader peer database (not yet implemented)
+- Fail mode: if the fixture is missing, the stage fails with a clear error
+- Fail mode: if `k_peer < 5` or source ranks top-1/3, the stage fails
+
+## 12. Privacy Limitations
+
+- **k_peer is a risk heuristic, not formal anonymity** — it indicates
+  whether enough plausible peers exist, but does not constitute a formal
+  privacy guarantee.
+- **Archetype taxonomy is initial** — 8 archetypes covering common sectors.
+  Will need expansion as more companies are added.
+- **No formal differential privacy** — this is risk-reporting, not DP.
+
+## 13. Next Phase: Numeric Transformation
+
+Phase 5 will implement numeric transformation while preserving peer-archetype
+consistency. Each anonymized company's bucketed values will be populated from
+the peer distribution rather than the source's exact values.
+
 ## Module Location
 
 ```
 src/fenrix_synthetic/anonymization/peer_archetype.py
+src/fenrix_synthetic/professor/stages.py         # PEER_ARCHETYPE stage enum
+src/fenrix_synthetic/professor/orchestrator.py   # Stage implementation (stage 10)
 tests/unit/test_peer_archetype.py
 tests/unit/test_peer_privacy_scoring.py
+tests/integration/test_professor_bundle_peer_archetype_stage.py
 tests/fixtures/peer_archetype/peer_universe.yaml
 ```

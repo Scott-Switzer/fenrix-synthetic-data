@@ -86,6 +86,10 @@ ALLOWED_PATHS: frozenset[str] = frozenset(
         "pyproject.toml",
         "docs/professor_bundle_pr1.md",
         "test_production_config_no_real_identity_defaults.py",
+        # Test files that intentionally use real identifiers as test data
+        # for adversarial review / leak detection gate testing.
+        "test_phase2b_gate_adversarial_review.py",
+        "test_review_provider_contract.py",
     }
 )
 

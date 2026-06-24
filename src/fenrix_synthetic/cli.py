@@ -2763,7 +2763,7 @@ def build_professor_bundle(
     fast_fixtures: bool,
     allow_provider_skip_for_local_dev: bool,
 ) -> None:
-    """Build a professor bundle with the mandatory 19-stage pipeline.
+    """Build a professor bundle with the mandatory 20-stage pipeline.
 
     The strict V3 release gate ALWAYS runs — it scans public output for
     forbidden identifiers, metadata, file extensions, and private data

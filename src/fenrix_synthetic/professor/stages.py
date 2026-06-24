@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 
 class ProfessorStage(StrEnum):
-    """The 19 mandatory professor-bundle pipeline stages."""
+    """The 20 mandatory professor-bundle pipeline stages."""
 
     SOURCE_INGESTION = "SOURCE_INGESTION"
     SEC_PARSE = "SEC_PARSE"
@@ -38,6 +38,7 @@ class ProfessorStage(StrEnum):
     DEIDENTIFY = "DEIDENTIFY"
     PRIVATE_EVIDENCE_BUILD = "PRIVATE_EVIDENCE_BUILD"
     SYNTHETIC_PROFILE_BUILD = "SYNTHETIC_PROFILE_BUILD"
+    PEER_ARCHETYPE = "PEER_ARCHETYPE"
     FILING_RECONSTRUCT = "FILING_RECONSTRUCT"
     METRIC_SYNTHESIS = "METRIC_SYNTHESIS"
     METRIC_EVALUATION = "METRIC_EVALUATION"
@@ -93,6 +94,8 @@ STAGES_REQUIRING_EVIDENCE: frozenset[ProfessorStage] = frozenset(
         ProfessorStage.ENTITY_DETECT_RULES,
         ProfessorStage.DEIDENTIFY,
         ProfessorStage.PRIVATE_EVIDENCE_BUILD,
+        ProfessorStage.SYNTHETIC_PROFILE_BUILD,
+        ProfessorStage.PEER_ARCHETYPE,
         ProfessorStage.FILING_RECONSTRUCT,
         ProfessorStage.METRIC_SYNTHESIS,
         ProfessorStage.METRIC_EVALUATION,

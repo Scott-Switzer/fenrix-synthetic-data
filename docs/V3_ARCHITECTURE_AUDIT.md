@@ -45,7 +45,7 @@
 | `reanonymize-run` | Phase 4 | Stable — re-anonymization orchestrator |
 | `pipeline-run` | Phase 5A | Stable — multi-company pipeline |
 | `pilot-run` | Phase 4 | Stable — 18-stage pilot |
-| `build-professor-bundle` | Phase 5A | Stable — professor bundle (18+1 stages) |
+| `build-professor-bundle` | Phase 5A | Stable — professor bundle (20-stage pipeline with PEER_ARCHETYPE) |
 | `s3-transform` | Phase 5A | Stable — S3 feature-only transform |
 | `s3-attack` | Phase 5A | Stable — S3 attack runner |
 | `s3-assess` | Phase 5A | Stable — S3 gate assessment |
@@ -187,7 +187,7 @@
 ### Professor Bundle (`src/fenrix_synthetic/professor/`)
 | Module | Purpose | V3 Status |
 |--------|---------|-----------|
-| `orchestrator.py` | 19-stage orchestrator | **Refactor** — too monolithic |
+| `orchestrator.py` | 20-stage orchestrator | **Refactor** — too monolithic |
 | `stages.py` | Stage registry, enums | Keep |
 | `evidence.py` | Evidence objects | Keep |
 | `sec_providers.py` | SEC provider ABC/fixture | Keep |
@@ -257,7 +257,8 @@
 | Test | What it Covers |
 |------|---------------|
 | `test_public_identity_leak_gate.py` | No real identifiers in tracked files |
-| `test_stage_registry_required_stages.py` | All 19 stages required |
+| `test_stage_registry_required_stages.py` | All 20 mandatory stages |
+| `test_professor_bundle_peer_archetype_stage.py` | Peer archetype pipeline integration (new) |
 | `test_professor_ready_requires_all_mandatory_stages.py` | Readiness semantics |
 | `test_private_public_evidence_boundary.py` | Public/private separation |
 | `test_classroom_gate_seeded_failures.py` | Gate failure modes |
@@ -291,8 +292,9 @@ config YAML → ProfessorBundleOrchestrator
   ├─ Stage 15: PEDAGOGY_BUILD (exercises, guides, rubric)
   ├─ Stage 16: RAG_INDEX_BUILD (retrieval index)
   ├─ Stage 17: ADVERSARIAL_QA (exact scan + review provider)
-  ├─ Stage 18: RELEASE_GATE (classroom gate evaluation)
-  └─ Stage 19: ZIP_EXPORT (public-only ZIP bundle)
+  ├─ Stage 18: PEER_ARCHETYPE — peer-archetype privacy scoring ← NEW
+  ├─ Stage 19: RELEASE_GATE (classroom gate evaluation)
+  └─ Stage 20: ZIP_EXPORT (public-only ZIP bundle)
 ```
 
 ### Output Tree
@@ -301,11 +303,14 @@ bundle_root/
   public/
     README.md, CLASSROOM_GUIDE.md, EXERCISES.md, ...
     anonymized/COMPANY_001/
+      profile/archetype_card.json   ← NEW: public archetype card
+      profile/profile.md             ← NEW: public profile markdown
       sec/ (item_1.md, item_1a.md, item_7.md, item_8.md, ...)
       news/ (news_001.md, ...)
       metrics/ (daily_prices.json, returns.json, ...)
       crosslinks.json, LEARNING_GUIDE.md
   private/evidence/evidence_graph.json
+  private/qa/peer_archetype_audit.json  ← NEW: private audit (excluded from ZIP)
   qa/
     stage_registry.json, entity_audit_report.json,
     metrics_quality_report.json, metrics_privacy_report.json,
@@ -379,6 +384,8 @@ All existing modules in `src/fenrix_synthetic/` — the codebase is well-structu
 | `package/student_bundle.py` | Safe ZIP packager with allowlist | Phase 3 |
 | `package/release_manifest.py` | Release manifest schema | Phase 3 |
 | `tests/fixtures/professor_review/identification_cases.yaml` | V2 failure mode encoding | Phase 1 |
+| `tests/fixtures/peer_archetype/peer_universe.yaml` | Peer universe for archetype scoring | Phase 4 |
+| `tests/integration/test_professor_bundle_peer_archetype_stage.py` | Peer archetype pipeline integration | Phase 4 |
 
 ## 11. Proposed V3 Implementation Phases
 
@@ -412,9 +419,14 @@ All existing modules in `src/fenrix_synthetic/` — the codebase is well-structu
 - [ ] Enforce no private artifacts in release ZIP
 
 ### Phase 4 — Peer-Archetype Anonymization
-- [ ] Implement `anonymize/peer_archetype.py`
-- [ ] Minimum 5 peer candidates
-- [ ] Private peer list, public broad archetype only
+- [x] Implement `anonymize/peer_archetype.py`
+- [x] Minimum 5 peer candidates
+- [x] Private peer list, public broad archetype only
+- [x] Integrated as mandatory PEER_ARCHETYPE stage (stage 10) in professor bundle pipeline
+- [x] Public outputs: `profile/archetype_card.json`, `profile/profile.md`
+- [x] Private audit: `private/qa/peer_archetype_audit.json`
+- [x] k_peer threshold (≥5), source-not-top-1/3/5 enforcement
+- [x] Integration tests in `tests/integration/test_professor_bundle_peer_archetype_stage.py`
 
 ### Phase 5 — Numeric Transformation
 - [ ] Implement `anonymize/numeric_transform.py`
