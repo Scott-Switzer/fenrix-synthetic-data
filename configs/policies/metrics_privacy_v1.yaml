@@ -1,0 +1,24 @@
+policy_id: metrics_privacy_v1
+policy_version: "1.0.0"
+description: >
+  Default metrics privacy policy for professor-bundle synthetic metrics.
+  Rejects fixed-template synthesis, exact-value leakage, and suspicious
+  correlations between synthetic and source metrics.
+
+thresholds:
+  max_exact_value_match_rate: 0.01
+  max_row_count_fingerprint_risk: 0.10
+  min_nearest_neighbor_distance: 0.15
+  max_source_synthetic_correlation: 0.50
+  min_distribution_similarity: 0.30
+  max_date_fingerprint_risk: 0.10
+  max_duplicate_series_risk: 0.0
+  max_template_similarity: 0.25
+  min_classroom_utility_score: 0.40
+
+blocking_rules:
+  block_on_fixed_template: true
+  block_on_exact_value_leakage: true
+  block_on_identical_distributions: true
+  block_on_suspicious_correlation: true
+  block_on_template_similarity_exceeded: true

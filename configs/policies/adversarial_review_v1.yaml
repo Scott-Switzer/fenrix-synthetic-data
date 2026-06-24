@@ -1,0 +1,28 @@
+policy_id: adversarial_review_v1
+policy_version: "1.0.0"
+description: >
+  Default adversarial review policy for professor-bundle identity leakage
+  detection. Requires all scans listed below; blocks on direct identifiers
+  or likely source-company guesses.
+
+scans:
+  direct_identifier_scan: true
+  source_company_guess: true
+  evidence_backed_guess: true
+  residual_ticker_scan: true
+  residual_cik_scan: true
+  residual_accession_scan: true
+  residual_url_scan: true
+  rare_phrase_scan: true
+  numeric_fingerprint_scan: true
+  news_headline_scan: true
+  cross_artifact_consistency_scan: true
+  reverse_engineer_judgment: true
+
+thresholds:
+  min_artifact_level_risk_score: 0.0
+  max_bundle_level_risk_score: 0.50
+
+blocking_rules:
+  block_on_direct_identifier: true
+  block_on_likely_source_identity: true

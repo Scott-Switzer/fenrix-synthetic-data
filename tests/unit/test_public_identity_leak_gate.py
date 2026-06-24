@@ -85,6 +85,7 @@ ALLOWED_PATHS: frozenset[str] = frozenset(
         "configs/examples/",
         "pyproject.toml",
         "docs/professor_bundle_pr1.md",
+        "test_production_config_no_real_identity_defaults.py",
     }
 )
 

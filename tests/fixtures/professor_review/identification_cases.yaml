@@ -1,0 +1,357 @@
+# Professor Review Identification Cases
+#
+# Encodes the actual V2 batch failure modes from IDENTIFICATION_LOG.md.
+# These fixtures serve as regression tests so V3 cannot regress on known
+# leak classes or the V2 confusion matrix.
+#
+# NOTE: Professor guesses are attack EVIDENCE, not ground truth.
+# The actual source mapping shows only COMPANY_002 (PepsiCo) was correctly
+# identified. All other guesses were wrong but provide useful attack signals.
+
+fixture_version: "1.0.0"
+created_at: "2026-06-24"
+purpose: >
+  Encode V2 failure modes for regression testing. Used by
+  test_professor_review_fixtures.py to assert that V3 release gates
+  treat exact hits as blocking failures and peer-category guesses
+  as risk warnings.
+
+# ── Datasets ──────────────────────────────────────────────────────────────
+
+datasets:
+  fenrix_alpha_v2:
+    description: >
+      FENRIX Professor Alpha V2 — 8 anonymized company packets.
+      Professor reviewed dataset; 8 entries, 0 high-confidence,
+      8 medium-confidence identifications. 1/8 correct (PepsiCo).
+    total_companies: 8
+    high_confidence_identifications: 0
+    medium_confidence_identifications: 8
+    correct_identifications: 1
+
+    actual_sources:
+      COMPANY_001:
+        ticker: "CL"
+        company: "Colgate-Palmolive"
+        sector: "consumer staples"
+        broad_archetype: "diversified consumer products"
+      COMPANY_002:
+        ticker: "PEP"
+        company: "PepsiCo"
+        sector: "consumer staples"
+        broad_archetype: "beverages and snack foods"
+      COMPANY_003:
+        ticker: "TJX"
+        company: "TJX Companies"
+        sector: "consumer discretionary"
+        broad_archetype: "off-price retail"
+      COMPANY_004:
+        ticker: "PM"
+        company: "Philip Morris"
+        sector: "consumer staples"
+        broad_archetype: "tobacco products"
+      COMPANY_005:
+        ticker: "AMZN"
+        company: "Amazon"
+        sector: "consumer discretionary"
+        broad_archetype: "e-commerce and cloud services"
+      COMPANY_006:
+        ticker: "HBAN"
+        company: "Huntington Bancshares"
+        sector: "financials"
+        broad_archetype: "regional banking"
+      COMPANY_007:
+        ticker: "BLK"
+        company: "BlackRock"
+        sector: "financials"
+        broad_archetype: "asset management"
+      COMPANY_008:
+        ticker: "GOOGL"
+        company: "Alphabet"
+        sector: "communication services"
+        broad_archetype: "technology services platform"
+
+    professor_guesses:
+      COMPANY_001:
+        ticker: "CLX"
+        company: "Clorox"
+        correct: false
+        guess_category: "peer"
+        guess_distance: "same sector, home-care/household cues"
+      COMPANY_002:
+        ticker: "PEP"
+        company: "PepsiCo"
+        correct: true
+        guess_category: "exact"
+        guess_distance: "exact match — the only correct identification"
+      COMPANY_003:
+        ticker: "ETSY"
+        company: "Etsy"
+        correct: false
+        guess_category: "peer"
+        guess_distance: "same broad sector, commerce cues"
+      COMPANY_004:
+        ticker: "SYY"
+        company: "Sysco"
+        correct: false
+        guess_category: "sector"
+        guess_distance: "different industry, distribution/consumer cues"
+      COMPANY_005:
+        ticker: "CVNA"
+        company: "Carvana"
+        correct: false
+        guess_category: "sector"
+        guess_distance: "e-commerce cue but wrong scale and industry"
+      COMPANY_006:
+        ticker: "WTFC"
+        company: "Wintrust"
+        correct: false
+        guess_category: "peer"
+        guess_distance: "same sector, regional banking cues (Great Lakes)"
+      COMPANY_007:
+        ticker: "STT"
+        company: "State Street"
+        correct: false
+        guess_category: "peer"
+        guess_distance: "same sector, asset-management/financial-services cues"
+      COMPANY_008:
+        ticker: "NFLX"
+        company: "Netflix"
+        correct: false
+        guess_category: "sector"
+        guess_distance: "subscription/media cue but wrong company"
+
+# ── Leak Classes ──────────────────────────────────────────────────────────
+
+leak_classes:
+  # Direct identifiers — always blocking
+  direct_identifier:
+    severity: "blocking"
+    description: "Known identifiers (names, tickers, CIK, EIN, LEI, domains)"
+    v2_observed_in: ["fenrix_dylan", "processed", "processed2"]
+    examples:
+      - "Original company names surviving masking"
+      - "Ticker symbols in text"
+      - "CIK numbers in filings"
+      - "Executive names in text"
+      - "Domain names in metadata"
+
+  sec_commission_file_number:
+    severity: "blocking"
+    description: "SEC commission file numbers (e.g., 001-XXXXX)"
+    v2_observed_in: ["fenrix_dylan"]
+
+  cik:
+    severity: "blocking"
+    description: "Central Index Key identifiers"
+    v2_observed_in: ["processed"]
+
+  ein:
+    severity: "blocking"
+    description: "IRS Employer Identification Numbers"
+    v2_observed_in: []
+
+  accession_number:
+    severity: "blocking"
+    description: "SEC accession numbers (XXXXXXXXXX-XX-XXXXXX)"
+    v2_observed_in: ["processed"]
+
+  xbrl_namespace:
+    severity: "blocking"
+    description: "XBRL namespace declarations (xbrl.sec.gov, dei:, us-gaap)"
+    v2_observed_in: ["processed"]
+
+  original_filename:
+    severity: "blocking"
+    description: "Original SEC or source filenames in release artifacts"
+    v2_observed_in: ["processed"]
+
+  # Numeric fingerprints
+  exact_revenue:
+    severity: "warning"
+    description: "Exact public-company revenue values surviving transformation"
+    v2_observed_in: ["fenrix_dylan", "processed", "processed2"]
+
+  exact_segment_figure:
+    severity: "warning"
+    description: "Exact segment revenue/profit figures"
+    v2_observed_in: ["fenrix_dylan"]
+
+  distinctive_segment_structure:
+    severity: "warning"
+    description: "Unique segment naming or structure that identifies the issuer"
+    v2_observed_in: ["fenrix_dylan"]
+
+  exact_margin_structure:
+    severity: "warning"
+    description: "Exact margin ratios or distinctive margin patterns"
+    v2_observed_in: []
+
+  exact_leverage_profile:
+    severity: "warning"
+    description: "Exact debt/equity or leverage ratios"
+    v2_observed_in: []
+
+  # Identity & entity fingerprints
+  executive_name:
+    severity: "blocking"
+    description: "Executive names (CEO, CFO, directors)"
+    v2_observed_in: ["processed", "processed2"]
+
+  hq_zip:
+    severity: "blocking"
+    description: "Headquarters ZIP codes or area codes"
+    v2_observed_in: ["processed2"]
+
+  area_code:
+    severity: "blocking"
+    description: "Phone area codes linked to HQ or operations"
+    v2_observed_in: ["processed2"]
+
+  subsidiary_jv:
+    severity: "warning"
+    description: "Subsidiary or joint venture names"
+    v2_observed_in: ["processed2"]
+
+  acquisition_history:
+    severity: "warning"
+    description: "Distinctive acquisition events or acquired company names"
+    v2_observed_in: ["processed"]
+
+  litigation:
+    severity: "warning"
+    description: "Distinctive litigation or regulatory proceedings"
+    v2_observed_in: []
+
+  product_segment_naming:
+    severity: "warning"
+    description: "Product names, segment labels, brand names"
+    v2_observed_in: ["processed2"]
+
+  fiscal_year_end:
+    severity: "warning"
+    description: "Distinctive fiscal year-end date"
+    v2_observed_in: []
+
+  # Sector and bin fingerprints
+  sector_label:
+    severity: "warning"
+    description: "Overly specific sector/industry labels"
+    v2_observed_in: ["fenrix_alpha_v2"]
+
+  fundamentals_bin_fingerprint:
+    severity: "warning"
+    description: "Binned fundamentals that identify a specific scale/regime"
+    v2_observed_in: ["fenrix_alpha_v2"]
+
+  synthetic_trajectory_fingerprint:
+    severity: "warning"
+    description: "Synthetic price/return paths that match source trajectory"
+    v2_observed_in: ["fenrix_alpha_v2"]
+
+  suggestive_fake_name:
+    severity: "warning"
+    description: "Synthetic company names that hint at the real issuer"
+    v2_observed_in: ["fenrix_alpha_v2"]
+
+# ── V3 Target Privacy Metrics ────────────────────────────────────────────
+
+v3_privacy_targets:
+  k_peer:
+    min: 5
+    description: "Minimum plausible peer basket size"
+    v2_state: "Not measured — implied from professor guess diversity"
+
+  actual_source_top_1:
+    target: false
+    description: "Actual source must not be top-1 guess"
+    v2_state: "COMPANY_002 was top-1 (correct) — FAIL"
+
+  actual_source_top_3:
+    target: false
+    description: "Actual source must not be in top-3 guesses"
+    v2_state: "Not measured — only top-1 recorded"
+
+  llm_confidence:
+    target: "low or none"
+    description: "LLM/human confidence must be low or none"
+    v2_state: "All 8 medium confidence — FAIL"
+
+  exact_number_match_count:
+    target: 0
+    description: "No exact financial values from source"
+    v2_state: "Multiple exact matches in V2 leaks — FAIL"
+
+  direct_identifier_count:
+    target: 0
+    description: "No direct identifiers in release"
+    v2_state: "Multiple in fenrix_dylan, processed, processed2 — FAIL"
+
+  metadata_identifier_count:
+    target: 0
+    description: "No metadata identifiers (XBRL, CIK, filenames)"
+    v2_state: "Multiple in processed batch — FAIL"
+
+  trajectory_source_rank:
+    target: "> 5"
+    description: "Source trajectory rank must be > 5 in candidate universe"
+    v2_state: "Not measured"
+
+  text_similarity_source_rank:
+    target: "> 5 where feasible"
+    description: "Text similarity rank must be > 5"
+    v2_state: "Not measured"
+
+# ── V2 Company-Specific Remediation Targets ──────────────────────────────
+
+remediation:
+  COMPANY_002:
+    current_leaks: "fake name too literal, beverage/food wording, mega-cap scale, segment fingerprint, trajectory shape"
+    required_changes:
+      - "Use broad archetype 'diversified consumer products'"
+      - "Remove beverage/food/snack/soda/packaged-food terms"
+      - "Transform scale more aggressively"
+      - "Remove portfolio-specific text"
+      - "Avoid PepsiCo-like segment/geography terms"
+      - "Ensure LLM blind guess does not return PEP top-3"
+
+  COMPANY_001:
+    peer_guess: "CLX (Clorox)"
+    required_changes:
+      - "Weaken home-care/household cleaning cues"
+      - "Use broad archetype 'diversified consumer products'"
+      - "Remove oral-care and personal-care product fingerprint"
+
+  COMPANY_003:
+    peer_guess: "ETSY (Etsy)"
+    required_changes:
+      - "Clarify retail archetype"
+      - "Remove exact off-price fingerprint"
+
+  COMPANY_004:
+    peer_guess: "SYY (Sysco)"
+    required_changes:
+      - "Avoid overgeneralized distribution/consumer text"
+
+  COMPANY_005:
+    peer_guess: "CVNA (Carvana)"
+    required_changes:
+      - "Weaken e-commerce-only cue"
+      - "Use diversified platform services"
+
+  COMPANY_006:
+    peer_guess: "WTFC (Wintrust)"
+    required_changes:
+      - "Remove Great Lakes/geography-specific bank cues"
+
+  COMPANY_007:
+    peer_guess: "STT (State Street)"
+    required_changes:
+      - "Distinguish broad financial-services archetype"
+      - "Remove asset-management fingerprint"
+
+  COMPANY_008:
+    peer_guess: "NFLX (Netflix)"
+    required_changes:
+      - "Remove subscription/media cue"
+      - "Use broad technology-services platform"

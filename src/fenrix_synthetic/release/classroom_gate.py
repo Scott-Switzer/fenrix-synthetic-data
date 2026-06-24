@@ -104,6 +104,24 @@ def evaluate_classroom_gate(
     if build_mode == BuildMode.PRODUCTION and stage_registry.has_missing_provider_provenance:
         blocking_failures.append("missing_provider_provenance_in_production_mode")
 
+    # Production mode must use real providers for critical stages
+    if build_mode == BuildMode.PRODUCTION:
+        critical_stages = [
+            ProfessorStage.ADVERSARIAL_QA,
+            ProfessorStage.METRIC_SYNTHESIS,
+            ProfessorStage.METRIC_EVALUATION,
+        ]
+        for cs in critical_stages:
+            rec = stage_registry.get(cs)
+            if rec is not None and rec.provider_kind in {
+                ProviderKind.MOCK.value,
+                ProviderKind.FIXTURE.value,
+                ProviderKind.SKIPPED.value,
+            }:
+                blocking_failures.append(
+                    f"non_production_provider_for_{cs.value}: {rec.provider_kind}_{rec.provider_name}"
+                )
+
     if stage_registry.has_evidence_gaps:
         warnings.append("evidence_gaps_in_some_stages")
 
@@ -124,6 +142,7 @@ def evaluate_classroom_gate(
         "metrics_schema_report.json",
         "rag_index_report.json",
         "adversarial_qa_report.json",
+        "adversarial_review_report.json",
     ]
     for req_file in required_qa_files:
         if not (qa_dir / req_file).exists():
@@ -158,9 +177,48 @@ def evaluate_classroom_gate(
     if adv_qa_path.exists():
         adv_qa = json.loads(adv_qa_path.read_text())
         if adv_qa.get("overall_status") == "PASS":
-            nvidia = adv_qa.get("nvidia_review", {})
-            if nvidia.get("confidence") == 0.0 and not nvidia.get("evidence_cited"):
-                blocking_failures.append("empty_evidence_qa_pass")
+            # Check new format (adversarial_review) first, then legacy (nvidia_review)
+            adv_review = adv_qa.get("nvidia_review") or adv_qa.get("adversarial_review") or {}
+            succeeded = adv_review.get("succeeded", False)
+            rec = adv_review.get("release_recommendation", "")
+            if not succeeded or rec == "block":
+                blocking_failures.append("empty_evidence_qa_pass_or_blocked")
+
+    # ── Check 5b: Adversarial review report ──────────────────────────
+    review_report_path = qa_dir / "adversarial_review_report.json"
+    if review_report_path.exists():
+        review_report = json.loads(review_report_path.read_text())
+        if review_report.get("release_recommendation") == "block":
+            blockers = review_report.get("blockers", [])
+            blocking_failures.append(f"adversarial_review_blocks_release: {blockers}")
+        if review_report.get("direct_identifier_findings"):
+            blocking_failures.append("adversarial_review_found_direct_identifiers")
+        if review_report.get("guessed_source_identities"):
+            blocking_failures.append(
+                f"adversarial_review_guessed_source: {review_report['guessed_source_identities']}"
+            )
+
+    # ── Check 5c: Metrics privacy report ────────────────────────────
+    metrics_privacy_path = qa_dir / "metrics_privacy_report.json"
+    if metrics_privacy_path.exists():
+        privacy = json.loads(metrics_privacy_path.read_text())
+        if privacy.get("fixed_template"):
+            blocking_failures.append("metrics_fixed_template")
+        if privacy.get("exact_value_leakage"):
+            blocking_failures.append("metrics_exact_value_leakage")
+        if privacy.get("identical_distributions"):
+            blocking_failures.append("metrics_identical_distributions")
+        if privacy.get("suspicious_correlation"):
+            blocking_failures.append("metrics_suspicious_correlation")
+        if privacy.get("privacy_score", 1.0) < 0.50:
+            blocking_failures.append(f"metrics_privacy_below_threshold: {privacy['privacy_score']}")
+
+    # ── Check 5d: Metrics quality report ─────────────────────────────
+    metrics_quality_path = qa_dir / "metrics_quality_report.json"
+    if metrics_quality_path.exists():
+        quality = json.loads(metrics_quality_path.read_text())
+        if quality.get("quality_score", 1.0) < 0.30:
+            blocking_failures.append(f"metrics_quality_below_threshold: {quality['quality_score']}")
 
     # ── Check 6: ZIP excludes private paths ──────────────────────────
     zip_path = bundle_root / "exports" / "anonymized_bundle.zip"

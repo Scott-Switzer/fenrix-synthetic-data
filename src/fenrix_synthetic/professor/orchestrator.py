@@ -1,6 +1,6 @@
 """Professor-bundle orchestrator.
 
-Runs all 18 mandatory pipeline stages end-to-end, producing a complete
+Runs all 19 mandatory pipeline stages end-to-end, producing a complete
 fixture output tree with real artifacts, provenance keys, QA reports,
 and a ZIP export.
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import zipfile
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,7 +43,17 @@ from .evidence import (
     compute_opaque_id,
     validate_public_artifact,
 )
-from .providers import MockMetricsSynthesizer, MockNVIDIAReviewer
+from .metrics_providers import (
+    MetricsProvider,
+    create_metrics_provider,
+)
+from .review_providers import (
+    ReviewArtifact,
+    ReviewPolicy,
+    ReviewProvider,
+    create_review_provider,
+    default_review_policy,
+)
 from .sec_providers import (
     FixtureSecProvider,
     SecProvider,
@@ -74,6 +84,8 @@ class ProfessorBundleConfig:
         release_date: str = "2026-06-22",
         sec_provider: dict[str, Any] | None = None,
         gliner_provider: dict[str, Any] | None = None,
+        review_provider: dict[str, Any] | None = None,
+        metrics_provider: dict[str, Any] | None = None,
     ) -> None:
         self.company_id = company_id
         self.output_root = output_root
@@ -83,6 +95,8 @@ class ProfessorBundleConfig:
         self.release_date = release_date
         self.sec_provider = sec_provider or {}
         self.gliner_provider = gliner_provider or {}
+        self.review_provider_cfg = review_provider or {}
+        self.metrics_provider_cfg = metrics_provider or {}
 
     @property
     def build_mode(self) -> BuildMode:
@@ -109,6 +123,8 @@ class ProfessorBundleConfig:
         # Support both flat and nested config formats
         sec_config = data.get("sec", {})
         gliner_config = data.get("gliner", {})
+        review_config = data.get("adversarial_review", {})
+        metrics_config = data.get("metrics", {})
 
         return cls(
             company_id=data.get("company_id", "COMPANY_001"),
@@ -119,6 +135,8 @@ class ProfessorBundleConfig:
             release_date=data.get("release_date", "2026-06-22"),
             sec_provider=sec_config,
             gliner_provider=gliner_config,
+            review_provider=review_config,
+            metrics_provider=metrics_config,
         )
 
 
@@ -166,8 +184,28 @@ class ProfessorBundleOrchestrator:
                 self.gliner_provider = None
                 self._gliner_load_error = str(e)
 
-        self.nvidia_reviewer: Any = MockNVIDIAReviewer() if config.fast_fixtures else None
-        self.metrics_synthesizer: Any = MockMetricsSynthesizer() if config.fast_fixtures else None
+        # Choose review provider based on build mode and config
+        if config.fast_fixtures:
+            self.review_provider: ReviewProvider = create_review_provider("mock", {})
+            self._adversarial_policy: ReviewPolicy = default_review_policy()
+        elif config.strict:
+            rp_cfg = config.review_provider_cfg
+            rp_type = rp_cfg.get("provider", "nvidia")
+            self.review_provider = create_review_provider(rp_type, rp_cfg)
+            self._adversarial_policy = default_review_policy()
+        else:
+            self.review_provider = create_review_provider("mock", {})
+            self._adversarial_policy = default_review_policy()
+
+        # Choose metrics provider based on build mode and config
+        if config.fast_fixtures:
+            self.metrics_provider: MetricsProvider = create_metrics_provider("fixture", {})
+        elif config.strict:
+            mp_cfg = config.metrics_provider_cfg
+            mp_type = mp_cfg.get("provider", "sdv")
+            self.metrics_provider = create_metrics_provider(mp_type, mp_cfg)
+        else:
+            self.metrics_provider = create_metrics_provider("fixture", {})
 
         # Evidence storage (private)
         self._filings: list[SourceFiling] = []
@@ -235,7 +273,10 @@ class ProfessorBundleOrchestrator:
             # Write checksums before gate evaluation
             self._write_checksums()
 
-            # Run release gate (writes classroom_gate_report.json + final stage_registry.json)
+            # Create release manifest before gate evaluation
+            self._write_release_manifest()
+
+            # Run release gate (writes classroom_gate_report.json + strict gate reports)
             self._run_stage_release_gate(qa_dir)
         else:
             # Gate already registered as FAIL; write a minimal gate report
@@ -659,12 +700,12 @@ class ProfessorBundleOrchestrator:
 
     def _run_stage_metric_synthesis(self, public_dir: Path) -> None:
         """Stage 11: METRIC_SYNTHESIS — generate synthetic metrics."""
-        if self.metrics_synthesizer is None:
+        if not self.metrics_provider.health_check():
             if self.config.strict:
                 self._register(
                     ProfessorStage.METRIC_SYNTHESIS,
                     StageStatus.PROVIDER_NOT_RUN,
-                    failures=["Metrics synthesizer not available in strict mode"],
+                    failures=["Metrics provider not available in strict mode"],
                 )
                 return
             elif self.config.allow_provider_skip:
@@ -674,8 +715,7 @@ class ProfessorBundleOrchestrator:
                 )
                 return
 
-        assert self.metrics_synthesizer is not None  # Guarded by provider-skip logic above
-        metrics = self.metrics_synthesizer.synthesize_metrics(self.config.company_id)
+        metrics = self.metrics_provider.synthesize_metrics(self.config.company_id)
         self._synthetic_metrics = metrics
 
         metrics_dir = public_dir / "anonymized" / self.config.company_id / "metrics"
@@ -691,7 +731,7 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.METRIC_SYNTHESIS,
             StageStatus.PASS,
             evidence_count=total_rows,
-            provider_name=self.metrics_synthesizer.__class__.__name__,
+            provider_name=self.metrics_provider.provider_name,
             provider_kind=ProviderKind.FIXTURE
             if self.config.build_mode == BuildMode.FIXTURE
             else ProviderKind.REAL,
@@ -699,16 +739,22 @@ class ProfessorBundleOrchestrator:
 
     def _run_stage_metric_evaluation(self, qa_dir: Path) -> None:
         """Stage 12: METRIC_EVALUATION — evaluate synthetic metrics quality."""
-        if self.metrics_synthesizer is None or not self._synthetic_metrics:
-            if self.config.allow_provider_skip:
+        if not self.metrics_provider.health_check() or not self._synthetic_metrics:
+            if self.config.strict:
+                self._register(
+                    ProfessorStage.METRIC_EVALUATION,
+                    StageStatus.PROVIDER_NOT_RUN,
+                    failures=["Metrics provider not available in strict mode"],
+                )
+                return
+            elif self.config.allow_provider_skip:
                 self._register(
                     ProfessorStage.METRIC_EVALUATION,
                     StageStatus.PROVIDER_NOT_RUN,
                 )
                 return
 
-        assert self.metrics_synthesizer is not None  # Guarded by provider-skip logic above
-        evaluation = self.metrics_synthesizer.evaluate_metrics(self._synthetic_metrics)
+        evaluation = self.metrics_provider.evaluate_metrics(self._synthetic_metrics)
 
         (qa_dir / "metrics_quality_report.json").write_bytes(
             orjson.dumps(evaluation["quality_report"], option=orjson.OPT_INDENT_2)
@@ -1030,38 +1076,67 @@ class ProfessorBundleOrchestrator:
             },
         }
 
-        # NVIDIA review (mock or real)
-        if self.nvidia_reviewer is not None:
-            review = self.nvidia_reviewer.review_artifact(
-                text=self._sanitized_sections[0].sanitized_text if self._sanitized_sections else "",
-                artifact_id="adversarial-qa",
-                company_id=self.config.company_id,
+        # Provider-based adversarial review
+        review_report = None
+        review_status = "PASS"
+        if self.review_provider.health_check():
+            run_id = f"adv-qa-{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+            artifacts = [
+                ReviewArtifact(
+                    artifact_id=s.section_id,
+                    artifact_type="sec_section",
+                    content=s.sanitized_text,
+                    company_id=s.company_id,
+                )
+                for s in self._sanitized_sections
+            ]
+            review_report = self.review_provider.review_artifacts(
+                artifacts,
+                policy=self._adversarial_policy,
+                run_id=run_id,
             )
-            qa_report["nvidia_review"] = review
-            nvidia_status = "PASS" if review["confidence"] < 0.35 else "REVIEW_REQUIRED"
+            qa_report["adversarial_review"] = review_report.model_dump()
+            if not review_report.succeeded or review_report.release_recommendation == "block":
+                review_status = "BLOCKED"
         else:
             if self.config.strict:
-                qa_report["nvidia_review"] = {
+                qa_report["adversarial_review"] = {
                     "status": "PROVIDER_NOT_RUN",
                     "verdict": "BLOCKED",
-                    "reason": "NVIDIA API key not available in strict mode",
+                    "reason": "Review provider not available in strict mode",
                 }
-                nvidia_status = "BLOCKED"
+                review_status = "BLOCKED"
             elif self.config.allow_provider_skip:
-                qa_report["nvidia_review"] = {
+                qa_report["adversarial_review"] = {
                     "status": "PROVIDER_NOT_RUN",
                     "verdict": "SKIPPED",
                     "reason": "allow_provider_skip_for_local_dev",
                 }
-                nvidia_status = "SKIPPED"
+                review_status = "SKIPPED"
             else:
-                nvidia_status = "PASS"  # No NVIDIA in fixture mode
+                review_status = "PASS"  # Mock review in fixture mode
 
-        qa_report["overall_status"] = nvidia_status if nvidia_status != "PASS" else "PASS"
+        qa_report["overall_status"] = review_status if review_status != "PASS" else "PASS"
 
         (qa_dir / "adversarial_qa_report.json").write_bytes(
             orjson.dumps(qa_report, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
         )
+
+        # Write separate adversarial review report
+        if review_report is not None:
+            (qa_dir / "adversarial_review_report.json").write_bytes(
+                orjson.dumps(
+                    review_report.model_dump(),
+                    option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+                )
+            )
+        else:
+            (qa_dir / "adversarial_review_report.json").write_bytes(
+                orjson.dumps(
+                    {"status": "PROVIDER_NOT_RUN", "report_id": ""},
+                    option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+                )
+            )
 
         # SEC provider report
         sec_report = self.sec_provider.get_provider_report()
@@ -1117,26 +1192,27 @@ class ProfessorBundleOrchestrator:
         )
 
         status = StageStatus.PASS
-        if nvidia_status == "BLOCKED":
+        if review_status == "BLOCKED":
             status = StageStatus.PROVIDER_NOT_RUN
 
         self._register(
             ProfessorStage.ADVERSARIAL_QA,
             status,
             evidence_count=len(qa_report),
-            provider_name="AdversarialQAOrchestrator",
+            provider_name=self.review_provider.provider_name,
             provider_kind=ProviderKind.FIXTURE
             if self.config.build_mode == BuildMode.FIXTURE
             else ProviderKind.REAL,
         )
 
     def _run_stage_release_gate(self, qa_dir: Path) -> None:
-        """Stage 18: RELEASE_GATE — evaluate the release gate.
+        """Stage 18: RELEASE_GATE — evaluate both classroom gate and strict V3 gate.
 
-        The gate validates all stages EXCEPT ZIP_EXPORT (which runs after
-        the gate, packaging the approved artifacts). The RELEASE_GATE stage
-        registers itself before evaluation.
+        The classroom gate validates stage readiness (all stages ran, providers used).
+        The strict V3 gate scans public output for forbidden identifiers, metadata,
+        paths, and extensions. Either gate can block the release.
         """
+        from ..qa.release_gate import evaluate_strict_release_gate
         from ..release.classroom_gate import evaluate_classroom_gate
 
         # Register RELEASE_GATE as PASS before evaluation
@@ -1144,7 +1220,7 @@ class ProfessorBundleOrchestrator:
             ProfessorStage.RELEASE_GATE,
             StageStatus.PASS,
             evidence_count=1,
-            provider_name="ClassroomGateEvaluator",
+            provider_name="ReleaseGateEvaluator",
             provider_kind=ProviderKind.REAL,
         )
 
@@ -1160,7 +1236,8 @@ class ProfessorBundleOrchestrator:
         # Save registry with all 19 stages
         self.registry.save(qa_dir / "stage_registry.json")
 
-        gate_result = evaluate_classroom_gate(
+        # ── Classroom gate (stage readiness) ──────────────────────────
+        classroom_result = evaluate_classroom_gate(
             bundle_root=self.config.output_root,
             release_date=self.config.release_date,
             strict=self.config.strict,
@@ -1168,80 +1245,176 @@ class ProfessorBundleOrchestrator:
         )
 
         (qa_dir / "classroom_gate_report.json").write_bytes(
-            orjson.dumps(gate_result, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+            orjson.dumps(classroom_result, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
         )
 
-        # Update stage status based on gate decision
-        if gate_result.get("decision") != "PASS":
+        # ── Strict V3 release gate (content scanning) ─────────────────
+        strict_result = evaluate_strict_release_gate(
+            bundle_root=self.config.output_root,
+            mode="strict",
+            write_reports=True,
+        )
+
+        # ── Combine results ───────────────────────────────────────────
+        all_failures: list[str] = []
+        if classroom_result.get("decision") != "PASS":
+            all_failures.extend(classroom_result.get("blocking_failures", []))
+        if not strict_result["passed"]:
+            all_failures.extend(strict_result["fail_reasons"])
+
+        if all_failures:
             self._register(
                 ProfessorStage.RELEASE_GATE,
                 StageStatus.FAIL,
-                evidence_count=1,
-                failures=gate_result.get("blocking_failures", []),
+                evidence_count=2,  # both gate reports
+                failures=all_failures,
+                provider_name="ReleaseGateEvaluator",
+                provider_kind=ProviderKind.REAL,
             )
             self.registry.save(qa_dir / "stage_registry.json")
 
     def _run_stage_zip_export(self, exports_dir: Path) -> None:
-        """Stage 19: ZIP_EXPORT — create the final ZIP bundle."""
+        """Stage 19: ZIP_EXPORT — package bundle using allowlist-based packager."""
+        from ..package.student_bundle import package_student_bundle
+
         zip_path = exports_dir / "anonymized_bundle.zip"
 
-        # Build ZIP excluding private/, originals/, maps/, .env
-        excluded_prefixes = ("private/", "originals/", "maps/", ".env", "smoke_excerpts")
-        public_dir = self.config.output_root / "public"
-        qa_dir = self.config.output_root / "qa"
+        # Write fixture marker to disk before packaging (if applicable)
+        if self.config.build_mode == BuildMode.FIXTURE:
+            fixture_marker = (
+                "THIS IS A FIXTURE BUILD / NOT PROFESSOR READY\n\n"
+                "This bundle was built with --fast-fixtures using mock providers.\n"
+                "It demonstrates the pipeline architecture but is NOT production-ready.\n"
+                "See run_summary.json for build_mode=fixture and strict_fixture_ready=true.\n"
+            )
+            marker_path = self.config.output_root / "public" / "FIXTURE_BUILD_NOT_PROFESSOR_READY.txt"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(fixture_marker, encoding="utf-8")
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Add public artifacts
-            if public_dir.exists():
-                for fp in public_dir.rglob("*"):
-                    if fp.is_file():
-                        arcname = str(fp.relative_to(self.config.output_root))
-                        zf.write(fp, arcname)
-
-            # Add QA reports (sanitized)
-            if qa_dir.exists():
-                for fp in qa_dir.rglob("*.json"):
-                    if fp.is_file():
-                        arcname = str(fp.relative_to(self.config.output_root))
-                        zf.write(fp, arcname)
-
-            # Add top-level files
-            for top_file in (
-                "README.md",
-                "checksums.sha256",
-                "run_summary.json",
-                "artifact_inventory.csv",
-            ):
-                filepath = self.config.output_root / top_file
-                if filepath.exists():
-                    zf.write(filepath, top_file)
-
-            # For fixture builds, add a marker file to the ZIP
-            if self.config.build_mode == BuildMode.FIXTURE:
-                fixture_marker = (
-                    "THIS IS A FIXTURE BUILD / NOT PROFESSOR READY\n\n"
-                    "This bundle was built with --fast-fixtures using mock providers.\n"
-                    "It demonstrates the pipeline architecture but is NOT production-ready.\n"
-                    "See run_summary.json for build_mode=fixture and strict_fixture_ready=true.\n"
-                )
-                zf.writestr("FIXTURE_BUILD_NOT_PROFESSOR_READY.txt", fixture_marker)
-
-        # Verify ZIP excludes private paths
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for name in zf.namelist():
-                for prefix in excluded_prefixes:
-                    if name.startswith(prefix):
-                        raise RuntimeError(f"ZIP contains excluded path: {name}")
+        try:
+            final_path, pre_val, post_val = package_student_bundle(
+                bundle_root=self.config.output_root,
+                output_path=zip_path,
+                validate_before=True,
+                validate_after=True,
+            )
+        except RuntimeError as e:
+            self._register(
+                ProfessorStage.ZIP_EXPORT,
+                StageStatus.FAIL,
+                evidence_count=1,
+                failures=[str(e)],
+            )
+            raise
 
         # ZIP_EXPORT already registered by RELEASE_GATE stage; update outputs
         self._register(
             ProfessorStage.ZIP_EXPORT,
             StageStatus.PASS,
-            evidence_count=1,
-            outputs=[str(zip_path)],
+            evidence_count=pre_val.entry_count,
+            outputs=[str(final_path)],
+            provider_name="AllowlistPackager",
+            provider_kind=ProviderKind.REAL,
         )
 
     # ── Helpers ─────────────────────────────────────────────────────────
+
+    def _write_release_manifest(self) -> None:
+        """Create RELEASE_MANIFEST.json and RELEASE_MANIFEST.md.
+
+        Called before the strict release gate so the gate can validate
+        manifest presence and privacy flag correctness.
+        """
+        from ..package.release_manifest import create_release_manifest
+
+        # Count public artifacts by type
+        artifact_counts: dict[str, int] = {}
+        public_dir = self.config.output_root / "public"
+        if public_dir.exists():
+            for fp in public_dir.rglob("*"):
+                if fp.is_file():
+                    ext = fp.suffix.lower() or "noext"
+                    artifact_counts[ext] = artifact_counts.get(ext, 0) + 1
+
+        # Collect QA report paths
+        qa_dir = self.config.output_root / "qa"
+        qa_reports: list[str] = []
+        if qa_dir.exists():
+            for fp in sorted(qa_dir.rglob("*.json")):
+                qa_reports.append(str(fp.relative_to(self.config.output_root)))
+
+        # Derive source counts from evidence
+        source_count = len(self._filings) if self._filings else 1
+        public_ids = [self.config.company_id]
+
+        # Get repo SHA and branch from environment or git
+        repo_sha = os.environ.get("FENRIX_REPO_SHA", os.environ.get("GITHUB_SHA", ""))
+        branch = os.environ.get("FENRIX_BRANCH", os.environ.get("GITHUB_REF_NAME", ""))
+        # Try git if env vars not set
+        if not repo_sha or not branch:
+            try:
+                import subprocess
+                if not repo_sha:
+                    result = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True, check=False, cwd=Path.cwd(),
+                    )
+                    repo_sha = result.stdout.strip() if result.returncode == 0 else ""
+                if not branch:
+                    result = subprocess.run(
+                        ["git", "branch", "--show-current"],
+                        capture_output=True, text=True, check=False, cwd=Path.cwd(),
+                    )
+                    branch = result.stdout.strip() if result.returncode == 0 else ""
+            except Exception:
+                pass
+
+        # Compute config hash from key config values
+        config_dict = {
+            "company_id": self.config.company_id,
+            "strict": self.config.strict,
+            "fast_fixtures": self.config.fast_fixtures,
+            "build_mode": self.config.build_mode.value,
+            "release_date": self.config.release_date,
+        }
+        config_hash = hashlib.sha256(
+            json.dumps(config_dict, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:16]
+
+        release_id = f"professor_bundle_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+
+        manifest = create_release_manifest(
+            release_id=release_id,
+            repo_sha=repo_sha,
+            branch=branch,
+            pipeline_version="0.3.0",
+            config_hash=config_hash,
+            random_seed="",
+            source_count=source_count,
+            public_company_ids=public_ids,
+            artifact_counts=artifact_counts,
+            qa_reports=qa_reports,
+            excluded_private_artifacts=[
+                "private/evidence/evidence_graph.json",
+                "private/replacement_plan.json",
+                "identity", "checkpoints", "raw", ".env", "*.key", "*.pem",
+            ],
+            known_limitations=[
+                "Fixture build — not professor-ready",
+            ] if not self.config.strict else [
+                "Strict production build",
+            ],
+        )
+
+        (self.config.output_root / "RELEASE_MANIFEST.json").write_bytes(
+            orjson.dumps(
+                manifest.to_dict(),
+                option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+            )
+        )
+        (self.config.output_root / "RELEASE_MANIFEST.md").write_text(
+            manifest.to_markdown(), encoding="utf-8"
+        )
 
     def _write_run_summary(self, started_at: str) -> None:
         """Write run_summary.json."""

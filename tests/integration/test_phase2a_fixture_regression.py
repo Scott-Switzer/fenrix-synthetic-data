@@ -38,6 +38,7 @@ class TestPhase2aFixtureRegression:
             "metrics_schema_report.json",
             "rag_index_report.json",
             "adversarial_qa_report.json",
+            "adversarial_review_report.json",
         ]
         for fname in required_qa:
             (qa_dir / fname).write_text("{}")

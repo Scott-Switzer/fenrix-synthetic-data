@@ -79,13 +79,15 @@ gliner:
     - "money"
     - "percentage"
 
-# NVIDIA review (optional - requires API key)
-nvidia:
-  enabled: false
+# Adversarial review provider (requires NVIDIA_API_KEY env var)
+adversarial_review:
+  provider: "nvidia"
+  # Optional: pass api_key directly (env var NVIDIA_API_KEY is preferred)
+  # api_key: "${NVIDIA_API_KEY}"
 
-# Metrics synthesis (optional - requires SDV/CTGAN)
+# Metrics synthesis provider (requires SDV library: pip install sdv)
 metrics:
-  enabled: false
+  provider: "sdv"
 
 # RAG/QA evaluation (optional)
 rag:
