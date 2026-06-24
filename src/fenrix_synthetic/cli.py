@@ -2201,6 +2201,87 @@ def release_export(
     click.echo(f"  Contents: {sorted(f.name for f in dossier_root.iterdir())}")
 
 
+# ── Phase 5A archive ingestion ───────────────────────────────────────────
+
+
+@cli.command(name="ingest-source-archive")
+@click.option(
+    "--zip",
+    "zip_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to source archive ZIP",
+)
+@click.option(
+    "--output-private",
+    "output_private_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Private output root directory",
+)
+@click.option(
+    "--run-tag",
+    default="default",
+    help="Tag for this ingestion run (e.g. scott_1)",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to write ingestion manifest JSON",
+)
+@click.pass_context
+def ingest_source_archive(
+    ctx: click.Context,
+    zip_path: Path,
+    output_private_dir: Path,
+    run_tag: str,
+    manifest_path: Path | None,
+) -> None:
+    """Ingest a source archive ZIP into private storage safely.
+
+    Computes archive SHA256, inventories all entries, detects filing types
+    and years, extracts safe files with zip-slip protection, and writes
+    inventory + QA reports. Never writes to public/.
+
+    Example:
+        fenrix-synth ingest-source-archive \\
+            --zip /path/to/scott.zip \\
+            --output-private private/source_archive \\
+            --run-tag scott_1
+    """
+    from .sources.archive_ingest import ingest_source_archive as _ingest
+
+    click.echo(f"Ingesting archive: {zip_path}")
+    click.echo(f"  Output private dir: {output_private_dir}")
+    click.echo(f"  Run tag: {run_tag}")
+
+    report = _ingest(
+        zip_path=zip_path,
+        output_private_dir=output_private_dir,
+        run_tag=run_tag,
+    )
+
+    click.echo("\nIngestion complete:")
+    click.echo(f"  Archive SHA256: {report['archive_sha256']}")
+    click.echo(f"  Total entries: {report['total_entries']}")
+    click.echo(f"  Safe extracted: {report['safe_extracted']}")
+    click.echo(f"  Rejected: {report['rejected_entries']}")
+    click.echo(f"  Identifier flags: {report['identifier_flag_count']}")
+    click.echo(f"  Inventory: {report['inventory_path']}")
+
+    if manifest_path:
+        import json
+
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        click.echo(f"  Manifest written: {manifest_path}")
+
+    if report.get("rejected_entries", 0) > 0:
+        click.echo("\n  Warning: some entries were rejected (see report for details)", err=True)
+
+
 @cli.command(name="boundary-diag")
 @click.pass_context
 def boundary_diag(ctx: click.Context) -> None:
