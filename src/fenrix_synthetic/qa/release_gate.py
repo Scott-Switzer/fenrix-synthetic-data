@@ -47,8 +47,8 @@ def evaluate_strict_release_gate(
     Returns:
         Gate report dict with pass/fail, findings, and recommendations.
     """
-    from .direct_identifier_scan import ScanHit, scan_path
-    from .metadata_scan import MetadataHit, scan_metadata
+    from .direct_identifier_scan import scan_path
+    from .metadata_scan import scan_metadata
 
     checked_at = datetime.now(UTC).isoformat()
     blocking_failures: list[str] = []
@@ -101,9 +101,7 @@ def evaluate_strict_release_gate(
             for hit in md_result.hits:
                 metadata_hits.append(hit.to_dict())
             if not md_result.passed:
-                blocking_failures.append(
-                    f"metadata_scan_failed: {md_result.hit_count} hits"
-                )
+                blocking_failures.append(f"metadata_scan_failed: {md_result.hit_count} hits")
                 for hit in md_result.hits:
                     findings.append(
                         {
@@ -217,7 +215,9 @@ def evaluate_strict_release_gate(
                         if name.startswith(fp_pattern):
                             blocking_failures.append(f"zip_contains_forbidden_path: {name}")
                     # Forbidden extensions
-                    if name.lower().endswith((".html", ".htm", ".xml", ".xbrl", ".env", ".key", ".pem")):
+                    if name.lower().endswith(
+                        (".html", ".htm", ".xml", ".xbrl", ".env", ".key", ".pem")
+                    ):
                         blocking_failures.append(f"zip_contains_forbidden_extension: {name}")
         except (zipfile.BadZipFile, OSError) as e:
             blocking_failures.append(f"zip_read_error: {e}")

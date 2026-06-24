@@ -38,7 +38,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -1055,6 +1058,9 @@ class NVIDIAClient:
         Returns the model's text response, or ``None`` on failure.
         Never raises — all errors are logged and return None.
         """
+        if httpx is None:
+            logger.error("httpx package not available for NVIDIA requests")
+            return None
         if not self._api_key:
             logger.error("NVIDIA_API_KEY not configured")
             return None

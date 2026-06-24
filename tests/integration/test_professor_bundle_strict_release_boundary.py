@@ -13,13 +13,10 @@ import json
 import zipfile
 from pathlib import Path
 
-import pytest
-
 from fenrix_synthetic.professor.orchestrator import (
     ProfessorBundleConfig,
     ProfessorBundleOrchestrator,
 )
-from fenrix_synthetic.professor.stages import BuildMode, ProfessorStage, StageStatus
 
 
 class TestStrictReleaseBoundaryIntegration:
@@ -84,9 +81,7 @@ class TestStrictReleaseBoundaryIntegration:
         orchestrator = ProfessorBundleOrchestrator(config)
         orchestrator.run()
 
-        manifest_data = json.loads(
-            (output_root / "RELEASE_MANIFEST.json").read_text()
-        )
+        manifest_data = json.loads((output_root / "RELEASE_MANIFEST.json").read_text())
         assert manifest_data["identity_map_included"] is False
         assert manifest_data["raw_source_included"] is False
         assert manifest_data["raw_sec_html_included"] is False
@@ -211,11 +206,9 @@ class TestStrictReleaseBoundaryIntegration:
             release_date="2026-06-22",
         )
         orchestrator = ProfessorBundleOrchestrator(config)
-        result = orchestrator.run()
+        _result = orchestrator.run()
 
-        summary = json.loads(
-            (output_root / "run_summary.json").read_text()
-        )
+        summary = json.loads((output_root / "run_summary.json").read_text())
         assert summary["build_mode"] == "fixture"
         assert summary["strict_fixture_ready"] is True
         assert summary["professor_ready"] is False

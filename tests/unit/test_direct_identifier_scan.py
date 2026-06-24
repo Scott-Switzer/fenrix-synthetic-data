@@ -12,10 +12,19 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fenrix_synthetic.qa.direct_identifier_scan import ScanHit, ScanResult, scan_path, scan_zip_entries
+from fenrix_synthetic.qa.direct_identifier_scan import (
+    ScanHit,
+    ScanResult,
+    scan_path,
+    scan_zip_entries,
+)
 
-
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "professor_review" / "identification_cases.yaml"
+FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "fixtures"
+    / "professor_review"
+    / "identification_cases.yaml"
+)
 
 
 @pytest.fixture(scope="module")
@@ -118,7 +127,11 @@ class TestDirectIdentifierScanClean:
     """Test that clean content passes."""
 
     def test_passes_clean_markdown(self, tmp_path: Path) -> None:
-        _write_file(tmp_path, "test.md", "# Company Analysis\n\nThis is a clean document about Company 001.\n")
+        _write_file(
+            tmp_path,
+            "test.md",
+            "# Company Analysis\n\nThis is a clean document about Company 001.\n",
+        )
         result = scan_path(tmp_path)
         assert result.passed
         assert result.hits == []
@@ -132,7 +145,9 @@ class TestDirectIdentifierScanClean:
 class TestDynamicPatterns:
     """Test that dynamic patterns (from config) are detected."""
 
-    def test_detects_source_company_name(self, tmp_path: Path, source_data: dict[str, list[str]]) -> None:
+    def test_detects_source_company_name(
+        self, tmp_path: Path, source_data: dict[str, list[str]]
+    ) -> None:
         names = source_data["company_names"]
         if names:
             _write_file(tmp_path, "test.md", f"This company resembles {names[0]}.")

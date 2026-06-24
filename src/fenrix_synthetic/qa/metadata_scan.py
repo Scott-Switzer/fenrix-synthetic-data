@@ -18,7 +18,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 # ── Metadata pattern groups ────────────────────────────────────────────────
 
 _HTML_XML_DECLARATIONS: list[tuple[str, str, str]] = [

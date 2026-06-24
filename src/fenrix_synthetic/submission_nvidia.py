@@ -21,7 +21,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore[assignment]
 
 from .submission_quality import build_recent_event_summary
 
@@ -191,6 +194,12 @@ def _build_user_prompt(company_id: str, file_chunks: list[dict[str, str]]) -> st
 
 def _call_nvidia(company_id: str, file_chunks: list[dict[str, str]]) -> dict[str, Any]:
     """Call NVIDIA chat completions with retry/backoff. Returns parsed JSON or error dict."""
+    if httpx is None:
+        return {
+            "status": "INCOMPLETE",
+            "reason": "httpx package not available",
+            "risks": [],
+        }
     api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
     if not api_key:
         return {"status": "INCOMPLETE", "reason": "provider credential not set", "risks": []}

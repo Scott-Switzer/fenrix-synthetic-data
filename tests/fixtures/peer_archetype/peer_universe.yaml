@@ -1,0 +1,405 @@
+# Peer universe fixture for peer-archetype anonymization testing.
+# All entries are synthetic. No real company identifiers.
+# Provides: 1 clean pass, 1 low-k fail, 1 top-1 fail, 1 top-3 fail, 1 >=5 peer pass.
+
+companies:
+  # ── Case 1: clean pass (k>=5, source not in top 5) ──────────────────
+  - candidate_id: SRC_A
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.0  # source identity — not used for self-match
+
+  - candidate_id: PEER_001
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.92
+
+  - candidate_id: PEER_002
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: LOW
+    similarity_score: 0.85
+
+  - candidate_id: PEER_003
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.88
+
+  - candidate_id: PEER_004
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.81
+
+  - candidate_id: PEER_005
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: HIGH
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.79
+
+  - candidate_id: PEER_006
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: MEDIUM
+    leverage_bucket: MODERATE
+    growth_bucket: MODERATE
+    similarity_score: 0.76
+
+  - candidate_id: PEER_007
+    broad_sector: Consumer Defensive
+    archetype: consumer_defensive_multiline
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: LOW
+    similarity_score: 0.74
+
+  # ── Case 2: low-k fail (source with <5 peers) ──────────────────────
+  - candidate_id: SRC_B
+    broad_sector: Digital Platform Services
+    archetype: digital_platform_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.0  # source identity
+
+  - candidate_id: PEER_B01
+    broad_sector: Digital Platform Services
+    archetype: digital_platform_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.95
+
+  - candidate_id: PEER_B02
+    broad_sector: Digital Platform Services
+    archetype: digital_platform_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.88
+
+  # ── Case 3: source top-1 fail ──────────────────────────────────────
+  - candidate_id: SRC_C
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: HIGH
+    profitability_bucket: MEDIUM
+    leverage_bucket: MODERATE
+    growth_bucket: LOW
+    similarity_score: 100.0  # source will rank top-1
+
+  - candidate_id: PEER_C01
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: HIGH
+    profitability_bucket: MEDIUM
+    leverage_bucket: MODERATE
+    growth_bucket: LOW
+    similarity_score: 0.98
+
+  - candidate_id: PEER_C02
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: HIGH
+    profitability_bucket: LOW
+    leverage_bucket: MODERATE
+    growth_bucket: LOW
+    similarity_score: 0.82
+
+  - candidate_id: PEER_C03
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: SMALL
+    asset_intensity_bucket: HIGH
+    profitability_bucket: MEDIUM
+    leverage_bucket: HIGH
+    growth_bucket: LOW
+    similarity_score: 0.71
+
+  - candidate_id: PEER_C04
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: MODERATE
+    profitability_bucket: MEDIUM
+    leverage_bucket: MODERATE
+    growth_bucket: LOW
+    similarity_score: 0.75
+
+  - candidate_id: PEER_C05
+    broad_sector: Regional Financial Institution
+    archetype: regional_financial_institution
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: HIGH
+    profitability_bucket: MEDIUM
+    leverage_bucket: MODERATE
+    growth_bucket: MODERATE
+    similarity_score: 0.80
+
+  # ── Case 4: source top-3 fail ──────────────────────────────────────
+  - candidate_id: SRC_D
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: LOW
+    leverage_bucket: MEDIUM
+    growth_bucket: MODERATE
+    similarity_score: 5.0  # ranks top-3 but not top-1
+
+  - candidate_id: PEER_D01
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: LOW
+    leverage_bucket: MEDIUM
+    growth_bucket: MODERATE
+    similarity_score: 0.94
+
+  - candidate_id: PEER_D02
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: HIGH
+    profitability_bucket: LOW
+    leverage_bucket: MEDIUM
+    growth_bucket: LOW
+    similarity_score: 0.78
+
+  - candidate_id: PEER_D03
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.72
+
+  - candidate_id: PEER_D04
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MEDIUM
+    profitability_bucket: LOW
+    leverage_bucket: MODERATE
+    growth_bucket: LOW
+    similarity_score: 0.83
+
+  - candidate_id: PEER_D05
+    broad_sector: Industrial Distribution Services
+    archetype: industrial_distribution_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: LOW
+    leverage_bucket: HIGH
+    growth_bucket: MODERATE
+    similarity_score: 0.69
+
+  # ── Case 5: warn source top-5 ──────────────────────────────────────
+  - candidate_id: SRC_E
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 4.0  # ranks 4th or 5th
+
+  - candidate_id: PEER_E01
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.97
+
+  - candidate_id: PEER_E02
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.91
+
+  - candidate_id: PEER_E03
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: MEDIUM
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.87
+
+  - candidate_id: PEER_E04
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: LOW
+    profitability_bucket: LOW
+    leverage_bucket: LOW
+    growth_bucket: HIGH
+    similarity_score: 0.77
+
+  - candidate_id: PEER_E05
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: LARGE
+    asset_intensity_bucket: MODERATE
+    profitability_bucket: MEDIUM
+    leverage_bucket: LOW
+    growth_bucket: MODERATE
+    similarity_score: 0.73
+
+  - candidate_id: PEER_E06
+    broad_sector: Large Scale Technology Services
+    archetype: large_scale_technology_services
+    revenue_bucket: SMALL
+    asset_intensity_bucket: LOW
+    profitability_bucket: HIGH
+    leverage_bucket: LOW
+    growth_bucket: VERY_HIGH
+    similarity_score: 0.68
+
+archetypes:
+  consumer_defensive_multiline:
+    public_label: Consumer Defensive — Multi-line
+    description: Diversified consumer staples / defensive company with multiple product lines
+    allowed_sectors: [Consumer Defensive, Consumer Staples]
+    feature_expectations:
+      revenue_bucket: [LARGE, MEDIUM]
+      profitability_bucket: [HIGH, MEDIUM]
+      growth_bucket: [LOW, MODERATE]
+    forbidden_naming_cues: [specific brand list, product names]
+    default_peer_minimum: 5
+
+  digital_platform_services:
+    public_label: Digital Platform Services
+    description: Asset-light digital platform or marketplace company
+    allowed_sectors: [Technology, Communication Services, Consumer Cyclical]
+    feature_expectations:
+      asset_intensity_bucket: [LOW]
+      profitability_bucket: [HIGH, MEDIUM]
+      growth_bucket: [HIGH, VERY_HIGH]
+      leverage_bucket: [LOW]
+    forbidden_naming_cues: [platform name, app names]
+    default_peer_minimum: 5
+
+  regional_financial_institution:
+    public_label: Regional Financial Institution
+    description: Regional or community-focused financial services company
+    allowed_sectors: [Financial Services, Banking]
+    feature_expectations:
+      asset_intensity_bucket: [HIGH]
+      profitability_bucket: [MEDIUM, LOW]
+      growth_bucket: [LOW, MODERATE]
+      leverage_bucket: [MODERATE, HIGH]
+    forbidden_naming_cues: [bank name, branch count]
+    default_peer_minimum: 5
+
+  industrial_distribution_services:
+    public_label: Industrial Distribution & Services
+    description: Industrial distribution, logistics, or business services company
+    allowed_sectors: [Industrials, Basic Materials]
+    feature_expectations:
+      asset_intensity_bucket: [MEDIUM, HIGH]
+      profitability_bucket: [LOW, MEDIUM]
+      growth_bucket: [MODERATE, LOW]
+      leverage_bucket: [MEDIUM, MODERATE]
+    forbidden_naming_cues: [distribution center count, fleet size]
+    default_peer_minimum: 5
+
+  large_scale_technology_services:
+    public_label: Large-Scale Technology Services
+    description: Large-scale technology services or enterprise software company
+    allowed_sectors: [Technology, Communication Services]
+    feature_expectations:
+      asset_intensity_bucket: [LOW, MODERATE]
+      revenue_bucket: [LARGE, MEDIUM]
+      growth_bucket: [HIGH, MODERATE]
+      leverage_bucket: [LOW]
+    forbidden_naming_cues: [specific product names, patent counts]
+    default_peer_minimum: 5
+
+  consumer_discretionary_retail:
+    public_label: Consumer Discretionary — Retail
+    description: Consumer discretionary retail or e-commerce company
+    allowed_sectors: [Consumer Cyclical, Consumer Discretionary]
+    feature_expectations:
+      revenue_bucket: [LARGE, MEDIUM]
+      profitability_bucket: [MEDIUM, LOW]
+      growth_bucket: [MODERATE, HIGH]
+      leverage_bucket: [MODERATE, LOW]
+    forbidden_naming_cues: [store count, e-commerce platform name]
+    default_peer_minimum: 5
+
+  regulated_consumer_products:
+    public_label: Regulated Consumer Products
+    description: Heavily regulated consumer products company
+    allowed_sectors: [Consumer Defensive, Healthcare]
+    feature_expectations:
+      revenue_bucket: [LARGE, MEDIUM]
+      profitability_bucket: [HIGH, MEDIUM]
+      growth_bucket: [LOW, MODERATE]
+      leverage_bucket: [LOW, MODERATE]
+    forbidden_naming_cues: [FDA filing references, specific drug names]
+    default_peer_minimum: 5
+
+  institutional_financial_services:
+    public_label: Institutional Financial Services
+    description: Institutional or wholesale financial services company
+    allowed_sectors: [Financial Services, Banking, Insurance]
+    feature_expectations:
+      asset_intensity_bucket: [HIGH, MODERATE]
+      revenue_bucket: [LARGE]
+      profitability_bucket: [MEDIUM, HIGH]
+      growth_bucket: [LOW, MODERATE]
+    forbidden_naming_cues: [AUM, fund names, specific deal sizes]
+    default_peer_minimum: 5

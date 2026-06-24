@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from fenrix_synthetic.qa.metadata_scan import MetadataHit, MetadataScanResult, scan_metadata
 
 
@@ -87,7 +85,7 @@ class TestMetadataScanHTMLXML:
         assert any(h.pattern_id == "html_xml_present" for h in result.hits)
 
     def test_detects_html_declaration_in_content(self, tmp_path: Path) -> None:
-        _write_file(tmp_path, "test.md", "<html lang=\"en\">")
+        _write_file(tmp_path, "test.md", '<html lang="en">')
         result = scan_metadata(tmp_path, scan_html_xml_files=True)
         assert not result.passed
         assert any("html_declaration" in h.pattern_id for h in result.hits)

@@ -80,8 +80,11 @@ These would bloat the repo without proven need:
 
 ## Phase-Specific Dependency Needs
 
-### Phase 4 (Peer Archetype Anonymization)
-- **No new dependencies**: Uses existing pydantic + pandas + numpy
+### Phase 4 (Peer Archetype Anonymization) — COMPLETE
+- **No new dependencies required.**
+- Uses pure Python + Pydantic (already present).
+- Do not add SDV, OpenDP, Arelle, sentence-transformers, or rapidfuzz yet.
+- Module: `src/fenrix_synthetic/anonymization/peer_archetype.py`
 
 ### Phase 5 (Numeric Transformation)
 - **No new dependencies**: Uses existing pandas + numpy

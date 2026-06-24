@@ -11,10 +11,8 @@ import dataclasses
 import hashlib
 import json
 import zipfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 # ── Allowlisted public paths ───────────────────────────────────────────────
 
@@ -160,7 +158,9 @@ def validate_bundle_tree(bundle_root: Path) -> BundleValidationResult:
 
     passed = len(rejected) == 0
     h = hashlib.sha256(
-        json.dumps({"allowed": sorted(allowed), "rejected": sorted(rejected)}, sort_keys=True).encode()
+        json.dumps(
+            {"allowed": sorted(allowed), "rejected": sorted(rejected)}, sort_keys=True
+        ).encode()
     ).hexdigest()[:16]
 
     return BundleValidationResult(

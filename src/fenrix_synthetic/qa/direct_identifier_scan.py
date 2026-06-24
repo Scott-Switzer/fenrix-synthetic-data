@@ -23,7 +23,6 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-
 # ── Pattern definitions ───────────────────────────────────────────────────
 
 _PATTERNS: dict[str, tuple[str, str]] = {
@@ -86,20 +85,20 @@ def _build_dynamic_patterns(
     (>= 3 chars) and not too short to cause false positives.
     """
     dynamic: dict[str, tuple[str, str]] = {}
-    for name in (company_names or []):
+    for name in company_names or []:
         if len(name) >= 4:
             escaped = re.escape(name)
-            dynamic[f"company_name:{name[:20]}"] = (escaped, f"Source company name")
-    for ticker in (tickers or []):
+            dynamic[f"company_name:{name[:20]}"] = (escaped, "Source company name")
+    for ticker in tickers or []:
         if len(ticker) >= 2 and len(ticker) <= 6:
-            dynamic[f"ticker:{ticker}"] = (rf"\b{re.escape(ticker)}\b", f"Source ticker")
-    for name in (executive_names or []):
+            dynamic[f"ticker:{ticker}"] = (rf"\b{re.escape(ticker)}\b", "Source ticker")
+    for name in executive_names or []:
         if len(name) >= 5:
             escaped = re.escape(name)
-            dynamic[f"executive:{name[:20]}"] = (escaped, f"Executive name")
-    for cik in (ciks or []):
+            dynamic[f"executive:{name[:20]}"] = (escaped, "Executive name")
+    for cik in ciks or []:
         if len(cik) >= 7:
-            dynamic[f"cik:{cik[:10]}"] = (re.escape(cik), f"CIK number")
+            dynamic[f"cik:{cik[:10]}"] = (re.escape(cik), "CIK number")
     return dynamic
 
 

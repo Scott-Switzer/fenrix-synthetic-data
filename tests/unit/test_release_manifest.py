@@ -6,8 +6,6 @@ manifest serialization works correctly.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from fenrix_synthetic.package.release_manifest import (
@@ -87,6 +85,7 @@ class TestReleaseManifestSerialization:
         j = manifest.to_json()
         assert '"identity_map_included": false' in j or '"identity_map_included":false' in j
         import json
+
         parsed = json.loads(j)
         assert parsed["identity_map_included"] is False
 

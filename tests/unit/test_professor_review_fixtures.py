@@ -23,7 +23,12 @@ from typing import Any
 import pytest
 import yaml
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "professor_review" / "identification_cases.yaml"
+FIXTURE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "fixtures"
+    / "professor_review"
+    / "identification_cases.yaml"
+)
 
 # Leak classes confirmed in V2 batches, grouped by whether they are
 # addressable by deterministic pattern matching (Tier 0) or require
@@ -118,7 +123,9 @@ class TestV2FixtureLoads:
             assert info.get("company"), f"Missing company name for {cid}"
             assert info.get("broad_archetype"), f"Missing broad_archetype for {cid}"
 
-    def test_professor_guesses_match_company_count(self, actual_sources: dict[str, Any], professor_guesses: dict[str, Any]) -> None:
+    def test_professor_guesses_match_company_count(
+        self, actual_sources: dict[str, Any], professor_guesses: dict[str, Any]
+    ) -> None:
         """There must be a professor guess for every actual source company."""
         assert len(professor_guesses) == len(actual_sources), (
             f"Expected {len(actual_sources)} guesses, got {len(professor_guesses)}"
@@ -160,7 +167,9 @@ class TestLeakClassesRepresented:
         di = fixture_data["leak_classes"]["direct_identifier"]
         assert di["severity"] == "blocking"
 
-    def test_blocking_leak_classes_have_blocking_severity(self, fixture_data: dict[str, Any]) -> None:
+    def test_blocking_leak_classes_have_blocking_severity(
+        self, fixture_data: dict[str, Any]
+    ) -> None:
         """Known blocking leak classes must have blocking severity."""
         blocking = {
             "direct_identifier",
@@ -234,9 +243,7 @@ class TestProfessorGuessesAsEvidence:
             if g.get("correct"):
                 continue  # Skip the one correct guess
             cat = g.get("guess_category", "")
-            assert cat in ("peer", "sector"), (
-                f"{cid}: expected 'peer' or 'sector', got '{cat}'"
-            )
+            assert cat in ("peer", "sector"), f"{cid}: expected 'peer' or 'sector', got '{cat}'"
 
     def test_wrong_guesses_have_distance_info(self, professor_guesses: dict[str, Any]) -> None:
         """Every wrong guess must document the guess_distance."""
@@ -263,19 +270,24 @@ class TestV3ReleaseGateBehavior:
     only requires: no exact hits, no direct identifiers, no metadata leaks.
     """
 
-    def test_v2_only_one_exact_hit_is_blocking_level(self, professor_guesses: dict[str, Any]) -> None:
+    def test_v2_only_one_exact_hit_is_blocking_level(
+        self, professor_guesses: dict[str, Any]
+    ) -> None:
         """The one exact hit in V2 represents a blocking-level failure for V3.
 
         V3 should produce ZERO exact hits. V2's single exact hit (PepsiCo)
         is the proof that the V2 pipeline was not release-safe.
         """
-        exact_hits = [cid for cid, g in professor_guesses.items() if g.get("guess_category") == "exact"]
+        exact_hits = [
+            cid for cid, g in professor_guesses.items() if g.get("guess_category") == "exact"
+        ]
         assert len(exact_hits) == 1, (
-            f"V2 had {len(exact_hits)} exact hits. "
-            "V3 target: 0 exact hits (blocking failure)."
+            f"V2 had {len(exact_hits)} exact hits. V3 target: 0 exact hits (blocking failure)."
         )
 
-    def test_v2_wrong_guesses_indicate_quasi_identifier_risk(self, professor_guesses: dict[str, Any]) -> None:
+    def test_v2_wrong_guesses_indicate_quasi_identifier_risk(
+        self, professor_guesses: dict[str, Any]
+    ) -> None:
         """V2's 7 wrong peer/sector guesses indicate quasi-identifier leakage.
 
         These are NOT blocking but MUST be scored as warnings. V3 must
@@ -316,7 +328,9 @@ class TestV3ReleaseGateBehavior:
 class TestRemediationEncoded:
     """Company-specific remediation targets must be encoded."""
 
-    def test_remediation_has_all_eight_companies(self, fixture_data: dict[str, Any], actual_sources: dict[str, Any]) -> None:
+    def test_remediation_has_all_eight_companies(
+        self, fixture_data: dict[str, Any], actual_sources: dict[str, Any]
+    ) -> None:
         """Remediation entries must exist for all 8 companies."""
         rem = fixture_data["remediation"]
         for cid in actual_sources:
@@ -329,7 +343,9 @@ class TestRemediationEncoded:
             assert changes, f"{cid}: empty required_changes"
             assert len(changes) >= 1, f"{cid}: empty required_changes"
 
-    def test_remediation_for_exact_hit_has_broad_archetype(self, professor_guesses: dict[str, Any], fixture_data: dict[str, Any]) -> None:
+    def test_remediation_for_exact_hit_has_broad_archetype(
+        self, professor_guesses: dict[str, Any], fixture_data: dict[str, Any]
+    ) -> None:
         """The exact-hit company must have broad archetype remediation."""
         correct_cid = None
         for cid, g in professor_guesses.items():
@@ -339,7 +355,7 @@ class TestRemediationEncoded:
         assert correct_cid is not None, "No correct guess found"
         rem = fixture_data["remediation"][correct_cid]
         required = rem["required_changes"]
-        has_archetype = any(
-            "archetype" in c.lower() or "broad" in c.lower() for c in required
+        has_archetype = any("archetype" in c.lower() or "broad" in c.lower() for c in required)
+        assert has_archetype, (
+            f"No broad archetype remediation for exact-hit {correct_cid}: {required}"
         )
-        assert has_archetype, f"No broad archetype remediation for exact-hit {correct_cid}: {required}"

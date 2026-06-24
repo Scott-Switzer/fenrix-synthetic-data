@@ -1287,7 +1287,9 @@ class ProfessorBundleOrchestrator:
                 "It demonstrates the pipeline architecture but is NOT production-ready.\n"
                 "See run_summary.json for build_mode=fixture and strict_fixture_ready=true.\n"
             )
-            marker_path = self.config.output_root / "public" / "FIXTURE_BUILD_NOT_PROFESSOR_READY.txt"
+            marker_path = (
+                self.config.output_root / "public" / "FIXTURE_BUILD_NOT_PROFESSOR_READY.txt"
+            )
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.write_text(fixture_marker, encoding="utf-8")
 
@@ -1354,16 +1356,23 @@ class ProfessorBundleOrchestrator:
         if not repo_sha or not branch:
             try:
                 import subprocess
+
                 if not repo_sha:
                     result = subprocess.run(
                         ["git", "rev-parse", "HEAD"],
-                        capture_output=True, text=True, check=False, cwd=Path.cwd(),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        cwd=Path.cwd(),
                     )
                     repo_sha = result.stdout.strip() if result.returncode == 0 else ""
                 if not branch:
                     result = subprocess.run(
                         ["git", "branch", "--show-current"],
-                        capture_output=True, text=True, check=False, cwd=Path.cwd(),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        cwd=Path.cwd(),
                     )
                     branch = result.stdout.strip() if result.returncode == 0 else ""
             except Exception:
@@ -1397,11 +1406,18 @@ class ProfessorBundleOrchestrator:
             excluded_private_artifacts=[
                 "private/evidence/evidence_graph.json",
                 "private/replacement_plan.json",
-                "identity", "checkpoints", "raw", ".env", "*.key", "*.pem",
+                "identity",
+                "checkpoints",
+                "raw",
+                ".env",
+                "*.key",
+                "*.pem",
             ],
             known_limitations=[
                 "Fixture build — not professor-ready",
-            ] if not self.config.strict else [
+            ]
+            if not self.config.strict
+            else [
                 "Strict production build",
             ],
         )
