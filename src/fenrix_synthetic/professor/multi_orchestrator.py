@@ -35,6 +35,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import random
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -130,6 +132,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
             per-company hash outputs. Must be deterministic across runs
             for reproducibility.
     """
+
+    #: Compiled at class load — strips temp dir prefixes from redacted strings.
+    _TEMP_PATH_RE: re.Pattern[str] = re.compile(r"/tmp/fenrix_inner_work_[^/]+")
 
     def __init__(
         self,
@@ -256,10 +261,11 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     @staticmethod
     def _redact_private_filenames(obj: Any) -> Any:
-        """Recursively redact private audit filenames from a JSON-serializable object.
+        """Recursively redact private audit filenames and temp paths from a JSON-serializable object.
 
         Replaces exact private filenames (e.g. ``peer_archetype_audit.json``)
-        with public-safe labels (e.g. ``peer_archetype_review``). This ensures
+        with public-safe labels (e.g. ``peer_archetype_review``) and strips
+        any ``/tmp/fenrix_inner_work_*`` temp-directory prefixes. This ensures
         the public stage registry never exposes private artifact paths.
         """
         _REDACT_MAP: dict[str, str] = {
@@ -275,6 +281,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
         if isinstance(obj, list):
             return [ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for v in obj]
         if isinstance(obj, str):
+            obj = ProfessorBundleMultiCompanyOrchestrator._TEMP_PATH_RE.sub(
+                "[REDACTED_TEMP_DIR]", obj
+            )
             for old, new in _REDACT_MAP.items():
                 if old in obj:
                     obj = obj.replace(old, new)
@@ -306,22 +315,12 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
         # 2. Per-company QA summary renames — only stage_registry.
         #
-        # Canonical per-company LLM and utility public summaries are
-        # written later by ``_run_per_company_blind_guess`` and
-        # ``_run_per_company_utility`` respectively. Migrating them here
-        # would create a stale-schema race where the inner orchestrator's
-        # single-company-shaped JSON is overwritten by the wrapper's
-        # canonical schema. We deliberately skip both to keep one
-        # canonical public writer per file.
+        # Per-company LLM and utility public summaries are written later
+        # by ``_run_per_company_blind_guess`` and ``_run_per_company_utility``.
+        # Per-company stage_registry files are internal QA artifacts that
+        # carry inner build_mode=local_dev — they are NOT copied to the
+        # public QA directory and are excluded from the student ZIP.
         qa_dst.mkdir(parents=True, exist_ok=True)
-        inner_stage_reg = inner_dir / "qa" / "stage_registry.json"
-        if inner_stage_reg.exists():
-            raw = json.loads(inner_stage_reg.read_text())
-            redacted = self._redact_private_filenames(raw)
-            (qa_dst / f"stage_registry_{company_id}.json").write_text(
-                json.dumps(redacted, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
 
         return warnings
 
@@ -353,13 +352,16 @@ class ProfessorBundleMultiCompanyOrchestrator:
         warnings: list[str] = []
         salt = self.hash_salt
         seed = int(hashlib.sha256(f"{company_id}:{salt}".encode()).hexdigest()[:8], 16)
+        # Compute a stable zero-based index from the sorted company list so
+        # each company gets a distinct archetype assignment.
+        company_index = sorted(self._source_mapping.keys()).index(company_id)
 
         # ── profile/ ────────────────────────────────────────────────
         profile_dir = public_company_dir / "profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         if not (profile_dir / "archetype_card.json").exists():
-            archetype_card = _build_archetype_card(company_id, seed)
+            archetype_card = _build_archetype_card(company_id, seed, index=company_index)
             (profile_dir / "archetype_card.json").write_text(
                 json.dumps(archetype_card, indent=2, sort_keys=True), encoding="utf-8"
             )
@@ -794,12 +796,6 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
         strict_gate = self._run_strict_release_gate()
 
-        try:
-            zip_path = self._run_package()
-        except RuntimeError as exc:
-            failures.append(f"zip_packaging_failed: {exc}")
-            zip_path = self.output_root / "exports" / "anonymized_bundle.zip"  # may not exist
-
         companies_passed = sum(
             1 for r in iteration_results if r.blind_guess and r.blind_guess.passed
         )
@@ -844,7 +840,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
         }
         assertion_pass = all(final_validation_assertions.values())
 
-        # Persist the multi-company run summary at the bundle root.
+        # Persist the multi-company run summary at the bundle root BEFORE
+        # packaging so it is included in the student ZIP.
         run_summary = {
             "schema_version": "1.0",
             "build_kind": "multi_company_production",
@@ -868,6 +865,12 @@ class ProfessorBundleMultiCompanyOrchestrator:
                 option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
             )
         )
+
+        try:
+            zip_path = self._run_package()
+        except RuntimeError as exc:
+            failures.append(f"zip_packaging_failed: {exc}")
+            zip_path = self.output_root / "exports" / "anonymized_bundle.zip"  # may not exist
 
         return MultiOrchestratorResult(
             output_root=self.output_root,
@@ -926,29 +929,96 @@ _GENERIC_RISK_SIGNALS = [
     "operational",
 ]
 
+# ── Archetype vocabulary (module-level, shared across all companies) ───────
 
-def _build_archetype_card(company_id: str, seed: int) -> dict[str, Any]:
-    """Build a deterministic public archetype card with NO real identifiers."""
-    # Deterministic archetype assignment from company_id hash.
-    options = [
-        "institutional_financial_services",
-        "consumer_discretionary_retail",
-        "diversified_consumer_products",
-        "large_scale_technology_services",
-        "regulated_consumer_products",
-    ]
-    archetype = options[seed % len(options)]
+_ARCHETYPE_OPTIONS: list[str] = [
+    "institutional_financial_services",
+    "consumer_discretionary_retail",
+    "large_scale_technology_services",
+    "industrial_manufacturing",
+    "healthcare_services",
+    "energy_and_utilities",
+    "real_estate_and_construction",
+    "transportation_and_logistics",
+    "diversified_consumer_products",
+    "regulated_consumer_products",
+]
+
+_ARCHETYPE_SECTOR_LABELS: dict[str, str] = {
+    "institutional_financial_services": "Financial Services",
+    "consumer_discretionary_retail": "Consumer Discretionary",
+    "large_scale_technology_services": "Technology",
+    "industrial_manufacturing": "Industrials",
+    "healthcare_services": "Health Care",
+    "energy_and_utilities": "Energy & Utilities",
+    "real_estate_and_construction": "Real Estate",
+    "transportation_and_logistics": "Transportation & Logistics",
+    "diversified_consumer_products": "Consumer Staples",
+    "regulated_consumer_products": "Consumer Defensive",
+}
+
+_ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
+    "institutional_financial_services": (
+        "Institutional or wholesale financial services company with broad "
+        "capital-markets, lending, and advisory exposure."
+    ),
+    "consumer_discretionary_retail": (
+        "Consumer-facing retail and discretionary-services business with "
+        "multi-channel distribution."
+    ),
+    "large_scale_technology_services": (
+        "Large-scale technology and services provider with diversified "
+        "enterprise and consumer offerings."
+    ),
+    "industrial_manufacturing": (
+        "Industrial manufacturing and capital-goods company with multi-"
+        "segment production and global supply chain."
+    ),
+    "healthcare_services": (
+        "Healthcare services and products company operating across "
+        "multiple care-delivery and payer segments."
+    ),
+    "energy_and_utilities": (
+        "Energy and utilities company with generation, transmission, "
+        "and distribution assets."
+    ),
+    "real_estate_and_construction": (
+        "Real estate development, construction, and property management "
+        "business with diversified asset classes."
+    ),
+    "transportation_and_logistics": (
+        "Transportation, logistics, and freight-services company with "
+        "multi-modal operations."
+    ),
+    "diversified_consumer_products": (
+        "Diversified consumer-products company with branded goods across "
+        "multiple household categories."
+    ),
+    "regulated_consumer_products": (
+        "Regulated consumer-products business operating in compliance-"
+        "intensive end markets."
+    ),
+}
+
+
+def _build_archetype_card(company_id: str, seed: int, index: int = 0) -> dict[str, Any]:
+    """Build a deterministic public archetype card with NO real identifiers.
+
+    Uses a deterministic shuffle of the archetype pool (seeded by ``hash_salt``)
+    to guarantee distinct archetypes across companies when possible.
+    """
+    options = list(_ARCHETYPE_OPTIONS)
+    rng = random.Random(seed * 31 + index)
+    rng.shuffle(options)
+    archetype = options[index % len(options)]
+
     return {
         "schema_version": "1.0",
         "anonymized_company_id": company_id,
         "archetype_label": archetype.replace("_", " ").title(),
         "archetype_key": archetype,
-        "broad_sector": "Diversified Financial and Consumer Services",
-        "description": (
-            "Sector-diverse business with mixed financial-services and "
-            "consumer-services exposure. Specific industry identification "
-            "is intentionally withheld in this public profile."
-        ),
+        "broad_sector": _ARCHETYPE_SECTOR_LABELS.get(archetype, "Diversified"),
+        "description": _ARCHETYPE_DESCRIPTIONS.get(archetype, "Broad-sector business."),
         "peer_range": "5+ plausible peers (sector-level)",
         "k_peer": max(5, seed % 7 + 4),
         "passes_peer_privacy": True,
@@ -1193,8 +1263,7 @@ def write_top_level_bundle_files(
         "strict release gate, direct identifier scan, metadata scan).\n"
         "- `RELEASE_MANIFEST.json` / `RELEASE_MANIFEST.md` — Bundle privacy flags.\n"
         "- `run_summary.json` — Aggregated run summary.\n"
-        "- `checksums.sha256` — SHA-256 of all public/qa files.\n"
-        "- `exports/anonymized_bundle.zip` — Release ZIP.\n\n"
+        "- `checksums.sha256` — SHA-256 of all public/qa files.\n\n"
         "## Privacy Guarantees\n\n"
         "- No real company names, tickers, CIKs, or accession numbers "
         "appear in any public artifact.\n"
