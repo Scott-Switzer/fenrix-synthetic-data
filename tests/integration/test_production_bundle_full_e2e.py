@@ -165,3 +165,41 @@ def test_eight_company_run_zip_path_exists(
     result = orch.run()
     # Whether or not packaging succeeded, the path is set.
     assert result.zip_path == output_root / "exports" / "anonymized_bundle.zip"
+
+
+def test_one_canonical_public_llm_file_per_company(
+    tmp_path: Path, source_mapping_path: Path, output_root: Path
+) -> None:
+    """Phase 8F Step 1 invariant: exactly one canonical public LLM JSON
+    per company with one canonical schema across all companies.
+
+    The wrapper deliberately migrates only ``stage_registry`` and lets
+    ``_run_per_company_blind_guess`` write the canonical per-company LLM
+    file — no stale single-company-shaped schema copies are created.
+    """
+    if output_root.exists():
+        shutil.rmtree(output_root)
+
+    orch = ProfessorBundleMultiCompanyOrchestrator(
+        output_root=output_root,
+        source_mapping_path=source_mapping_path,
+        llm_provider_cfg={"provider": "offline_stub"},
+    )
+    orch.run()
+
+    qa_dir = output_root / "qa"
+    per_company_files = sorted(qa_dir.glob("llm_blind_guess_COMPANY_*.json"))
+    assert len(per_company_files) == 8, [f.name for f in per_company_files]
+
+    # Schema uniformity: every file shares the same top-level keys.
+    import orjson as _orjson
+
+    canonical_keys: set[str] | None = None
+    for fp in per_company_files:
+        data = _orjson.loads(fp.read_bytes())
+        if isinstance(data, dict):
+            keys = set(data.keys())
+            if canonical_keys is None:
+                canonical_keys = keys
+            else:
+                assert keys == canonical_keys, (fp.name, keys, canonical_keys)

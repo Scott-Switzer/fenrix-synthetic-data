@@ -250,18 +250,21 @@ class ProfessorBundleMultiCompanyOrchestrator:
         else:
             warnings.append(f"{company_id}: inner public/anonymized/{company_id} missing")
 
-        # 2. Per-company QA summary renames
-        rename_map = {
-            "llm_blind_guess_summary.json": f"llm_blind_guess_{company_id}.json",
-            "utility_preservation_summary.json": f"utility_preservation_{company_id}.json",
-            "stage_registry.json": f"stage_registry_{company_id}.json",
-        }
+        # 2. Per-company QA summary renames — only stage_registry.
+        #
+        # Canonical per-company LLM and utility public summaries are
+        # written later by ``_run_per_company_blind_guess`` and
+        # ``_run_per_company_utility`` respectively. Migrating them here
+        # would create a stale-schema race where the inner orchestrator's
+        # single-company-shaped JSON is overwritten by the wrapper's
+        # canonical schema. We deliberately skip both to keep one
+        # canonical public writer per file.
         qa_dst.mkdir(parents=True, exist_ok=True)
-        for inner_name, outer_name in rename_map.items():
-            src = inner_dir / "qa" / inner_name
-            dst = qa_dst / outer_name
-            if src.exists():
-                shutil.copy(str(src), str(dst))
+        if (inner_dir / "qa" / "stage_registry.json").exists():
+            shutil.copy(
+                str(inner_dir / "qa" / "stage_registry.json"),
+                str(qa_dst / f"stage_registry_{company_id}.json"),
+            )
 
         return warnings
 

@@ -126,8 +126,19 @@ NOT used in production: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`
 - **Max score:** `<filled at end>`
 - **Utility gate:** `<filled at end>`
 
-## 17. Known limitations
+## 17. Known limitations (CAUSE — honest Case B)
 
+- **SEC content classification:** `ArchiveInventorySecProvider` is
+  *archive-indexed deterministic reconstructed stubs*, NOT
+  *archive-backed reconstructed content*. The inventory is loaded
+  (so per-company ticker routing wires correctly) but
+  `discover_filings` hardcodes `period_end`, `accession_ref`, and
+  `filing_date`, and `parse_sections` emits four generic 10-K-shaped
+  stub sections (Item 1, 1A, 7, 8) with only sector-neutral text.
+  No per-filing HTML text is currently read from the archive's
+  `text_path` pointers. Claims of "full 20-year filing recreation"
+  are NOT supported by the current code path; this Phase 8F bundle
+  MUST NOT be marketed as archive-backed.
 - **SEC text content:** Per-iteration SEC text is sanitized 10-K-shaped
   stubs. Real per-filing HTML parsing of archived documents remains a
   Phase 6 deliverable.

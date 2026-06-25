@@ -267,6 +267,13 @@ class ArchiveInventorySecProvider(SecProvider):
         # always serves filings for its configured ``company_id``. The
         # orchestrator hardcodes "CHC" in its source_ingestion call; that
         # is harmless here because we route by company_id.
+        #
+        # HONEST CLASSIFICATION — archive-indexed deterministic
+        # reconstructed stubs, NOT archive-backed reconstructed content.
+        # The inventory is loaded (``self._inv_entries``) for reporting
+        # only; ``period_end``, ``accession_ref``, ``filing_date``, and
+        # section text below are hardcoded. Per-filing HTML text from the
+        # archive's ``text_path`` pointers is deferred to Phase 6.
         provenance_key = build_provenance_key(self._company_id, "FILING", form, "2024")
         filing = SourceFiling(
             filing_id=f"archive-{self._company_id.lower()}-{form.lower()}-001",
