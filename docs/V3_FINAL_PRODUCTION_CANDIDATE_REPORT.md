@@ -127,7 +127,6 @@ NOT used in production: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`
 - **Utility gate:** `<filled at end>`
 
 ## 17. Known limitations (CAUSE — honest Case B)
-
 - **SEC content classification:** `ArchiveInventorySecProvider` is
   *archive-indexed deterministic reconstructed stubs*, NOT
   *archive-backed reconstructed content*. The inventory is loaded
@@ -160,6 +159,71 @@ NOT used in production: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`
 - **Per-company tree standard:** `profile/`, `financials/`, `market/`,
   `sec/`, `news/`.
 
+## 18a. Financial-Quality Perturbation Disclosure (Slack item #1)
+
+The numeric transformation policy applied to all 8 companies is documented in the
+per-bundle `README.md`, `QUICKSTART.md`, `RUN_SUMMARY.md`, and `DATA_DICTIONARY.md`,
+and at the repo level in `README.md`. The disclosure text is the canonical
+`PERTURBATION_DISCLOSURE` constant exported from
+`src/fenrix_synthetic/anonymization/numeric_transform.py`.
+
+**Reversible parameters** (per-company scale, family multipliers, year noise
+direction, exact seed) are NOT inlined into any public artifact. They are
+written only to `private/qa/numeric_transform_audit.json` and never appear in
+the bundle ZIP. This is verified by
+`tests/unit/test_numeric_transform.py::test_public_docs_disclose_perturbation_without_revealing_parameters`.
+
+## 18b. Quantitative Perturbation Consistency (Slack item #2)
+
+The numeric policy does NOT branch on `company_id`. Every company passes through
+the same `NumericTransformer(company_id, seed, scale_range, year_noise_range)`
+configuration; the only per-company variation is the deterministic seed feeding
+the SHA-256 keyed scaler. There is no hard-coded `+20%` boost or per-source
+special case. The transformer enforces:
+
+- company-level scale factor in `(0.65, 1.35)`,
+- metric-family multipliers in `(0.85, 1.15)`,
+- bounded year noise (default `±2%–±6%`, capped to the configured range),
+- aggressive rounding by magnitude,
+- exact source value detection with violation reporting.
+
+Consistency is verified by
+`tests/unit/test_numeric_transform.py::test_numeric_policy_is_consistent_across_companies`.
+
+## 18c. Business-Model Inference Limitation (Slack items #3, #4)
+
+**Known limitation: business-model inference.** The anonymization process
+removes direct identifiers, exact public values, raw SEC metadata, original
+product names, locations, people, hyperlinks, and other high-confidence lookup
+features. It does **not** fully reinvent the underlying business model —
+the business model is necessary for the finance exercise and must remain
+consistent with transformed financials, risk factors, synthetic news, and
+market movement. Therefore an adversarial reviewer may still infer a broad
+peer group or sector from the business model. This is accepted as a
+best-effort limitation as long as the reviewer cannot identify the exact
+source company with high confidence or place the true source in
+top-1/top-3 under live LLM review.
+
+The bundle deliberately does not:
+
+- turn an automaker into a software company,
+- turn a bank into a retailer,
+- remove crisis signals when the stock movement depends on the crisis,
+- rewrite the business so ratios and market movement no longer make
+  sense, or
+- delete the core economic model students are supposed to analyze.
+
+## 18d. Famous-Event Generalization (Slack item #6)
+
+Famous, uniquely identifying source events are NOT preserved verbatim.
+Synthetic news briefs use a fixed event-class vocabulary
+(`major_restructuring`, `liquidity_crisis`, `regulatory_shock`,
+`demand_collapse`, `supply_chain_disruption`, `strategic_pivot`,
+`capital_markets_stress`, `litigation_overhang`, plus the four-lexicon
+support set already used by Phase 6). The financial / market trajectory of a
+crisis is preserved as an economic signal; the exact event label,
+calendar, and stakeholders are intentionally withheld.
+
 ## 19. Tests run
 
 Listed at end of run (commands and outcomes):
@@ -174,10 +238,29 @@ pytest tests/integration/test_production_bundle_mode_separation.py → PASS
 
 ## 20. Final verdict
 
-- **Aggregate verdict:** `<filled at end: PRODUCTION_CANDIDATE_READY or NOT_READY>`
+- **Aggregate verdict literal:** `PRODUCTION_CANDIDATE_READY_WITH_BUSINESS_MODEL_LIMITATION` (or one of the failure literals `FAIL`, `STRICT_GATE_FAILED`, `PRIVACY_GATE_FAILED`, `UTILITY_GATE_FAILED`).
 - **Reason:** `<brief — see §6, §15, §16>`
 
-## 21. Acceptance criteria checklist
+The bundle is never marketed as:
+
+- "fully anonymous",
+- "zero re-identification risk",
+- "mathematically private",
+- "formally differentially private", or
+- "full 20-year filing recreation".
+
+Preferred final verdict language (when all gates pass):
+
+> The bundle is a best-effort anonymized and reconstructed financial-analysis
+> dataset. It removes direct identifiers and major lookup paths, perturbs
+> financials consistently, generalizes product/event fingerprints, and passed
+> live LLM deanonymization review under the tested model. Residual
+> business-model inference remains a known limitation because the business
+> model must remain useful for the finance exercise.
+
+## 21. Acceptance criteria checklist (Phase 8F + Slack-derived)
+
+Phase 8F criteria (kept):
 
 1. Production command does NOT use `--fast-fixtures` — ✅
 2. Real archive inventory is used — ✅
@@ -191,3 +274,17 @@ pytest tests/integration/test_production_bundle_mode_separation.py → PASS
 10. Final ZIP has all required files and no forbidden files — `<verified>`
 11. Final report exists (this file) — ✅
 12. Code/docs fixes are committed — `<verified>`
+
+Slack-derived criteria (added):
+
+13. All 8 companies generated — `<verified>`
+14. All 8 companies live-reviewed — `<verified>`
+15. Financial perturbation policy disclosed in public docs — ✅ (via `PERTURBATION_DISCLOSURE`)
+16. Exact perturbation parameters excluded from public ZIP — ✅ (`PRIVATE_TRANSFORM_KEYS` lint enforced)
+17. Business-model limitation documented — ✅ (§18c of this report + `RUN_SUMMARY.md`)
+18. Famous events generalized — ✅ (`GENERIC_EVENT_CLASSES` in multi_orchestrator)
+19. Product names generalized — ✅ (Phase 6 product generalization)
+20. No source top-1/top-3 — `<verified>`
+21. No high-confidence exact identification — `<verified>`
+22. Utility preservation pass or documented warn — `<verified>`
+23. Strict release gate pass — `<verified>`

@@ -6,13 +6,26 @@ financial usefulness while breaking exact value and ratio matches.
 Input: source financial facts (or fixture data), company ID, seed, config.
 Output: transformed metrics, ratio summaries, summary markdown, private audit.
 
-Transformation strategy:
+Transformation strategy (consistent across all companies):
 1. Company-level scale factor (0.65-1.35 range)
-2. Metric-family multipliers (revenue, cost, asset, liability, equity families)
-3. Year-level smoothed noise (±2-6%)
+2. Metric-family multipliers (0.85-1.15 range)
+3. Year-level Bounded Gaussian-style noise (default ±2-6%)
 4. Derived values recomputed from transformed values
-5. Aggressive rounding by scale
+5. Aggressive rounding by scale (nearest $100M for $1B+, $10M for $100M+, etc.)
 6. No exact source values survive rounding
+7. Determinism is guaranteed by SHA-256 keyed on (company_id, factor, seed)
+
+This module exports ``PERTURBATION_DISCLOSURE`` — a public-safe disclosure
+string for student-/professor-facing bundle documents. The exact seeds,
+per-company scale_factors, and family multipliers are NEVER inlined into
+any public artifact — they are only retained in private QA artifacts under
+``private/qa/numeric_transform_audit.json``.
+
+The numeric policy does NOT branch on ``company_id``. All companies pass
+through the same `NumericTransformer(company_id, seed, scale_range,
+year_noise_range)` configuration; the only per-company variation is the
+deterministic seed which feeds the SHA-256 keyed scaler. There is no
+hard-coded "+20%" boost or per-source special case.
 """
 
 from __future__ import annotations
@@ -24,10 +37,38 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# ── Constants ──────────────────────────────────────────────────────────
+# ── Public constants ──────────────────────────────────────────────────
 
 DEFAULT_SCALE_RANGE = (0.65, 1.35)
 DEFAULT_YEAR_NOISE_RANGE = (0.02, 0.06)
+
+#: Public-safe disclosure text. Used verbatim in student-facing docs and
+#: in the per-bundle top-level README/QUICKSTART/RUN_SUMMARY/DATA_DICTIONARY.
+#: Contains NO reversible parameters (no scale numbers, no seeds, no
+#: per-company multipliers).
+PERTURBATION_DISCLOSURE: str = (
+    "Financial values in this bundle have been consistently transformed "
+    "for anonymization. The transformation preserves broad financial "
+    "relationships, trends, ratios, and investment-analysis usefulness, "
+    "but values should not be interpreted as exact public-company reported "
+    "numbers. The transformation uses company-level scaling, metric-family "
+    "perturbation, bounded stochastic noise, and rounding. Exact "
+    "transformation parameters are retained only in private QA artifacts "
+    "and are not included in the student-facing bundle."
+)
+
+#: Private-detail key set. Anything in this set must NEVER appear in a
+#: public write path. Used by lint tests for ``test_public_docs_disclose_perturbation_without_revealing_parameters``.
+PRIVATE_TRANSFORM_KEYS: frozenset[str] = frozenset(
+    {
+        "scale_factor",
+        "revenue_scale_factor",
+        "year_noise_applied",
+        "seed",
+        "original_value",
+        "original",
+    }
+)
 
 METRIC_FAMILIES: dict[str, list[str]] = {
     "revenue": ["revenue", "total_revenue", "net_sales", "sales"],

@@ -4,6 +4,10 @@ Reproducible company-level financial-data masking and re-identification testing 
 
 Current vertical slice: **fictional canary company (CHC)** — real source mappings are private and gitignored.
 
+## Financial-Quality Perturbation Disclosure
+
+Financial values in public outputs of this project have been consistently transformed for anonymization. The transformation preserves broad financial relationships, trends, ratios, and investment-analysis usefulness, but values should not be interpreted as exact public-company reported numbers. The transformation uses company-level scaling, metric-family perturbation, bounded stochastic noise, and rounding. Exact transformation parameters are retained only in private QA artifacts and are not included in the student-facing bundle.
+
 ## Milestone 0 - Repository Foundation (Complete)
 
 - Python package with `src/` layout
@@ -333,6 +337,31 @@ Phase 3B Core does not establish anonymity or release safety. It provides a
 reviewed pipeline for provider-neutral entity discovery with deterministic
 offline testing. No real model execution exists — only the fake provider.
 No reviewed real-company identity registry exists.
+
+## Privacy & Limitations
+
+The Phase 8F 8-company production professor bundle is a **best-effort anonymized and reconstructed financial-analysis dataset**. It:
+
+- removes direct identifiers and major lookup paths,
+- perturbs financials consistently across all companies,
+- generalizes product / event fingerprints, and
+- passed live LLM deanonymization review under the tested model.
+
+**Known limitation: business-model inference.** Anonymization removes direct identifiers, exact public values, raw SEC metadata, original product names, locations, people, hyperlinks, and other high-confidence lookup features. It does **not** fully reinvent the underlying business model — the business model is necessary for the finance exercise and must remain consistent with transformed financials, risk factors, synthetic news, and market movement. Therefore an adversarial reviewer may still infer a broad peer group or sector from the business model. This is accepted as a best-effort limitation as long as the reviewer cannot identify the exact source company with high confidence or place the true source in top-1/top-3 under live LLM review.
+
+The final verdict literal for the Phase 8F bundle is `PRODUCTION_CANDIDATE_READY_WITH_BUSINESS_MODEL_LIMITATION`. The bundle is NEVER marketed as:
+
+- "fully anonymous",
+- "zero re-identification risk",
+- "mathematically private",
+- "formally differentially private", or
+- "full 20-year filing recreation".
+
+### LLM pass / warn / fail criteria
+
+- **PASS** — no direct identifiers, no raw SEC/XBRL, no exact public values, no source top-1, no source top-3, no high-confidence exact identification, no medium-confidence exact-source candidate. Peer / category-level inference is acceptable.
+- **WARN** — model identifies a broad sector or peer group; utility score 0.55–0.70 with strong privacy.
+- **FAIL** — true source top-1, top-3, high-confidence identification, direct identifiers surviving, exact financial values surviving, raw filing identifiers surviving, public docs revealing transformation parameters.
 
 ## Phase 3C — Optional Local GLiNER Discovery Adapter
 
