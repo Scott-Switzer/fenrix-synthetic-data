@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from fenrix_synthetic.anonymization.news_reconstructor import (
@@ -113,9 +112,7 @@ class TestNewsReconstructionStage:
 
         # Public dir should not have private provenance
         assert not any(
-            "provenance" in f.name.lower()
-            for f in public_dir.parent.rglob("*")
-            if f.is_file()
+            "provenance" in f.name.lower() for f in public_dir.parent.rglob("*") if f.is_file()
         )
 
     def test_strict_release_gate_passes_public_news(self, tmp_path: Path) -> None:

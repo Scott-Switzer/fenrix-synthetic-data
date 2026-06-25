@@ -56,9 +56,14 @@ def write_trajectory_attack_summary(
     """Write trajectory attack summary to QA directory."""
     out = Path(output_dir)
     summary_path = out / "trajectory_attack_summary.json"
-    summary_path.write_text(json.dumps({
-        "company_id": company_id,
-        "exact_return_match_count": attack_result.exact_return_match_count,
-        "passes": attack_result.passes,
-    }, indent=2))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "company_id": company_id,
+                "exact_return_match_count": attack_result.exact_return_match_count,
+                "passes": attack_result.passes,
+            },
+            indent=2,
+        )
+    )
     return str(summary_path)

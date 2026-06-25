@@ -21,7 +21,9 @@ class FilingReconstructionAttack:
             "xbrl_namespace": re.compile(r"xbrl[a-z]*:|dei:|us-gaap[a-z]*:|ix:", re.IGNORECASE),
             "sec_gov_url": re.compile(r"sec\.gov", re.IGNORECASE),
             "raw_file_ext": re.compile(r"\.html|\.xml|\.xbrl"),
-            "form_header": re.compile(r"FORM\s+10[- ][KQ]|FORM\s+8[- ]K|FORM\s+DEF14A", re.IGNORECASE),
+            "form_header": re.compile(
+                r"FORM\s+10[- ][KQ]|FORM\s+8[- ]K|FORM\s+DEF14A", re.IGNORECASE
+            ),
         }
 
     def run(
@@ -67,8 +69,14 @@ def check_public_sec_directory(sec_dir: str) -> dict[str, Any]:
         return {"files_checked": 0, "violations": ["Directory not found"], "passes": False}
 
     banned_text = [
-        "CIK", "EntityCentralIndexKey", "ACCESSION NUMBER", "xbrl",
-        "dei:", "us-gaap", "ix:", "sec.gov",
+        "CIK",
+        "EntityCentralIndexKey",
+        "ACCESSION NUMBER",
+        "xbrl",
+        "dei:",
+        "us-gaap",
+        "ix:",
+        "sec.gov",
     ]
 
     for root, _, files in os.walk(sec_dir):
@@ -81,12 +89,12 @@ def check_public_sec_directory(sec_dir: str) -> dict[str, Any]:
                 continue
 
             try:
-                data = open(os.path.join(root, fname), "r", errors="ignore").read().lower()
+                data = open(os.path.join(root, fname), errors="ignore").read().lower()
                 files_checked += 1
                 for ban in banned_text:
                     if ban.lower() in data:
                         violations.append(f"Found banned text '{ban}' in {fname}")
-            except IOError:
+            except OSError:
                 continue
 
     return {

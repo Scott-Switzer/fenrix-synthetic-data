@@ -83,7 +83,7 @@ class NewsReconstructionAttack:
 
         # Executive quote pattern (looks like "said CEO Name," etc.)
         self._quote_pattern = re.compile(
-            r'(?:said|stated|according to|commented)\s+(?:CEO|CFO|President|Chairman|Director|Chief)\s+\w+',
+            r"(?:said|stated|according to|commented)\s+(?:CEO|CFO|President|Chairman|Director|Chief)\s+\w+",
             re.IGNORECASE,
         )
 
@@ -244,8 +244,12 @@ class NewsReconstructionAttack:
                 if len(snippet) < self._verbatim_min_chars:
                     continue
                 # Check for overlapping substrings of at least min_chars
-                for start in range(0, len(snippet) - self._verbatim_min_chars + 1, max(1, (len(snippet) - self._verbatim_min_chars) // 10)):
-                    chunk = snippet[start:start + self._verbatim_min_chars]
+                for start in range(
+                    0,
+                    len(snippet) - self._verbatim_min_chars + 1,
+                    max(1, (len(snippet) - self._verbatim_min_chars) // 10),
+                ):
+                    chunk = snippet[start : start + self._verbatim_min_chars]
                     if chunk in content:
                         result.findings.append(
                             NewsAttackFinding(

@@ -9,9 +9,8 @@ import pytest
 
 from fenrix_synthetic.qa.llm_provider import (
     LLMProviderError,
-    OpenAICompatibleProvider,
     OfflineStubProvider,
-    StubConfig,
+    OpenAICompatibleProvider,
     create_llm_provider,
 )
 
@@ -31,9 +30,12 @@ class TestLiveProviderConfiguration:
         # Ensure env var is not set
         old_val = os.environ.pop("NVIDIA_API_KEY", None)
         try:
-            provider = create_llm_provider("openai_compatible", {
-                "api_key_env": "NONEXISTENT_KEY_ENV_VAR",
-            })
+            provider = create_llm_provider(
+                "openai_compatible",
+                {
+                    "api_key_env": "NONEXISTENT_KEY_ENV_VAR",
+                },
+            )
             with pytest.raises(LLMProviderError):
                 provider.complete_json("test")
         finally:
@@ -78,9 +80,7 @@ class TestLiveProviderConfiguration:
 
     def test_source_mapping_template_exists(self) -> None:
         """Source mapping template file should exist."""
-        template_path = Path(
-            "configs/templates/source_companies.example.yaml"
-        )
+        template_path = Path("configs/templates/source_companies.example.yaml")
         assert template_path.exists(), "Source mapping template missing"
         content = template_path.read_text()
         assert "PLACEHOLDER" in content
@@ -89,9 +89,7 @@ class TestLiveProviderConfiguration:
 
     def test_source_mapping_template_is_safe(self) -> None:
         """Template should not contain real company data."""
-        template_path = Path(
-            "configs/templates/source_companies.example.yaml"
-        )
+        template_path = Path("configs/templates/source_companies.example.yaml")
         content = template_path.read_text()
         # Should use PLACEHOLDER, not real company names
         assert "PLACEHOLDER" in content

@@ -106,11 +106,16 @@ class ProfessorBundleConfig:
         self._source_mapping: dict[str, dict[str, str]] = {}
         if source_mapping_path and source_mapping_path.exists():
             import yaml as _yaml_load
+
             with open(source_mapping_path) as f:
                 data = _yaml_load.safe_load(f) or {}
             self._source_mapping = {
-                k: {"source_company": v.get("source_company", ""), "source_ticker": v.get("source_ticker", "")}
-                for k, v in data.items() if isinstance(v, dict)
+                k: {
+                    "source_company": v.get("source_company", ""),
+                    "source_ticker": v.get("source_ticker", ""),
+                }
+                for k, v in data.items()
+                if isinstance(v, dict)
             }
 
     @property
@@ -171,16 +176,17 @@ class ProfessorBundleOrchestrator:
             self.sec_provider: SecProvider = FixtureSecProvider()
         else:
             sec_type = config.sec_provider.get("provider_type", "OfficialSecApiProvider")
-            sec_config = {
-                "user_agent": config.sec_provider.get(
-                    "user_agent",
-                    "FenrixSyntheticData/0.1 contact@example.com",
-                ),
-                "cache_dir": config.sec_provider.get("cache_dir", ".fenrix_cache/sec"),
-                "cik": config.sec_provider.get("cik"),
-                "max_requests_per_second": config.sec_provider.get("max_requests_per_second", 8),
-                "live_network": config.sec_provider.get("live_network", False),
-            }
+            # Spread provided keys so custom providers (e.g. ArchiveInventorySecProvider)
+            # receive their own ``company_id``, ``archive_inventory``,
+            # ``source_mapping`` etc. Defaults below apply only when keys are absent.
+            sec_config: dict[str, Any] = dict(config.sec_provider or {})
+            sec_config.setdefault(
+                "user_agent",
+                "FenrixSyntheticData/0.1 contact@example.com",
+            )
+            sec_config.setdefault("cache_dir", ".fenrix_cache/sec")
+            sec_config.setdefault("max_requests_per_second", 8)
+            sec_config.setdefault("live_network", False)
             self.sec_provider = create_sec_provider(sec_type, sec_config)
 
         # Choose GLiNER provider based on build mode and config
@@ -920,9 +926,7 @@ class ProfessorBundleOrchestrator:
         # Build private source events from fixture data
         source_events: list[PrivateSourceEvent] = []
         if isinstance(self.sec_provider, FixtureSecProvider):
-            fixture_news: list[dict[str, Any]] = self.sec_provider._fixture.get(
-                "news", []
-            )
+            fixture_news: list[dict[str, Any]] = self.sec_provider._fixture.get("news", [])
         else:
             fixture_news = []
 
@@ -1021,9 +1025,7 @@ class ProfessorBundleOrchestrator:
             provider_kind=ProviderKind.REAL,
         )
 
-    def _run_stage_llm_blind_guess(
-        self, public_dir: Path, private_dir: Path, qa_dir: Path
-    ) -> None:
+    def _run_stage_llm_blind_guess(self, public_dir: Path, private_dir: Path, qa_dir: Path) -> None:
         """Stage 21: LLM_BLIND_GUESS — adversarial LLM blind-guess review.
 
         Runs an LLM against ONLY public bundle content. The model must
@@ -1085,9 +1087,7 @@ class ProfessorBundleOrchestrator:
                     )
                 elif result.score_result and result.score_result.private.verdict.value == "PASS":
                     # Check if there are warnings on the private score detail
-                    has_warnings = bool(
-                        getattr(result.score_result.private, "warnings", [])
-                    )
+                    has_warnings = bool(getattr(result.score_result.private, "warnings", []))
                     if has_warnings:
                         self.registry.set_live_validation(
                             LiveValidationStatus.LIVE_LLM_VALIDATED,
@@ -1102,9 +1102,7 @@ class ProfessorBundleOrchestrator:
                         )
                 else:
                     reason = (
-                        result.score_result.private.reason
-                        if result.score_result
-                        else "unknown"
+                        result.score_result.private.reason if result.score_result else "unknown"
                     )
                     self.registry.set_live_validation(
                         LiveValidationStatus.LIVE_LLM_FAILED,
@@ -1147,13 +1145,9 @@ class ProfessorBundleOrchestrator:
 
         if result.score_result:
             if result.score_result.private.verdict.value == "FAIL":
-                failures.append(
-                    f"LLM blind guess failed: {result.score_result.private.reason}"
-                )
+                failures.append(f"LLM blind guess failed: {result.score_result.private.reason}")
             elif result.score_result.private.verdict.value == "WARN":
-                warnings.append(
-                    f"LLM blind guess warning: {result.score_result.private.reason}"
-                )
+                warnings.append(f"LLM blind guess warning: {result.score_result.private.reason}")
 
         status = StageStatus.FAIL if failures else StageStatus.PASS
         provider_kind = (
@@ -1212,9 +1206,7 @@ class ProfessorBundleOrchestrator:
 
         # Write reports
         private_qa_dir = private_dir / "qa"
-        private_path, public_path = write_utility_reports(
-            result, private_qa_dir, qa_dir
-        )
+        private_path, public_path = write_utility_reports(result, private_qa_dir, qa_dir)
 
         # Determine status
         failures: list[str] = []

@@ -9,7 +9,6 @@ from fenrix_synthetic.anonymization.news_reconstructor import (
     EVENT_CLASSES,
     NewsReconstructor,
     PrivateSourceEvent,
-    SyntheticNewsBrief,
 )
 
 

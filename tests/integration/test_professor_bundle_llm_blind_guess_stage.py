@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from fenrix_synthetic.professor.stages import (
     BuildMode,
     ProfessorStage,
@@ -15,6 +13,10 @@ from fenrix_synthetic.professor.stages import (
     StageStatus,
     StageStatusRecord,
 )
+from fenrix_synthetic.qa.confidence_scoring import (
+    ScoreVerdict,
+    score_blind_guess,
+)
 from fenrix_synthetic.qa.llm_blind_guess import (
     LLMBlindGuessHarness,
     collect_public_content,
@@ -22,11 +24,6 @@ from fenrix_synthetic.qa.llm_blind_guess import (
 from fenrix_synthetic.qa.llm_provider import (
     OfflineStubProvider,
     StubConfig,
-    create_llm_provider,
-)
-from fenrix_synthetic.qa.confidence_scoring import (
-    ScoreVerdict,
-    score_blind_guess,
 )
 
 

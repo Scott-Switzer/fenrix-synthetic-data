@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from fenrix_synthetic.qa.confidence_scoring import (
-    ConfidenceLevel,
     PrivateScoreDetail,
-    PublicScoreSummary,
-    ScoreResult,
     ScoreVerdict,
     _is_company_match,
     redact_for_public,
@@ -87,7 +84,12 @@ class TestScoreBlindGuess:
             "top_candidates": [
                 {"company": "First Bank", "ticker": "FBK", "confidence": "medium", "evidence": []},
                 {"company": "Second Corp", "ticker": "SEC", "confidence": "medium", "evidence": []},
-                {"company": "Canary Holdings Corporation", "ticker": "CHC", "confidence": "medium", "evidence": []},
+                {
+                    "company": "Canary Holdings Corporation",
+                    "ticker": "CHC",
+                    "confidence": "medium",
+                    "evidence": [],
+                },
             ],
             "evidence_summary": "Multiple candidates.",
             "refusal_or_uncertain": False,
@@ -107,7 +109,12 @@ class TestScoreBlindGuess:
             "most_likely_company": "Wrong Company Inc",
             "most_likely_ticker": "WRG",
             "top_candidates": [
-                {"company": "Wrong Company Inc", "ticker": "WRG", "confidence": "high", "evidence": []},
+                {
+                    "company": "Wrong Company Inc",
+                    "ticker": "WRG",
+                    "confidence": "high",
+                    "evidence": [],
+                },
             ],
             "evidence_summary": "High confidence guess.",
             "refusal_or_uncertain": False,
@@ -123,7 +130,12 @@ class TestScoreBlindGuess:
             "most_likely_ticker": "FGS",
             "top_candidates": [
                 {"company": "First Guess", "ticker": "FGS", "confidence": "medium", "evidence": []},
-                {"company": "Canary Holdings Corporation", "ticker": "CHC", "confidence": "medium", "evidence": []},
+                {
+                    "company": "Canary Holdings Corporation",
+                    "ticker": "CHC",
+                    "confidence": "medium",
+                    "evidence": [],
+                },
             ],
             "evidence_summary": "Moderate confidence.",
             "refusal_or_uncertain": False,
@@ -142,7 +154,12 @@ class TestScoreBlindGuess:
             "most_likely_company": "Some Other Corp",
             "most_likely_ticker": "SOC",
             "top_candidates": [
-                {"company": "Some Other Corp", "ticker": "SOC", "confidence": "medium", "evidence": []},
+                {
+                    "company": "Some Other Corp",
+                    "ticker": "SOC",
+                    "confidence": "medium",
+                    "evidence": [],
+                },
             ],
             "evidence_summary": "Moderate confidence.",
             "refusal_or_uncertain": False,
@@ -160,7 +177,12 @@ class TestScoreBlindGuess:
             "most_likely_company": "Canary Holdings Corporation",
             "most_likely_ticker": "CHC",
             "top_candidates": [
-                {"company": "Canary Holdings Corporation", "ticker": "CHC", "confidence": "high", "evidence": []},
+                {
+                    "company": "Canary Holdings Corporation",
+                    "ticker": "CHC",
+                    "confidence": "high",
+                    "evidence": [],
+                },
             ],
             "evidence_summary": "Identified.",
             "refusal_or_uncertain": False,

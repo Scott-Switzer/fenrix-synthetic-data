@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from fenrix_synthetic.qa.news_reconstruction_attack import (
-    NewsAttackFinding,
-    NewsAttackResult,
     NewsReconstructionAttack,
     check_public_news_directory,
 )
@@ -19,9 +17,7 @@ class TestNewsReconstructionAttack:
         """Attack catches copied headline in public output."""
         news_dir = tmp_path / "news"
         news_dir.mkdir()
-        (news_dir / "brief.md").write_text(
-            "Acme Corp Announces Record Profits in Q4 2024"
-        )
+        (news_dir / "brief.md").write_text("Acme Corp Announces Record Profits in Q4 2024")
 
         attack = NewsReconstructionAttack(
             source_headlines=["Acme Corp Announces Record Profits in Q4 2024"],
@@ -35,9 +31,7 @@ class TestNewsReconstructionAttack:
         """Attack catches URL in public output."""
         news_dir = tmp_path / "news"
         news_dir.mkdir()
-        (news_dir / "brief.md").write_text(
-            "For more details, visit https://example.com/news/1234"
-        )
+        (news_dir / "brief.md").write_text("For more details, visit https://example.com/news/1234")
 
         attack = NewsReconstructionAttack()
         result = attack.run(news_dir, "COMPANY_001")
@@ -49,9 +43,7 @@ class TestNewsReconstructionAttack:
         """Attack catches source company name in public output."""
         news_dir = tmp_path / "news"
         news_dir.mkdir()
-        (news_dir / "brief.md").write_text(
-            "Acme Corporation reported strong earnings."
-        )
+        (news_dir / "brief.md").write_text("Acme Corporation reported strong earnings.")
 
         attack = NewsReconstructionAttack(
             source_company_names=["Acme Corporation"],
@@ -59,9 +51,7 @@ class TestNewsReconstructionAttack:
         result = attack.run(news_dir, "COMPANY_001")
 
         assert not result.passed
-        assert any(
-            f.check_name == "source_company_leak" for f in result.findings
-        )
+        assert any(f.check_name == "source_company_leak" for f in result.findings)
 
     def test_attack_catches_source_ticker(self, tmp_path: Path) -> None:
         """Attack catches source ticker in public output."""
@@ -75,9 +65,7 @@ class TestNewsReconstructionAttack:
         result = attack.run(news_dir, "COMPANY_001")
 
         assert not result.passed
-        assert any(
-            f.check_name == "source_ticker_leak" for f in result.findings
-        )
+        assert any(f.check_name == "source_ticker_leak" for f in result.findings)
 
     def test_attack_passes_sanitized_content(self, tmp_path: Path) -> None:
         """Attack passes sanitized synthetic news."""
@@ -116,9 +104,7 @@ class TestNewsReconstructionAttack:
         """Attack catches executive quote patterns."""
         news_dir = tmp_path / "news"
         news_dir.mkdir()
-        (news_dir / "brief.md").write_text(
-            "said CEO John Smith during the earnings call."
-        )
+        (news_dir / "brief.md").write_text("said CEO John Smith during the earnings call.")
 
         attack = NewsReconstructionAttack()
         result = attack.run(news_dir, "COMPANY_001")
@@ -130,9 +116,7 @@ class TestNewsReconstructionAttack:
         """Attack catches named counterparty."""
         news_dir = tmp_path / "news"
         news_dir.mkdir()
-        (news_dir / "brief.md").write_text(
-            "The acquisition of Rival Corporation was completed."
-        )
+        (news_dir / "brief.md").write_text("The acquisition of Rival Corporation was completed.")
 
         attack = NewsReconstructionAttack(
             source_counterparties=["Rival Corporation"],

@@ -7,9 +7,6 @@ from pathlib import Path
 
 from fenrix_synthetic.qa.utility_preservation import (
     CompanyThesis,
-    PublicUtilitySummary,
-    UtilityScoreDetail,
-    UtilityPreservationResult,
     extract_public_thesis,
     score_utility_preservation,
     write_utility_reports,

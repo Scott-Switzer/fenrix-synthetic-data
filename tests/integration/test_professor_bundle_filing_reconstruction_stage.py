@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
-
+from fenrix_synthetic.qa.filing_reconstruction_attack import (
+    FilingReconstructionAttack,
+)
 from fenrix_synthetic.reconstruct.filing_reconstructor import FilingReconstructor
 from fenrix_synthetic.reconstruct.filing_sections import (
     SECTION_BUSINESS,
@@ -18,19 +18,21 @@ from fenrix_synthetic.reconstruct.filing_sections import (
     SECTION_QUARTERLY,
     SECTION_RISK_FACTORS,
 )
-from fenrix_synthetic.qa.filing_reconstruction_attack import (
-    FilingReconstructionAttack,
-)
-
 
 FIXTURE_SECTIONS = [
-    {"section_type": "business", "content": "COMP_FIXTURE_001 is a technology company. CIK: 1234567890."},
+    {
+        "section_type": "business",
+        "content": "COMP_FIXTURE_001 is a technology company. CIK: 1234567890.",
+    },
     {"section_type": "risk_factors", "content": "COMP_FIXTURE_001 faces competition."},
     {"section_type": "mda", "content": "Management discusses fiscal year 2023 results."},
     {"section_type": "financial_summary", "content": "Revenue grew 15% year over year."},
     {"section_type": "quarterly_update_summary", "content": "Q4 results exceeded expectations."},
     {"section_type": "material_events_summary", "content": "Acquisition completed on 2024-01-15."},
-    {"section_type": "governance_proxy_summary", "content": "Board of directors is composed of 9 members."},
+    {
+        "section_type": "governance_proxy_summary",
+        "content": "Board of directors is composed of 9 members.",
+    },
 ]
 
 

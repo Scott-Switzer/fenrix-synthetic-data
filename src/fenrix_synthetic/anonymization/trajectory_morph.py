@@ -36,10 +36,7 @@ class TrajectoryMorphResult:
 
     @staticmethod
     def _compute_returns(prices: list[float]) -> list[float]:
-        return [
-            (prices[i] - prices[i - 1]) / prices[i - 1]
-            for i in range(1, len(prices))
-        ]
+        return [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
 
 
 class TrajectoryMorpher:
@@ -84,10 +81,10 @@ def write_public_price_series(
     market_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = market_dir / "price_series.csv"
-    csv_path.write_text("\n".join(
-        ["date,price"]
-        + [f"day_{i},{p}" for i, p in enumerate(result.morphed_prices)]
-    ) + "\n")
+    csv_path.write_text(
+        "\n".join(["date,price"] + [f"day_{i},{p}" for i, p in enumerate(result.morphed_prices)])
+        + "\n"
+    )
 
     md_path = market_dir / "return_summary.md"
     start_price = result.morphed_prices[0]
@@ -115,13 +112,18 @@ def write_private_trajectory_audit(
     qa_dir.mkdir(parents=True, exist_ok=True)
 
     audit_path = qa_dir / "trajectory_morph_audit.json"
-    audit_path.write_text(json.dumps({
-        "company_id": company_id,
-        "num_source_observations": len(result.source_returns),
-        "num_morphed_observations": len(result.morphed_returns),
-        "max_perturbation_pct": max(
-            abs((m - s) / s) * 100 if s != 0 else 0
-            for s, m in zip(result.source_prices, result.morphed_prices, strict=False)
-        ),
-    }, indent=2))
+    audit_path.write_text(
+        json.dumps(
+            {
+                "company_id": company_id,
+                "num_source_observations": len(result.source_returns),
+                "num_morphed_observations": len(result.morphed_returns),
+                "max_perturbation_pct": max(
+                    abs((m - s) / s) * 100 if s != 0 else 0
+                    for s, m in zip(result.source_prices, result.morphed_prices, strict=False)
+                ),
+            },
+            indent=2,
+        )
+    )
     return str(audit_path)

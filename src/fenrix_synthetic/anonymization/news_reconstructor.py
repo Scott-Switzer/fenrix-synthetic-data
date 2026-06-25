@@ -294,14 +294,10 @@ class NewsReconstructor:
                 continue
 
             # Compute relative period
-            relative_period = self._compute_relative_period(
-                event.source_date, ref_year
-            )
+            relative_period = self._compute_relative_period(event.source_date, ref_year)
 
             # Generate synthetic content
-            title = self._TITLE_TEMPLATES.get(
-                event.event_class, "Corporate Event Update"
-            )
+            title = self._TITLE_TEMPLATES.get(event.event_class, "Corporate Event Update")
             description = self._DESCRIPTION_TEMPLATES.get(
                 event.event_class,
                 "A corporate event occurred during the relative period.",

@@ -8,7 +8,6 @@ from fenrix_synthetic.reconstruct.filing_sections import (
     SECTION_COVERAGE,
 )
 
-
 SAMPLE_SECTIONS = [
     {
         "section_type": "business",
@@ -26,7 +25,10 @@ SAMPLE_SECTIONS = [
 
 
 SAMPLE_SECTIONS_NO_IDENTIFIERS = [
-    {"section_type": "business", "content": "The company is a leading provider of software solutions."},
+    {
+        "section_type": "business",
+        "content": "The company is a leading provider of software solutions.",
+    },
 ]
 
 

@@ -11,7 +11,6 @@ from fenrix_synthetic.reconstruct.filing_sections import (
     extract_risk_factors_section,
 )
 
-
 TENK_TEXT = """
 ITEM 1. BUSINESS
 

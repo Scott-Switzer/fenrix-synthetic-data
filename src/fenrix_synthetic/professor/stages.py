@@ -318,9 +318,7 @@ class StageRegistry:
         """Current live LLM validation status."""
         return self._live_validation_status
 
-    def set_live_validation(
-        self, status: LiveValidationStatus, detail: str = ""
-    ) -> None:
+    def set_live_validation(self, status: LiveValidationStatus, detail: str = "") -> None:
         """Record the live LLM validation outcome.
 
         Should be called after the LLM_BLIND_GUESS stage completes.

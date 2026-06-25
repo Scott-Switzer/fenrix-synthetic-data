@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from fenrix_synthetic.anonymization.trajectory_morph import (
     TrajectoryMorphConfig,
     TrajectoryMorpher,
-    write_public_price_series,
     write_private_trajectory_audit,
+    write_public_price_series,
 )
 from fenrix_synthetic.qa.trajectory_attack import (
     TrajectoryAttack,
@@ -28,14 +26,15 @@ def _make_test_prices(n: int = 252) -> list[float]:
 
 
 def _make_test_dates(n: int = 252) -> list[str]:
-    return [f"2024-{(i//28)+1:02d}-{((i%28)+1):02d}" for i in range(n)]
+    return [f"2024-{(i // 28) + 1:02d}-{((i % 28) + 1):02d}" for i in range(n)]
 
 
 class TestTrajectoryProfessorStage:
     """Test that fixture professor build emits market outputs."""
 
     def test_fixture_build_emits_price_series_csv(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         prices = _make_test_prices()
         dates = _make_test_dates()
@@ -49,7 +48,8 @@ class TestTrajectoryProfessorStage:
         assert "date,price" in content
 
     def test_fixture_build_emits_return_summary_md(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         prices = _make_test_prices()
         dates = _make_test_dates()
@@ -95,7 +95,9 @@ class TestTrajectoryProfessorStage:
         attack_result = attack.run(result.source_returns, result.morphed_returns)
         qa_dir = tmp_path / "qa"
         qa_dir.mkdir(parents=True)
-        summary_path = write_trajectory_attack_summary(str(qa_dir), "COMP_FIXTURE_001", attack_result)
+        summary_path = write_trajectory_attack_summary(
+            str(qa_dir), "COMP_FIXTURE_001", attack_result
+        )
         assert Path(summary_path).exists()
 
     def test_stage_fails_if_exact_returns_copied(self) -> None:
@@ -113,8 +115,12 @@ class TestTrajectoryProfessorStage:
     def test_deterministic_with_same_seed(self) -> None:
         prices = _make_test_prices()
         dates = _make_test_dates()
-        m1 = TrajectoryMorpher(TrajectoryMorphConfig(seed=42)).morph("COMP_FIXTURE_001", dates, prices)
-        m2 = TrajectoryMorpher(TrajectoryMorphConfig(seed=42)).morph("COMP_FIXTURE_001", dates, prices)
+        m1 = TrajectoryMorpher(TrajectoryMorphConfig(seed=42)).morph(
+            "COMP_FIXTURE_001", dates, prices
+        )
+        m2 = TrajectoryMorpher(TrajectoryMorphConfig(seed=42)).morph(
+            "COMP_FIXTURE_001", dates, prices
+        )
         assert m1.morphed_prices == m2.morphed_prices
 
     def test_public_files_no_source_identity(self, tmp_path: Path) -> None:

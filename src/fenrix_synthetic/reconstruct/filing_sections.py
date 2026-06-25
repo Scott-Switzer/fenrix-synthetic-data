@@ -95,7 +95,7 @@ def _extract_between(text: str, start_pats: list[str], end_pats: list[str]) -> s
         return ""
     end = len(text)
     for pat in end_pats:
-        m = re.search(pat, text[start + 1:], re.IGNORECASE)
+        m = re.search(pat, text[start + 1 :], re.IGNORECASE)
         if m:
             cand = start + 1 + m.start()
             if cand < end:

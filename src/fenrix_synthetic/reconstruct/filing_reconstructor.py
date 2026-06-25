@@ -6,7 +6,6 @@ Removes identifiers, sanitizes dates, and preserves business-analysis structure.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Any
 
@@ -135,7 +134,9 @@ class FilingReconstructor:
 
     def _render_placeholder(self, company_id: str, section_key: str) -> str:
         """Generate a placeholder section when no source data is available."""
-        base = PLACEHOLDER_SECTIONS.get(section_key, f"# Filing Section\n\nDetails for {company_id} being compiled.\n")
+        base = PLACEHOLDER_SECTIONS.get(
+            section_key, f"# Filing Section\n\nDetails for {company_id} being compiled.\n"
+        )
         return base.replace("being compiled", f"for {company_id} are being compiled")
 
     def _build_coverage_md(self, company_id: str, num_sections: int) -> str:

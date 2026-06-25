@@ -2957,6 +2957,125 @@ def build_professor_bundle(
         sys.exit(1)
 
 
+# ── Phase 8F production multi-company command ──────────────────────────
+
+
+@cli.command(name="build-production-bundle")
+@click.option(
+    "--output",
+    "output_root",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Bundle output root directory (must be outside the repository)",
+)
+@click.option(
+    "--source-mapping",
+    "source_mapping_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to private source_companies.yaml mapping",
+)
+@click.option(
+    "--source-archive-inventory",
+    "archive_inventory_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to source_archive_inventory.json",
+)
+@click.option(
+    "--release-date",
+    default="2026-06-22",
+    help="Release date string (YYYY-MM-DD)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Validate inputs and print plan without running",
+)
+def build_production_bundle(
+    output_root: Path,
+    source_mapping_path: Path,
+    archive_inventory_path: Path,
+    release_date: str,
+    dry_run: bool,
+) -> None:
+    """Build a TRUE production multi-company professor bundle (Phase 8F).
+
+    Iterates over every COMPANY_NNN in ``--source-mapping`` and produces
+    ``public/anonymized/<COMPANY_NNN>/<profile|financials|market|sec|news>/``
+    for each. Aggregates LLM blind-guess and utility preservation across
+    all companies, then runs the strict V3 release gate and ZIP packager
+    ONCE on the bundle root.
+
+    This command does NOT accept ``--fast-fixtures`` or
+    ``--allow-provider-skip-for-local-dev``. Production mode requires
+    both ``--source-mapping`` and ``--archive-inventory``. The exit code
+    is 0 only if the bundle reaches ``PRODUCTION_CANDIDATE_READY``.
+    """
+    output_root = output_root.resolve()
+    if output_root.exists() and not dry_run:
+        # Refuse to overwrite an existing run; explicit rm is operator's choice.
+        click.echo(
+            f"Error: output root {output_root} already exists. Remove it before re-running.",
+            err=True,
+        )
+        sys.exit(2)
+
+    if dry_run:
+        click.echo("DRY RUN — plan:")
+        click.echo(f"  output: {output_root}")
+        click.echo(f"  source_mapping: {source_mapping_path}")
+        click.echo(f"  archive_inventory: {archive_inventory_path}")
+        try:
+            import yaml as _yaml
+
+            with open(source_mapping_path) as f:
+                data = _yaml.safe_load(f) or {}
+            companies = sorted(data.keys())
+            click.echo(
+                f"  companies_to_process: {[c for c in companies if str(c).startswith('COMPANY')]}"
+            )
+        except Exception as e:
+            click.echo(f"  Warning: could not parse source_mapping: {e}", err=True)
+        return
+
+    from .professor.multi_orchestrator import (
+        ProfessorBundleMultiCompanyOrchestrator,
+    )
+
+    click.echo("Phase 8F production multi-company bundle build")
+    click.echo(f"  output: {output_root}")
+    click.echo(f"  source_mapping: {source_mapping_path}")
+    click.echo(f"  archive_inventory: {archive_inventory_path}")
+    click.echo(f"  release_date: {release_date}")
+
+    orchestrator = ProfessorBundleMultiCompanyOrchestrator(
+        output_root=output_root,
+        source_mapping_path=source_mapping_path,
+        archive_inventory_path=archive_inventory_path,
+        release_date=release_date,
+    )
+    result = orchestrator.run()
+
+    click.echo("\nPhase 8F result:")
+    click.echo(f"  companies_processed: {len(result.companies_processed)}")
+    click.echo(f"  companies_passed: {result.companies_passed}")
+    click.echo(f"  companies_failed: {result.companies_failed}")
+    click.echo(f"  privacy_gate: {result.blind_guess_summary.get('privacy_gate', 'unknown')}")
+    click.echo(f"  utility_gate: {result.utility_summary.get('utility_gate', 'unknown')}")
+    click.echo(f"  strict_release_gate: {result.strict_release_gate.get('passed')}")
+    click.echo(f"  ZIP: {result.zip_path}")
+    click.echo(f"  aggregate_verdict: {result.aggregate_verdict}")
+
+    if result.aggregate_verdict != "PRODUCTION_CANDIDATE_READY":
+        click.echo(
+            f"Production verdict is {result.aggregate_verdict} — not ready.",
+            err=True,
+        )
+        sys.exit(1)
+
+
 def main() -> None:  # type: ignore[no-any-return]
     """Main entry point."""
     cli()

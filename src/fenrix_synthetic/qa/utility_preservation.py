@@ -162,39 +162,30 @@ def score_utility_preservation(
     source_prods = {p.lower().strip() for p in source_thesis.product_exposure}
     public_prods = {p.lower().strip() for p in public_thesis.product_exposure}
     if source_prods:
-        detail.product_exposure_overlap = (
-            len(source_prods & public_prods) / len(source_prods)
-        )
+        detail.product_exposure_overlap = len(source_prods & public_prods) / len(source_prods)
 
     # 3. Fundamentals match
     detail.fundamentals_match = (
-        source_thesis.fundamentals_signal.lower()
-        == public_thesis.fundamentals_signal.lower()
+        source_thesis.fundamentals_signal.lower() == public_thesis.fundamentals_signal.lower()
     )
 
     # 4. Valuation match
     detail.valuation_match = (
-        source_thesis.valuation_signal.lower()
-        == public_thesis.valuation_signal.lower()
+        source_thesis.valuation_signal.lower() == public_thesis.valuation_signal.lower()
     )
 
     # 5. Profitability match
     detail.profitability_match = (
-        source_thesis.profitability_signal.lower()
-        == public_thesis.profitability_signal.lower()
+        source_thesis.profitability_signal.lower() == public_thesis.profitability_signal.lower()
     )
 
     # 6. Balance sheet match
     detail.balance_sheet_match = (
-        source_thesis.balance_sheet_signal.lower()
-        == public_thesis.balance_sheet_signal.lower()
+        source_thesis.balance_sheet_signal.lower() == public_thesis.balance_sheet_signal.lower()
     )
 
     # 7. Growth match
-    detail.growth_match = (
-        source_thesis.growth_signal.lower()
-        == public_thesis.growth_signal.lower()
-    )
+    detail.growth_match = source_thesis.growth_signal.lower() == public_thesis.growth_signal.lower()
 
     # 8. Risk overlap
     source_risks = {r.lower().strip() for r in source_thesis.risk_signals}
@@ -204,8 +195,7 @@ def score_utility_preservation(
 
     # 9. Market signal match
     detail.market_signal_match = (
-        source_thesis.market_signal.lower()
-        == public_thesis.market_signal.lower()
+        source_thesis.market_signal.lower() == public_thesis.market_signal.lower()
     )
 
     # Compute weighted overall score
@@ -347,7 +337,9 @@ def extract_public_thesis(public_dir: Path, company_id: str) -> CompanyThesis:
         thesis.business_model = "retail"
     elif any(w in combined for w in ["manufacturing", "production", "factory"]):
         thesis.business_model = "manufacturing"
-    elif any(w in combined for w in ["financial services", "wealth management", "asset management"]):
+    elif any(
+        w in combined for w in ["financial services", "wealth management", "asset management"]
+    ):
         thesis.business_model = "financial services"
     else:
         thesis.business_model = "diversified"

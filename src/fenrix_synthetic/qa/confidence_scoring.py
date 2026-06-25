@@ -147,7 +147,9 @@ def score_blind_guess(
         confidence = ConfidenceLevel.LOW
 
     # ── Check top-1 match ───────────────────────────────────────────
-    top1_is_actual = _is_company_match(most_likely_company, most_likely_ticker, actual_source_company, actual_source_ticker)
+    top1_is_actual = _is_company_match(
+        most_likely_company, most_likely_ticker, actual_source_company, actual_source_ticker
+    )
 
     if top1_is_actual:
         private = PrivateScoreDetail(
