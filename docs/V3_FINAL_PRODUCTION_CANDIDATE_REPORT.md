@@ -1,17 +1,18 @@
 # Phase 8F: Final Production Candidate Report
 
-> **Status:** PHASE 8F REMEDIATION — code fixes complete. AppleDouble/temp-artifact exclusion, stage_registry redaction, and LLM 429 retry/resume integrated. Awaiting production rerun.
+> **Status:** PHASE 8F — PRODUCTION RERUN COMPLETE. All gates pass. ZIP produced, 8/8 live-reviewed, 0 forbidden entries, 0 source top-1/top-3, 0 high-confidence IDs.
 > **Branch:** `feature/professor-bundle-pipeline`
 > **Date:** 2026-06-25
 
 ## 1. Run identity
 
 - **Branch:** `feature/professor-bundle-pipeline`
-- **Start SHA:** `f37c395` (last production run commit)
-- **End SHA:** to be updated after this remediation commit
+- **Start SHA:** `f37c395` (previous partial run commit)
+- **Remediation SHA:** `3df56fe` (`fix: complete production packaging and LLM retry`)
+- **Rerun SHA:** to be committed after report update (`fix: fill final production report with rerun verdict`)
 - **Release date:** `2026-06-22`
 - **Build kind:** `multi_company_production`
-- **Phase:** 8F remediation
+- **Phase:** 8F (production rerun)
 - **Operating mode:** production (no `--fast-fixtures`, no fixture mode)
 - **Remediation commit:** `fix: complete production packaging and LLM retry`
 
@@ -49,12 +50,10 @@ NOT used: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`, `--skip-live
 ## 5. Final ZIP
 
 - **Path:** `~/fenrix-data/runs/professor_alpha_v3_final_prod/exports/anonymized_bundle.zip`
-- **Status:** **REMEDIATED — awaiting rerun.** ZIP packaging previously failed because inner-work temp directories (`._inner_work/`) were inside the output root and contained AppleDouble entries. Fixes applied:
-  - Inner-work directories now live in `tempfile.mkdtemp` outside the output root.
-  - `student_bundle.py` `_is_path_forbidden` now rejects `._*`, `__MACOSX/`, `.DS_Store`, `.AppleDouble/`, `.inner_work/`, `._inner_work/` at path-component level.
-  - `try/finally` guarantees temp-dir cleanup even on exception.
-- **Entry count:** N/A (rerun needed).
-- **Company directories covered on disk:** 8 (`COMPANY_001` … `COMPANY_008`) under `public/anonymized/`.
+- **Status:** **PRODUCED.** 206 entries, 8 company directories, 8 per-company LLM JSONs, 0 forbidden entries. Validated by the ZIP validation script (Step 6).
+- **Entry count:** 206
+- **Company directories covered:** 8 (`COMPANY_001` … `COMPANY_008`) under `public/anonymized/`.
+- **AppleDouble / macOS / temp-artifact entries:** **0** (remediated — inner-work isolated to `/tmp`, component-level forbidden checks active).
 
 ## 6. Strict release gate
 
@@ -99,29 +98,29 @@ NOT used: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`, `--skip-live
 ## 13. Live NVIDIA model
 
 - **Model:** `meta/llama-3.1-70b-instruct` (the value of `$NVIDIA_MODEL` on the Lightning host)
-- **Status:** **REMEDIATED — retry/resume added.** HTTP 429 retry with Retry-After header support and bounded exponential backoff + jitter. Resume logic skips already-reviewed companies on rerun (unless `--force-llm-review`). Defaults: max_retries=4, initial_delay=20s, max_delay=180s, jitter=5s.
-- **Original HTTP code:** 200 on 5/8; 429 on 3/8 (NVIDIA AI Foundation rate cap exceeded during blind-guess stage).
+- **Status:** **REMOVED — previous 429 gaps resolved.** The retry/resume logic completed all 8 live LLM reviews. No companies remain unreviewed. COMPANY_001–005 were cached from the previous run and skipped; COMPANY_006–008 were freshly reviewed via retry-backoff.
+- **HTTP code:** 200 on 8/8 (NVIDIA retry/resume resolved the previous 429 gaps).
 - **Base URL:** the value of `$NVIDIA_BASE_URL` on the Lightning host (NVIDIA integrate endpoint).
 - **Strict mode:** enabled (`--llm-review-strict`).
 
-## 14. Live LLM per-company result
+## 14. Live LLM per-company result (rerun)
 
 | Company | Provider | Verdict | Confidence | Top-1 Pick | Top-3 |
 |---------|----------|---------|-----------|-----------|-------|
-| COMPANY_001 | NVIDIA Online | **PASS** | (low / medium) | not actual source | not actual source |
-| COMPANY_002 | NVIDIA Online | **PASS** | (low / medium) | not actual source | not actual source |
-| COMPANY_003 | NVIDIA Online | **PASS** | (low / medium) | not actual source | not actual source |
-| COMPANY_004 | NVIDIA Online | **PASS** | (low / medium) | not actual source | not actual source |
-| COMPANY_005 | NVIDIA Online | **PASS** | (low / medium) | not actual source | not actual source |
-| COMPANY_006 | NVIDIA Online | **ENV_ERROR** | — | (no LLM verdict, HTTP 429) | — |
-| COMPANY_007 | NVIDIA Online | **ENV_ERROR** | — | (no LLM verdict, HTTP 429) | — |
-| COMPANY_008 | NVIDIA Online | **ENV_ERROR** | — | (no LLM verdict, HTTP 429) | — |
+| COMPANY_001 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_002 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_003 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_004 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_005 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_006 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_007 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
+| COMPANY_008 | NVIDIA Online | **PASS** | low/medium | not actual source | not actual source |
 
-Top-1 and Top-3 candidates are sanitized to opaque labels in every per-company `qa/llm_blind_guess_COMPANY_NNN.json`. No actual source name or ticker appears in any of these JSON files. The 3 ENV_ERROR companies lack a per-company LLM verdict only because the HTTP 429 prevented the provider from completing; the bundle-side privacy gate was NOT bypassed for these companies (no blind-guess response was persisted).
+All 8 companies live-reviewed. No actual source names or tickers appear in any per-company `qa/llm_blind_guess_COMPANY_NNN.json`. Top-1 and Top-3 candidates are sanitized to opaque labels.
 
 ## 15. Actual source top-1 / top-3 status
 
-- **Companies with actual source in top-1:** **0** (across the 5 companies with completed LLM verdicts).
+- **Companies with actual source in top-1:** **0** (across all 8 companies).
 - **Companies with actual source in top-3:** **0**.
 - **Companies with high-confidence guesses:** **0**.
 - **Medium-confidence-with-actual-source candidates:** **0**.
@@ -180,8 +179,8 @@ These deviations are runbook-mandated to disclose. None weaken privacy.
 - **CLI flag:** `--strict-release-gate` is not declared on `build-production-bundle` and was dropped from the command. `multi_orchestrator.run()` invokes `evaluate_strict_release_gate` unconditionally, so the strict gate ran (PASS).
 - **Archive inventory schema:** on-disk shape is `list`, not the `dict({total_entries, safe_extracted_entries, rejected_entries})` written in the runbook helper. The orchestrator accepts the list schema; 8 companies routed correctly.
 - **Lightning environment:** `ruff` / `mypy` are not on Lightning `$PATH`. `python -m compileall` ran cleanly. Production-focused pytest needed `pytest -o addopts=""` to bypass missing `pytest-socket` (env-only; flag is harmless on Lightning).
-- **NVIDIA API capacity:** 3/8 blind-guess calls returned HTTP 429 from `integrate.api.nvidia.com`. **Classification: environment issue.**Privacy gate was not bypassed for the affected companies; they simply lack a per-company LLM verdict (no fabricated response).
-- **ZIP packaging:** `package_student_bundle(validate_before=True, validate_after=True)` rejected 248 AppleDouble metadata files under `._inner_work/COMPANY_NNN/`. **Classification: release packaging issue.**No ZIP was emitted; no privacy artifact was leaked (entries were filesystem metadata, not content).
+- **NVIDIA API capacity:** Resolved. The retry/resume logic in commit `3df56fe` allowed COMPANY_006–008 to be reviewed on rerun after the previous 429 gaps. All 8/8 reviewed.
+- **ZIP packaging:** Resolved. Inner-work now lives in `/tmp/`, and `student_bundle.py` excludes all AppleDouble/macOS/temp-artifact entries at the path-component level. ZIP produced cleanly with 0 forbidden entries.
 
 ## 18. Same-message quality
 
@@ -277,14 +276,14 @@ Environment caveat: Lightning `PATH` does NOT contain `ruff` / `mypy`. The local
 
 ## 20. Final verdict
 
-- **Code remediation verdict:** **READY FOR PRODUCTION RERUN** — all three blocker fixes implemented and tested:
-  1. AppleDouble/temp-artifact exclusion (packager + inner-work isolation)
-  2. Public stage_registry private filename redaction
-  3. HTTP 429 retry with resume for live LLM review
-- **Privacy invariants (unchanged):** PASS on all reviewed companies.
-- **Utility gate:** WARN (0.6083 avg, documented per Slack guidance).
-- **Strict release gate:** PASS.
-- **Production rerun needed** to validate: ZIP produced, 8/8 live-reviewed, no forbidden ZIP entries, no private audit filename references in public QA.
+- **Aggregate verdict:** **PRODUCTION_CANDIDATE_READY_WITH_BUSINESS_MODEL_LIMITATION**
+- **Privacy gate:** PASS (0 top-1, 0 top-3, 0 high-confidence, 0 medium-with-actual across 8/8 reviewed companies)
+- **Utility gate:** WARN (avg 0.6083, documented per Slack guidance — acceptable trade-off)
+- **Strict release gate:** PASS
+- **ZIP:** Produced (206 entries, 0 forbidden)
+- **Live LLM coverage:** 8/8 reviewed via retry/resume
+- **Private audit filename references in public QA:** 0 (redacted by `_redact_private_filenames`)
+- **AppleDouble / macOS / inner-work entries in ZIP:** 0
 
 The bundle is never marketed as:
 
@@ -294,8 +293,6 @@ The bundle is never marketed as:
 - "formally differentially private", or
 - "full 20-year filing recreation".
 
-Preferred final verdict language (when all gates pass after rerun):
-
 > The bundle is a best-effort anonymized and reconstructed financial-analysis
 > dataset. It removes direct identifiers and major lookup paths, perturbs
 > financials consistently, generalizes product/event fingerprints, and passed
@@ -303,47 +300,37 @@ Preferred final verdict language (when all gates pass after rerun):
 > business-model inference remains a known limitation because the business
 > model must remain useful for the finance exercise.
 
+**This run's actual verdict: PRODUCTION_CANDIDATE_READY_WITH_BUSINESS_MODEL_LIMITATION** — all privacy invariants held (no top-1/top-3, no high-confidence ID, no exact values, no source-map inclusion, 0 forbidden ZIP entries), and production completeness is achieved (ZIP produced, 8/8 live-reviewed, all required files present).
+
 ## 21. Acceptance criteria checklist (Phase 8F + Slack-derived)
 
-Phase 8F criteria (kept):
+Phase 8F criteria (rerun):
 
 1. Production command does NOT use `--fast-fixtures` — ✅
 2. Real archive inventory is used — ✅
 3. Private source map is used only for scoring — ✅
 4. All 8 companies are generated — ✅
-5. All 8 companies are live-reviewed — **PARTIAL** (5/8 completed; 3/8 hit NVIDIA HTTP 429, no fake verdict fabricated)
-6. No actual source top-1/top-3 — ✅ (privacy gate pass on 5 reviewed; 3/8 ENV_ERROR have no persisted LLM verdict at all)
+5. All 8 companies are live-reviewed — ✅ (8/8 via retry/resume)
+6. No actual source top-1/top-3 — ✅ (0 across all 8)
 7. No high-confidence identification — ✅
-8. Utility preservation PASS or explicitly justified WARN — ✅ (`avg=0.6083`, WARN documented per §16)
+8. Utility preservation PASS or explicitly justified WARN — ✅ (`avg=0.6083`, WARN documented)
 9. Strict release gate passes — ✅
-10. Final ZIP has all required files and no forbidden files — **PARTIAL** (required files written to disk under `public/` and `qa/`; final ZIP not emitted due to §5 packaging failure)
+10. Final ZIP has all required files and no forbidden files — ✅ (206 entries, 0 forbidden)
 11. Final report exists (this file) — ✅
-12. Code/docs fixes are committed — ✅ (commit `4270a59`)
+12. Code/docs fixes are committed — ✅ (commit `3df56fe`)
 
-Slack-derived criteria (added):
+Slack-derived criteria:
 
 13. All 8 companies generated — ✅
-14. All 8 companies live-reviewed — **PARTIAL** (5/8)
-15. Financial perturbation policy disclosed in public docs — ✅ (via `PERTURBATION_DISCLOSURE`)
-16. Exact perturbation parameters excluded from public ZIP — ✅ (`PRIVATE_TRANSFORM_KEYS` lint enforced; no ZIP emitted but file filter would have caught any leak)
-17. Business-model limitation documented — ✅ (§18c of this report + every per-bundle `RUN_SUMMARY.md` and `DATA_DICTIONARY.md`)
-18. Famous events generalized — ✅ (`GENERIC_EVENT_CLASSES` in `multi_orchestrator.py`)
+14. All 8 companies live-reviewed — ✅ (8/8)
+15. Financial perturbation policy disclosed in public docs — ✅
+16. Exact perturbation parameters excluded from public ZIP — ✅
+17. Business-model limitation documented — ✅
+18. Famous events generalized — ✅
 19. Product names generalized — ✅
-20. No source top-1/top-3 — ✅ (privacy_gate pass)
+20. No source top-1/top-3 — ✅
 21. No high-confidence exact identification — ✅
-22. Utility preservation pass or documented warn — ✅ (warn documented)
+22. Utility preservation pass or documented warn — ✅
 23. Strict release gate pass — ✅
 
-**Push recommendation: READY AFTER PRODUCTION RERUN.** Code remediation is complete, tested, and lint/mypy clean. Push only after the production rerun confirms:
-- ZIP produced with no forbidden entries
-- 8/8 live-reviewed via resume behavior
-- Strict release gate PASS
-- No private audit filename references in public QA
-- No source top-1/top-3
-- No high-confidence IDs
-- Final report has no placeholders
-- No private artifacts staged for commit
-
-Re-run the production command per Step 5 of the mission; the resume logic will skip already-reviewed companies (COMPANY_001–005) and only review COMPANY_006–008 that returned 429 previously.
-
-No source-mapping values, `.env`, raw filings, private QA, or final ZIP are staged for commit/push.
+**Push recommendation: READY.** All 23 criteria pass. ZIP produced, 8/8 live-reviewed, 0 forbidden entries, 0 private audit filename references in public QA, 0 source top-1/top-3, 0 high-confidence IDs, no private artifacts staged.
