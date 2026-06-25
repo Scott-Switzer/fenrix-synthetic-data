@@ -2837,12 +2837,51 @@ except ImportError:  # pragma: no cover
     default=False,
     help="Allow PROVIDER_NOT_RUN (forces NOT_PROFESSOR_READY)",
 )
+@click.option(
+    "--llm-review-provider",
+    default="offline_stub",
+    type=click.Choice(["offline_stub", "openai_compatible", "local_ollama"]),
+    help="LLM review provider for blind guess stage",
+)
+@click.option(
+    "--llm-review-model",
+    default=None,
+    help="LLM model identifier (e.g., meta/llama-3.1-70b-instruct)",
+)
+@click.option(
+    "--llm-review-base-url",
+    default=None,
+    help="Base URL for LLM API (e.g., https://integrate.api.nvidia.com/v1)",
+)
+@click.option(
+    "--llm-review-api-key-env",
+    default="NVIDIA_API_KEY",
+    help="Environment variable name for LLM API key",
+)
+@click.option(
+    "--llm-review-strict",
+    is_flag=True,
+    default=False,
+    help="Fail closed on LLM provider errors in strict mode",
+)
+@click.option(
+    "--skip-live-llm-review",
+    is_flag=True,
+    default=False,
+    help="Skip live LLM review (use offline stub)",
+)
 def build_professor_bundle(
     config_path: Path,
     output_root: Path,
     strict: bool,
     fast_fixtures: bool,
     allow_provider_skip_for_local_dev: bool,
+    llm_review_provider: str,
+    llm_review_model: str | None,
+    llm_review_base_url: str | None,
+    llm_review_api_key_env: str,
+    llm_review_strict: bool,
+    skip_live_llm_review: bool,
 ) -> None:
     """Build a professor bundle with the mandatory 20-stage pipeline.
 
@@ -2863,10 +2902,25 @@ def build_professor_bundle(
     config.fast_fixtures = fast_fixtures
     config.allow_provider_skip = allow_provider_skip_for_local_dev
 
+    # Apply CLI LLM review overrides
+    llm_provider = "offline_stub" if skip_live_llm_review else llm_review_provider
+    config.llm_provider_cfg = {
+        "provider": llm_provider,
+        **config.llm_provider_cfg,  # YAML config as base
+    }
+    if llm_review_model:
+        config.llm_provider_cfg["model"] = llm_review_model
+    if llm_review_base_url:
+        config.llm_provider_cfg["base_url"] = llm_review_base_url
+    config.llm_provider_cfg["api_key_env"] = llm_review_api_key_env
+    if llm_review_strict:
+        config.llm_provider_cfg["strict"] = True
+
     click.echo(f"Building professor bundle for {config.company_id}...")
     click.echo(f"  Strict: {config.strict}")
     click.echo(f"  Fast fixtures: {config.fast_fixtures}")
     click.echo(f"  Output: {config.output_root}")
+    click.echo(f"  LLM review provider: {llm_provider}")
 
     orchestrator = ProfessorBundleOrchestrator(config)
     result = orchestrator.run()

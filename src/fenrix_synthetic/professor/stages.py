@@ -1,6 +1,6 @@
 """Professor-bundle pipeline stage registry.
 
-Defines the 19 mandatory stages, their status records, and the registry
+Defines the 22 mandatory stages, their status records, and the registry
 that validates all stages ran before a bundle can be marked professor-ready.
 
 Hard contract:
@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 
 class ProfessorStage(StrEnum):
-    """The 20 mandatory professor-bundle pipeline stages."""
+    """The 22 mandatory professor-bundle pipeline stages."""
 
     SOURCE_INGESTION = "SOURCE_INGESTION"
     SEC_PARSE = "SEC_PARSE"
@@ -48,6 +48,7 @@ class ProfessorStage(StrEnum):
     RAG_INDEX_BUILD = "RAG_INDEX_BUILD"
     ADVERSARIAL_QA = "ADVERSARIAL_QA"
     RELEASE_GATE = "RELEASE_GATE"
+    LLM_BLIND_GUESS = "LLM_BLIND_GUESS"
     ZIP_EXPORT = "ZIP_EXPORT"
 
 
@@ -100,6 +101,7 @@ STAGES_REQUIRING_EVIDENCE: frozenset[ProfessorStage] = frozenset(
         ProfessorStage.METRIC_SYNTHESIS,
         ProfessorStage.METRIC_EVALUATION,
         ProfessorStage.NEWS_RECONSTRUCT,
+        ProfessorStage.LLM_BLIND_GUESS,
         ProfessorStage.CROSSLINK_BUILD,
         ProfessorStage.PEDAGOGY_BUILD,
         ProfessorStage.RAG_INDEX_BUILD,

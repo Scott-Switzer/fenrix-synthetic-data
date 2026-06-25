@@ -28,6 +28,9 @@ PUBLIC_ALLOWLIST_PREFIXES: tuple[str, ...] = (
     "checksums.sha256",
     "run_summary.json",
     "artifact_inventory.csv",
+    "news/",
+    "llm_blind_guess_summary.json",
+    "news_reconstruction_attack_summary.json",
 )
 
 # ── Forbidden path/pattern matchers ────────────────────────────────────────

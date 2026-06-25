@@ -1,6 +1,6 @@
 """Professor-bundle orchestrator.
 
-Runs all 20 mandatory pipeline stages end-to-end, producing a complete
+Runs all 22 mandatory pipeline stages end-to-end, producing a complete
 fixture output tree with real artifacts, provenance keys, QA reports,
 and a ZIP export.
 
@@ -86,6 +86,7 @@ class ProfessorBundleConfig:
         gliner_provider: dict[str, Any] | None = None,
         review_provider: dict[str, Any] | None = None,
         metrics_provider: dict[str, Any] | None = None,
+        llm_provider_cfg: dict[str, Any] | None = None,
     ) -> None:
         self.company_id = company_id
         self.output_root = output_root
@@ -97,6 +98,7 @@ class ProfessorBundleConfig:
         self.gliner_provider = gliner_provider or {}
         self.review_provider_cfg = review_provider or {}
         self.metrics_provider_cfg = metrics_provider or {}
+        self.llm_provider_cfg = llm_provider_cfg or {}
 
     @property
     def build_mode(self) -> BuildMode:
@@ -125,6 +127,7 @@ class ProfessorBundleConfig:
         gliner_config = data.get("gliner", {})
         review_config = data.get("adversarial_review", {})
         metrics_config = data.get("metrics", {})
+        llm_review_config = data.get("llm_review", {})
 
         return cls(
             company_id=data.get("company_id", "COMPANY_001"),
@@ -137,6 +140,7 @@ class ProfessorBundleConfig:
             gliner_provider=gliner_config,
             review_provider=review_config,
             metrics_provider=metrics_config,
+            llm_provider_cfg=llm_review_config,
         )
 
 
@@ -197,6 +201,9 @@ class ProfessorBundleOrchestrator:
             self.review_provider = create_review_provider("mock", {})
             self._adversarial_policy = default_review_policy()
 
+        # Choose LLM provider based on build mode and config
+        self.llm_provider_cfg = config.llm_provider_cfg
+
         # Choose metrics provider based on build mode and config
         if config.fast_fixtures:
             self.metrics_provider: MetricsProvider = create_metrics_provider("fixture", {})
@@ -253,7 +260,7 @@ class ProfessorBundleOrchestrator:
             self._run_stage_filing_reconstruct(public_dir)
             self._run_stage_metric_synthesis(public_dir)
             self._run_stage_metric_evaluation(qa_dir)
-            self._run_stage_news_reconstruct(public_dir)
+            self._run_stage_news_reconstruct(public_dir, private_dir)
             self._run_stage_crosslink_build(public_dir)
             self._run_stage_pedagogy_build(public_dir)
             self._run_stage_rag_index_build(qa_dir)
@@ -279,6 +286,9 @@ class ProfessorBundleOrchestrator:
 
             # Run release gate (writes classroom_gate_report.json + strict gate reports)
             self._run_stage_release_gate(qa_dir)
+
+            # Run LLM blind guess AFTER release gate, BEFORE ZIP export
+            self._run_stage_llm_blind_guess(public_dir, private_dir, qa_dir)
         else:
             # Gate already registered as FAIL; write a minimal gate report
             self._write_checksums()
@@ -868,35 +878,219 @@ class ProfessorBundleOrchestrator:
             provider_kind=ProviderKind.REAL,
         )
 
-    def _run_stage_news_reconstruct(self, public_dir: Path) -> None:
-        """Stage 13: NEWS_RECONSTRUCT — produce synthetic news surrogates."""
+    def _run_stage_news_reconstruct(self, public_dir: Path, private_dir: Path) -> None:
+        """Stage 13: NEWS_RECONSTRUCT — produce synthetic news briefs.
+
+        Uses the NewsReconstructor to generate synthetic news from private
+        source event fixtures. Public output contains sanitized briefs with
+        relative periods, controlled event classes, and no real identifiers.
+        """
+        from ..anonymization.news_reconstructor import (
+            NewsReconstructor,
+            PrivateSourceEvent,
+        )
+        from ..qa.news_reconstruction_attack import NewsReconstructionAttack
+
         news_dir = public_dir / "anonymized" / self.config.company_id / "news"
         news_dir.mkdir(parents=True, exist_ok=True)
 
-        # Produce synthetic news surrogates from fixture
+        # Build private source events from fixture data
+        source_events: list[PrivateSourceEvent] = []
         if isinstance(self.sec_provider, FixtureSecProvider):
-            fixture_news: list[dict[str, Any]] = self.sec_provider._fixture.get("news", [])
+            fixture_news: list[dict[str, Any]] = self.sec_provider._fixture.get(
+                "news", []
+            )
         else:
             fixture_news = []
-        for i, _news_item in enumerate(fixture_news):
-            news_id = f"news_{i + 1:03d}"
-            surrogate = (
-                f"# synthetic financial news surrogate\n\n"
-                f"**Surrogate ID:** {news_id}\n"
-                f"**Synthetic Company:** Company 001\n"
-                f"**Event Type:** corporate_update\n"
-                f"**Relative Period:** recent\n\n"
-                f"---\n\n## Event Summary\n\n"
-                f"A synthetic news surrogate representing a corporate event.\n"
+
+        # If no news fixture, create synthetic events from filing sections
+        if not fixture_news:
+            # Derive synthetic events from the sanitized sections
+            event_classes_cycle = [
+                "demand_shift",
+                "regulatory_development",
+                "capital_allocation",
+                "strategic_investment",
+                "competitive_pressure",
+            ]
+            for i, section in enumerate(self._sanitized_sections[:5]):
+                event = PrivateSourceEvent(
+                    event_id=f"evt_{self.config.company_id}_sec_{i:03d}",
+                    event_class=event_classes_cycle[i % len(event_classes_cycle)],
+                    source_type="filing_section",
+                    source_date=self.config.release_date,
+                    source_headline=section.item_title,
+                    source_body=section.sanitized_text[:500],
+                )
+                source_events.append(event)
+        else:
+            for i, news_item in enumerate(fixture_news):
+                event = PrivateSourceEvent(
+                    event_id=f"evt_{self.config.company_id}_news_{i:03d}",
+                    event_class=news_item.get(
+                        "event_class",
+                        [
+                            "demand_shift",
+                            "capital_allocation",
+                            "strategic_investment",
+                        ][i % 3],
+                    ),
+                    source_type="news_archive",
+                    source_date=news_item.get("date", self.config.release_date),
+                    source_headline=news_item.get("headline", ""),
+                    source_body=news_item.get("body", ""),
+                    source_url=news_item.get("url", ""),
+                    source_company=news_item.get("company", ""),
+                    source_ticker=news_item.get("ticker", ""),
+                )
+                source_events.append(event)
+
+        # Reconstruct synthetic news briefs
+        reconstructor = NewsReconstructor()
+        briefs = reconstructor.reconstruct(
+            self.config.company_id,
+            source_events,
+            ref_year=int(self.config.release_date[:4]) if self.config.release_date else 2026,
+        )
+
+        # Write public outputs
+        reconstructor.write_public_outputs(briefs, news_dir)
+
+        # Write private provenance
+        private_qa_dir = private_dir / "qa"
+        reconstructor.write_private_provenance(
+            source_events, briefs, private_qa_dir, self.config.company_id
+        )
+
+        # Run news reconstruction attack
+        attack = NewsReconstructionAttack(
+            source_company_names=[ev.source_company for ev in source_events if ev.source_company],
+            source_tickers=[ev.source_ticker for ev in source_events if ev.source_ticker],
+            source_headlines=[ev.source_headline for ev in source_events if ev.source_headline],
+            source_urls=[ev.source_url for ev in source_events if ev.source_url],
+        )
+        attack_result = attack.run(news_dir, self.config.company_id)
+
+        # Write attack results
+        qa_dir = self.config.output_root / "qa"
+        import orjson as _orjson
+
+        (qa_dir / "news_reconstruction_attack_summary.json").write_bytes(
+            _orjson.dumps(
+                attack_result.to_dict(),
+                option=_orjson.OPT_SORT_KEYS | _orjson.OPT_INDENT_2,
             )
-            (news_dir / f"{news_id}.md").write_text(surrogate, encoding="utf-8")
+        )
+
+        failures: list[str] = []
+        if not attack_result.passed:
+            failures.append(
+                f"News reconstruction attack found {attack_result.blocking_count} blocking issues"
+            )
 
         self._register(
             ProfessorStage.NEWS_RECONSTRUCT,
-            StageStatus.PASS,
-            evidence_count=len(fixture_news),
-            provider_name="NewsSurrogateGenerator",
+            StageStatus.PASS if not failures else StageStatus.FAIL,
+            evidence_count=len(briefs),
+            outputs=[str(news_dir)],
+            failures=failures if failures else None,
+            provider_name="NewsReconstructor",
             provider_kind=ProviderKind.REAL,
+        )
+
+    def _run_stage_llm_blind_guess(
+        self, public_dir: Path, private_dir: Path, qa_dir: Path
+    ) -> None:
+        """Stage 21: LLM_BLIND_GUESS — adversarial LLM blind-guess review.
+
+        Runs an LLM against ONLY public bundle content. The model must
+        attempt to identify the real source company. Scoring uses private
+        source mapping, but public output is redacted.
+
+        In fixture mode, uses the offline stub provider.
+        In strict mode, requires a configured live provider.
+        """
+        from ..qa.llm_blind_guess import LLMBlindGuessHarness
+        from ..qa.llm_provider import create_llm_provider
+
+        provider_type = self.llm_provider_cfg.get(
+            "provider", "offline_stub" if self.config.fast_fixtures else "openai_compatible"
+        )
+
+        try:
+            llm_provider = create_llm_provider(provider_type, self.llm_provider_cfg)
+        except (ValueError, ImportError) as e:
+            self._register(
+                ProfessorStage.LLM_BLIND_GUESS,
+                StageStatus.PROVIDER_NOT_RUN,
+                failures=[f"LLM provider not available: {e}"],
+                provider_name=provider_type,
+                provider_kind=ProviderKind.SKIPPED,
+            )
+            return
+
+        harness = LLMBlindGuessHarness(llm_provider, strict=self.config.strict)
+
+        try:
+            result = harness.review(
+                public_dir=public_dir,
+                private_dir=private_dir,
+                company_id=self.config.company_id,
+                actual_source_company=None,  # Private — injected from config if available
+                actual_source_ticker=None,
+            )
+        except Exception as e:
+            self._register(
+                ProfessorStage.LLM_BLIND_GUESS,
+                StageStatus.FAIL if self.config.strict else StageStatus.PROVIDER_NOT_RUN,
+                failures=[f"LLM blind guess failed: {e}"],
+                provider_name=provider_type,
+                provider_kind=ProviderKind.REAL,
+            )
+            return
+
+        # Write public summary to qa/
+        harness.write_public_summary(result, qa_dir)
+
+        # Determine pass/fail
+        failures: list[str] = []
+        warnings: list[str] = []
+
+        if result.provider_error:
+            if self.config.strict:
+                failures.append(f"LLM provider error: {result.provider_error}")
+            else:
+                warnings.append(f"LLM provider error: {result.provider_error}")
+
+        if result.parse_error:
+            failures.append(f"LLM response parse error: {result.parse_error}")
+
+        if result.score_result:
+            if result.score_result.private.verdict.value == "FAIL":
+                failures.append(
+                    f"LLM blind guess failed: {result.score_result.private.reason}"
+                )
+            elif result.score_result.private.verdict.value == "WARN":
+                warnings.append(
+                    f"LLM blind guess warning: {result.score_result.private.reason}"
+                )
+
+        status = StageStatus.FAIL if failures else StageStatus.PASS
+        provider_kind = (
+            ProviderKind.FIXTURE
+            if self.config.build_mode == BuildMode.FIXTURE
+            else ProviderKind.REAL
+        )
+
+        self._register(
+            ProfessorStage.LLM_BLIND_GUESS,
+            status,
+            evidence_count=1,
+            outputs=[str(qa_dir / "llm_blind_guess_summary.json")],
+            warnings=warnings if warnings else None,
+            failures=failures if failures else None,
+            provider_name=llm_provider.provider_name,
+            provider_kind=provider_kind,
         )
 
     def _run_stage_crosslink_build(self, public_dir: Path) -> None:
