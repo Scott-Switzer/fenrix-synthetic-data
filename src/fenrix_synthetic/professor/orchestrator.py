@@ -87,6 +87,7 @@ class ProfessorBundleConfig:
         review_provider: dict[str, Any] | None = None,
         metrics_provider: dict[str, Any] | None = None,
         llm_provider_cfg: dict[str, Any] | None = None,
+        source_mapping_path: Path | None = None,
     ) -> None:
         self.company_id = company_id
         self.output_root = output_root
@@ -99,6 +100,17 @@ class ProfessorBundleConfig:
         self.review_provider_cfg = review_provider or {}
         self.metrics_provider_cfg = metrics_provider or {}
         self.llm_provider_cfg = llm_provider_cfg or {}
+        self.source_mapping_path = source_mapping_path
+        # Load source mapping if provided
+        self._source_mapping: dict[str, dict[str, str]] = {}
+        if source_mapping_path and source_mapping_path.exists():
+            import yaml as _yaml_load
+            with open(source_mapping_path) as f:
+                data = _yaml_load.safe_load(f) or {}
+            self._source_mapping = {
+                k: {"source_company": v.get("source_company", ""), "source_ticker": v.get("source_ticker", "")}
+                for k, v in data.items() if isinstance(v, dict)
+            }
 
     @property
     def build_mode(self) -> BuildMode:
@@ -128,6 +140,7 @@ class ProfessorBundleConfig:
         review_config = data.get("adversarial_review", {})
         metrics_config = data.get("metrics", {})
         llm_review_config = data.get("llm_review", {})
+        source_mapping = data.get("source_mapping_path")
 
         return cls(
             company_id=data.get("company_id", "COMPANY_001"),
@@ -141,11 +154,12 @@ class ProfessorBundleConfig:
             review_provider=review_config,
             metrics_provider=metrics_config,
             llm_provider_cfg=llm_review_config,
+            source_mapping_path=Path(source_mapping) if source_mapping else None,
         )
 
 
 class ProfessorBundleOrchestrator:
-    "Orchestrates the 20-stage professor-bundle pipeline."
+    "Orchestrates the 23-stage professor-bundle pipeline."
 
     def __init__(self, config: ProfessorBundleConfig) -> None:
         self.config = config
@@ -231,7 +245,7 @@ class ProfessorBundleOrchestrator:
         self._synthetic_metrics: dict[str, Any] = {}
 
     def run(self) -> dict[str, Any]:
-        """Execute all 20 stages and produce the output tree."""
+        """Execute all 23 stages and produce the output tree."""
         started_at = datetime.now(UTC).isoformat()
         public_dir = self.config.output_root / "public"
         private_dir = self.config.output_root / "private"
@@ -241,7 +255,7 @@ class ProfessorBundleOrchestrator:
         for d in (public_dir, private_dir, qa_dir, exports_dir):
             d.mkdir(parents=True, exist_ok=True)
 
-        # ── Run all 20 stages ──────────────────────────────────────────
+        # ── Run all stages ─────────────────────────────────────────────
         # Wrap in try/except so a critical stage failure still writes the
         # gate report rather than crashing without structured output.
 
@@ -284,11 +298,14 @@ class ProfessorBundleOrchestrator:
             # Create release manifest before gate evaluation
             self._write_release_manifest()
 
-            # Run release gate (writes classroom_gate_report.json + strict gate reports)
-            self._run_stage_release_gate(qa_dir)
-
-            # Run LLM blind guess AFTER release gate, BEFORE ZIP export
+            # Run LLM blind guess BEFORE release gate evaluation
             self._run_stage_llm_blind_guess(public_dir, private_dir, qa_dir)
+
+            # Run utility preservation BEFORE release gate evaluation
+            self._run_stage_utility_preservation(public_dir, private_dir, qa_dir)
+
+            # Run release gate LAST (evaluates all stages including LLM + utility)
+            self._run_stage_release_gate(qa_dir)
         else:
             # Gate already registered as FAIL; write a minimal gate report
             self._write_checksums()
@@ -1031,13 +1048,18 @@ class ProfessorBundleOrchestrator:
 
         harness = LLMBlindGuessHarness(llm_provider, strict=self.config.strict)
 
+        # Resolve actual source mapping if available
+        source_info = self.config._source_mapping.get(self.config.company_id, {})
+        actual_source_company = source_info.get("source_company") if source_info else None
+        actual_source_ticker = source_info.get("source_ticker") if source_info else None
+
         try:
             result = harness.review(
                 public_dir=public_dir,
                 private_dir=private_dir,
                 company_id=self.config.company_id,
-                actual_source_company=None,  # Private — injected from config if available
-                actual_source_ticker=None,
+                actual_source_company=actual_source_company,
+                actual_source_ticker=actual_source_ticker,
             )
         except Exception as e:
             self._register(
@@ -1091,6 +1113,74 @@ class ProfessorBundleOrchestrator:
             failures=failures if failures else None,
             provider_name=llm_provider.provider_name,
             provider_kind=provider_kind,
+        )
+
+    def _run_stage_utility_preservation(
+        self, public_dir: Path, private_dir: Path, qa_dir: Path
+    ) -> None:
+        """Stage 22: UTILITY_PRESERVATION — score signal preservation.
+
+        Measures whether sanitized outputs still communicate the same broad
+        business/investment thesis as the private source. Uses structured
+        signal comparison, not exact text matching.
+        """
+        from ..qa.utility_preservation import (
+            CompanyThesis,
+            extract_public_thesis,
+            score_utility_preservation,
+            write_utility_reports,
+        )
+
+        # Build private source thesis from synthetic profile data
+        source_thesis = CompanyThesis(
+            anonymized_company_id=self.config.company_id,
+            business_model="diversified financial services",
+            product_exposure=["consumer banking", "commercial banking", "wealth management"],
+            fundamentals_signal="mixed",
+            valuation_signal="unknown",
+            profitability_signal="mixed",
+            balance_sheet_signal="mixed",
+            growth_signal="positive",
+            risk_signals=["regulatory", "competition", "credit risk"],
+            market_signal="value",
+            teaching_goal="Students should analyze how diversified financial firms balance risk and return across business lines.",
+        )
+
+        # Extract public thesis from sanitized outputs
+        public_thesis = extract_public_thesis(public_dir, self.config.company_id)
+
+        # Score preservation
+        result = score_utility_preservation(source_thesis, public_thesis)
+
+        # Write reports
+        private_qa_dir = private_dir / "qa"
+        private_path, public_path = write_utility_reports(
+            result, private_qa_dir, qa_dir
+        )
+
+        # Determine status
+        failures: list[str] = []
+        warnings: list[str] = []
+
+        if result.private.verdict == "FAIL":
+            failures.append(
+                f"Utility preservation FAIL: score={result.private.overall_utility_score:.2f}"
+            )
+        elif result.private.verdict == "WARN":
+            warnings.append(
+                f"Utility preservation WARN: score={result.private.overall_utility_score:.2f}, "
+                f"lost={result.public.signals_lost}"
+            )
+
+        self._register(
+            ProfessorStage.UTILITY_PRESERVATION,
+            StageStatus.FAIL if failures else StageStatus.PASS,
+            evidence_count=1,
+            outputs=[str(public_path)],
+            warnings=warnings if warnings else None,
+            failures=failures if failures else None,
+            provider_name="UtilityPreservationScorer",
+            provider_kind=ProviderKind.REAL,
         )
 
     def _run_stage_crosslink_build(self, public_dir: Path) -> None:

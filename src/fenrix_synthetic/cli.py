@@ -2870,12 +2870,20 @@ except ImportError:  # pragma: no cover
     default=False,
     help="Skip live LLM review (use offline stub)",
 )
+@click.option(
+    "--source-mapping",
+    "source_mapping_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to private source companies YAML mapping",
+)
 def build_professor_bundle(
     config_path: Path,
     output_root: Path,
     strict: bool,
     fast_fixtures: bool,
     allow_provider_skip_for_local_dev: bool,
+    source_mapping_path: Path | None,
     llm_review_provider: str,
     llm_review_model: str | None,
     llm_review_base_url: str | None,
@@ -2916,11 +2924,17 @@ def build_professor_bundle(
     if llm_review_strict:
         config.llm_provider_cfg["strict"] = True
 
+    # Apply source mapping path
+    if source_mapping_path:
+        config.source_mapping_path = source_mapping_path
+
     click.echo(f"Building professor bundle for {config.company_id}...")
     click.echo(f"  Strict: {config.strict}")
     click.echo(f"  Fast fixtures: {config.fast_fixtures}")
     click.echo(f"  Output: {config.output_root}")
     click.echo(f"  LLM review provider: {llm_provider}")
+    if source_mapping_path:
+        click.echo(f"  Source mapping: {source_mapping_path}")
 
     orchestrator = ProfessorBundleOrchestrator(config)
     result = orchestrator.run()

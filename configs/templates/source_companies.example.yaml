@@ -1,0 +1,31 @@
+# Source Company Mapping Template
+#
+# Copy this file to a gitignored private path (e.g., ~/fenrix-data/private/source_mapping/)
+# and replace placeholders with actual source company information.
+#
+# This file contains ONLY fake placeholders. Real source mappings must never be
+# committed to the repository.
+#
+# Usage:
+#   cp configs/templates/source_companies.example.yaml ~/fenrix-data/private/source_mapping/source_companies.yaml
+#   # Edit the copied file with real source company names and tickers.
+#   fenrix-synth build-professor-bundle --source-mapping ~/fenrix-data/private/source_mapping/source_companies.yaml ...
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WARNING: Replace placeholders with real values ONLY in your private copy.
+# Never commit real source company names or tickers to this repository.
+# ═══════════════════════════════════════════════════════════════════════════
+
+COMPANY_001:
+  source_company: "PLACEHOLDER_COMPANY_NAME_1"
+  source_ticker: "PLC1"
+
+COMPANY_002:
+  source_company: "PLACEHOLDER_COMPANY_NAME_2"
+  source_ticker: "PLC2"
+
+# Add more companies as needed:
+#
+# COMPANY_003:
+#   source_company: "PRIVATE REAL COMPANY NAME"
+#   source_ticker: "PRIVATE REAL TICKER"

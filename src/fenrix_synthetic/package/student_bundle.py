@@ -31,6 +31,7 @@ PUBLIC_ALLOWLIST_PREFIXES: tuple[str, ...] = (
     "news/",
     "llm_blind_guess_summary.json",
     "news_reconstruction_attack_summary.json",
+    "utility_preservation_summary.json",
 )
 
 # ── Forbidden path/pattern matchers ────────────────────────────────────────
@@ -57,8 +58,12 @@ FORBIDDEN_PATH_SUBSTRINGS: tuple[str, ...] = (
     "_mapping_",
     "identity_map",
     "source_map",
+    "source_companies",
     "_private_",
     "_raw_",
+    "utility_preservation_private",
+    "llm_blind_guess_private",
+    "news_reconstruction_private",
 )
 
 FORBIDDEN_EXTENSIONS: tuple[str, ...] = (
