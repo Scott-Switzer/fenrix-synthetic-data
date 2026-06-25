@@ -36,6 +36,7 @@ import csv
 import hashlib
 import json
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,6 +140,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
         llm_provider_cfg: dict[str, Any] | None = None,
         release_date: str = "2026-06-22",
         hash_salt: str = "phase8f-v1",
+        force_llm_review: bool = False,
     ) -> None:
         self.output_root = Path(output_root).resolve()
         self.source_mapping_path = Path(source_mapping_path).resolve()
@@ -148,11 +150,15 @@ class ProfessorBundleMultiCompanyOrchestrator:
         self.llm_provider_cfg = llm_provider_cfg or {}
         self.release_date = release_date
         self.hash_salt = hash_salt
+        self.force_llm_review = force_llm_review
 
         self.output_root.mkdir(parents=True, exist_ok=True)
         # Eagerly load and validate the source mapping so a missing or
         # malformed YAML fails at construction time (not deep inside run()).
         self._source_mapping: dict[str, dict[str, str]] = self._load_source_mapping()
+        # Inner-work directory lives OUTSIDE the output root so it never
+        # enters package pre-validation or the student ZIP.
+        self._inner_work_root = Path(tempfile.mkdtemp(prefix="fenrix_inner_work_"))
 
     # ── Source mapping ───────────────────────────────────────────────
 
@@ -248,6 +254,33 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     # ── Inner → bundle-root migration ─────────────────────────────────
 
+    @staticmethod
+    def _redact_private_filenames(obj: Any) -> Any:
+        """Recursively redact private audit filenames from a JSON-serializable object.
+
+        Replaces exact private filenames (e.g. ``peer_archetype_audit.json``)
+        with public-safe labels (e.g. ``peer_archetype_review``). This ensures
+        the public stage registry never exposes private artifact paths.
+        """
+        _REDACT_MAP: dict[str, str] = {
+            "peer_archetype_audit.json": "peer_archetype_review",
+            "numeric_transform_audit.json": "numeric_transform_review",
+            "trajectory_morph_audit.json": "trajectory_morph_review",
+            "llm_blind_guess_private.json": "llm_blind_guess_review",
+            "utility_preservation_private.json": "utility_preservation_review",
+            "news_reconstruction_private.json": "news_reconstruction_review",
+        }
+        if isinstance(obj, dict):
+            return {k: ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for v in obj]
+        if isinstance(obj, str):
+            for old, new in _REDACT_MAP.items():
+                if old in obj:
+                    obj = obj.replace(old, new)
+            return obj
+        return obj
+
     def _migrate_inner_outputs(
         self,
         company_id: str,
@@ -281,10 +314,13 @@ class ProfessorBundleMultiCompanyOrchestrator:
         # canonical schema. We deliberately skip both to keep one
         # canonical public writer per file.
         qa_dst.mkdir(parents=True, exist_ok=True)
-        if (inner_dir / "qa" / "stage_registry.json").exists():
-            shutil.copy(
-                str(inner_dir / "qa" / "stage_registry.json"),
-                str(qa_dst / f"stage_registry_{company_id}.json"),
+        inner_stage_reg = inner_dir / "qa" / "stage_registry.json"
+        if inner_stage_reg.exists():
+            raw = json.loads(inner_stage_reg.read_text())
+            redacted = self._redact_private_filenames(raw)
+            (qa_dst / f"stage_registry_{company_id}.json").write_text(
+                json.dumps(redacted, indent=2, sort_keys=True),
+                encoding="utf-8",
             )
 
         return warnings
@@ -389,6 +425,10 @@ class ProfessorBundleMultiCompanyOrchestrator:
         """Run LLM scoring for this single company and write only the
         PUBLIC per-company summary to ``qa/llm_blind_guess_<id>.json``.
 
+        On rerun, skip companies already reviewed successfully unless
+        ``force_llm_review`` is set. The per-company JSON on disk is the
+        authoritative resume checkpoint.
+
         We deliberately do NOT call ``LLMBlindGuessHarness.review`` — that
         helper writes ``private/qa/llm_blind_guess_private.json`` which is
         a forbidden substring in the package allowlist. Instead we run the
@@ -398,6 +438,20 @@ class ProfessorBundleMultiCompanyOrchestrator:
         from ..qa.confidence_scoring import score_blind_guess as _score
         from ..qa.llm_blind_guess import _build_blind_review_prompt
         from ..qa.llm_provider import LLMProviderError as _LLMPE
+
+        bundle_qa = self.output_root / "qa"
+        bundle_qa.mkdir(parents=True, exist_ok=True)
+        per_co = bundle_qa / f"llm_blind_guess_{company_id}.json"
+
+        # ── Resume: skip already-reviewed companies unless forced ─────
+        if per_co.exists() and not self.force_llm_review:
+            try:
+                existing = json.loads(per_co.read_text(encoding="utf-8"))
+                # Treat cached results that passed or completed as valid resume points.
+                if existing.get("passed") is True or existing.get("score") is not None:
+                    return None  # Caller will re-read or aggregate from disk later
+            except (json.JSONDecodeError, OSError):
+                pass  # Corrupt file — re-run
 
         source_info = self._source_mapping.get(company_id, {})
         actual_source_company = source_info.get("source_company") or None
@@ -410,8 +464,6 @@ class ProfessorBundleMultiCompanyOrchestrator:
             return None
 
         public_root = self.output_root / "public"
-        bundle_qa = self.output_root / "qa"
-        bundle_qa.mkdir(parents=True, exist_ok=True)
 
         public_content = collect_public_content(public_root, company_id)
         prompt = _build_blind_review_prompt(public_content, company_id)
@@ -439,7 +491,6 @@ class ProfessorBundleMultiCompanyOrchestrator:
         )
 
         # Persist only the redacted public summary at the per-company path.
-        per_co = bundle_qa / f"llm_blind_guess_{company_id}.json"
         per_co.write_bytes(
             orjson.dumps(
                 result.to_public_dict(),
@@ -486,52 +537,45 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     # ── Aggregation across companies ──────────────────────────────────
 
+    @staticmethod
+    def _safe_bg(r: CompanyIterationResult) -> BlindGuessResult:
+        """Extract non-None blind_guess from a reviewed result."""
+        assert r.blind_guess is not None
+        return r.blind_guess
+
     def _aggregate_blind_guess(self, results: list[CompanyIterationResult]) -> dict[str, Any]:
-        n = len(results)
-        passed = sum(1 for r in results if r.blind_guess and r.blind_guess.passed)
-        actual_top1 = [
-            r.company_id
-            for r in results
-            if r.blind_guess
-            and r.blind_guess.score_result
-            and r.blind_guess.score_result.private.top1_is_actual
-        ]
-        actual_top3 = [
-            r.company_id
-            for r in results
-            if r.blind_guess
-            and r.blind_guess.score_result
-            and r.blind_guess.score_result.private.actual_in_top3
-        ]
-        high_conf = [
-            r.company_id
-            for r in results
-            if r.blind_guess
-            and r.blind_guess.raw_response
-            and str(r.blind_guess.raw_response.get("confidence", "")).lower() == "high"
-        ]
-        medium_with_actual = [
-            r.company_id
-            for r in results
-            if r.blind_guess
-            and r.blind_guess.score_result
-            and r.blind_guess.score_result.private.verdict.value == "FAIL"
-            and r.blind_guess.raw_response
-            and str(r.blind_guess.raw_response.get("confidence", "")).lower() == "medium"
-        ]
-        # Final aggregation per Slack feedback item #5:
-        #   PASS = no top-1, no top-3, no high-conf, no medium-with-actual.
-        #   WARN = medium-confidence with NO actual source in candidates.
-        #   FAIL = any of top-1, top-3, high-conf, medium-with-actual.
-        medium_no_actual = [
-            r.company_id
-            for r in results
-            if r.blind_guess
-            and r.blind_guess.score_result
-            and r.blind_guess.score_result.private.verdict.value == "WARN"
-            and r.blind_guess.raw_response
-            and str(r.blind_guess.raw_response.get("confidence", "")).lower() == "medium"
-        ]
+        # Only count companies that actually have a blind_guess result
+        # (either freshly run or loaded from a resume cache).
+        reviewed: list[CompanyIterationResult] = [r for r in results if r.blind_guess is not None]
+        n = len(results)  # total companies
+        n_reviewed = len(reviewed)
+        passed = sum(1 for r in reviewed if r.blind_guess is not None and r.blind_guess.passed)
+
+        # Build lists by extracting blind_guess first, then working with the
+        # non-optional values.
+        actual_top1: list[str] = []
+        actual_top3: list[str] = []
+        high_conf: list[str] = []
+        medium_with_actual: list[str] = []
+        medium_no_actual: list[str] = []
+
+        for r in reviewed:
+            bg = self._safe_bg(r)
+            sr = bg.score_result
+            rr = bg.raw_response
+            if sr is not None and rr is not None:
+                if sr.private.top1_is_actual:
+                    actual_top1.append(r.company_id)
+                if sr.private.actual_in_top3:
+                    actual_top3.append(r.company_id)
+                conf = str(rr.get("confidence", "")).lower()
+                if conf == "high":
+                    high_conf.append(r.company_id)
+                if sr.private.verdict.value == "FAIL" and conf == "medium":
+                    medium_with_actual.append(r.company_id)
+                if sr.private.verdict.value == "WARN" and conf == "medium":
+                    medium_no_actual.append(r.company_id)
+
         privacy_classification = (
             "fail"
             if actual_top1 or actual_top3 or high_conf or medium_with_actual
@@ -540,12 +584,14 @@ class ProfessorBundleMultiCompanyOrchestrator:
             else "pass"
         )
         privacy_gate = "fail" if privacy_classification == "fail" else "pass"
-        summary = {
+        summary: dict[str, Any] = {
             "schema_version": "1.0",
             "aggregate_kind": "multi_company_blind_guess",
-            "companies_reviewed": n,
+            "companies_total": n,
+            "companies_reviewed": n_reviewed,
             "companies_passed": passed,
             "companies_failed": n - passed,
+            "companies_unreviewed": n - n_reviewed,
             "actual_source_top_1": actual_top1,
             "actual_source_top_3": actual_top3,
             "high_confidence_guesses": high_conf,
@@ -634,7 +680,59 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     # ── Orchestration entry point ─────────────────────────────────────
 
+    # ── Cached result reload helper ───────────────────────────────────
+
+    def _reload_cached_blind_guess(self, company_id: str) -> BlindGuessResult | None:
+        """Reload a cached per-company blind-guess result from disk.
+
+        Used when ``_run_per_company_blind_guess`` skipped due to resume.
+        Returns None if the cached file is missing, corrupt, or missing
+        the ``raw_response`` needed for re-scoring.
+        """
+        from ..qa.confidence_scoring import score_blind_guess as _score
+
+        per_co = self.output_root / "qa" / f"llm_blind_guess_{company_id}.json"
+        if not per_co.exists():
+            return None
+
+        try:
+            cached = json.loads(per_co.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+        source_info = self._source_mapping.get(company_id, {})
+        actual_source_company = source_info.get("source_company") or None
+        actual_source_ticker = source_info.get("source_ticker") or None
+
+        raw_response = cached.get("raw_response")
+        if raw_response is None:
+            return None  # cannot re-score without raw provider response
+
+        return BlindGuessResult(
+            company_id=company_id,
+            provider_name=cached.get("provider_name", "cached"),
+            model_name=cached.get("model_name", "cached"),
+            raw_response=raw_response,
+            score_result=_score(
+                raw_response,
+                actual_source_company=actual_source_company,
+                actual_source_ticker=actual_source_ticker,
+                strict=False,
+            ),
+            passed=cached.get("passed", True),
+        )
+
+    # ── Orchestration entry point ─────────────────────────────────────
+
     def run(self) -> MultiOrchestratorResult:
+        try:
+            return self._run_impl()
+        finally:
+            # Guarantee temp-dir cleanup even on exception.
+            if self._inner_work_root.exists():
+                shutil.rmtree(self._inner_work_root, ignore_errors=True)
+
+    def _run_impl(self) -> MultiOrchestratorResult:
         source_mapping = self._load_source_mapping()
         companies_processed = sorted(source_mapping.keys())
 
@@ -648,7 +746,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
         failures: list[str] = []
 
         for company_id in companies_processed:
-            inner_dir = self.output_root / "._inner_work" / company_id
+            inner_dir = self._inner_work_root / company_id
             inner_dir.mkdir(parents=True, exist_ok=True)
 
             status, inner_warnings = self._run_inner_for_company(company_id, inner_dir)
@@ -669,6 +767,11 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
             # Run per-company LLM blind-guess (writes per-company JSON to qa/)
             bg = self._run_per_company_blind_guess(company_id, public_dst)
+            # If skipped due to resume, reload cached result from disk.
+            if bg is None:
+                bg = self._reload_cached_blind_guess(company_id)
+                if bg is None:
+                    warnings.append(f"{company_id}: unable to reload cached blind-guess result")
 
             # Run per-company utility preservation
             util = self._run_per_company_utility(company_id, public_dst)
@@ -684,9 +787,6 @@ class ProfessorBundleMultiCompanyOrchestrator:
             )
 
         # Per-company summaries in 1 location → aggregate.
-        # The inner rename already wrote per-company qa/llm_blind_guess_<id>.json
-        # (via the per-company harness in _run_per_company_blind_guess).
-        # The aggregate functions re-write the bundle-level summary at qa/llm_blind_guess_summary.json.
         blind_guess_summary = self._aggregate_blind_guess(iteration_results)
         utility_summary = self._aggregate_utility(iteration_results)
 
@@ -699,11 +799,6 @@ class ProfessorBundleMultiCompanyOrchestrator:
         except RuntimeError as exc:
             failures.append(f"zip_packaging_failed: {exc}")
             zip_path = self.output_root / "exports" / "anonymized_bundle.zip"  # may not exist
-
-        # Final cleanup: remove temporary inner work dirs
-        inner_work_root = self.output_root / "._inner_work"
-        if inner_work_root.exists():
-            shutil.rmtree(inner_work_root, ignore_errors=True)
 
         companies_passed = sum(
             1 for r in iteration_results if r.blind_guess and r.blind_guess.passed

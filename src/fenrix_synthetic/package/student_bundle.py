@@ -51,6 +51,12 @@ FORBIDDEN_PATH_PREFIXES: tuple[str, ...] = (
     "original/",
     "originals/",
     "exports/",
+    # AppleDouble / macOS metadata / temp-work directories
+    "__MACOSX/",
+    ".AppleDouble/",
+    "._inner_work/",
+    ".inner_work/",
+    "._/",
 )
 
 FORBIDDEN_PATH_SUBSTRINGS: tuple[str, ...] = (
@@ -64,6 +70,12 @@ FORBIDDEN_PATH_SUBSTRINGS: tuple[str, ...] = (
     "utility_preservation_private",
     "llm_blind_guess_private",
     "news_reconstruction_private",
+    # AppleDouble / macOS metadata / temp-work artifacts (path-component level)
+    ".DS_Store",
+    ".inner_work",
+    "peer_archetype_audit",
+    "numeric_transform_audit",
+    "trajectory_morph_audit",
 )
 
 FORBIDDEN_EXTENSIONS: tuple[str, ...] = (
@@ -123,6 +135,11 @@ def _is_path_forbidden(rel_path: str) -> bool:
             return True
     for ext in FORBIDDEN_EXTENSIONS:
         if rel_path.lower().endswith(ext):
+            return True
+    # AppleDouble / macOS metadata: any path component starting with ._ or matching
+    # common macOS junk names.
+    for part in Path(rel_path).parts:
+        if part.startswith("._") or part in {"__MACOSX", ".DS_Store", ".AppleDouble"}:
             return True
     return False
 

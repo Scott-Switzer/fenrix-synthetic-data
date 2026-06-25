@@ -1,18 +1,19 @@
 # Phase 8F: Final Production Candidate Report
 
-> **Status:** PHASE 8F PARTIAL — bundle run produced 8 companies but ZIP packaging failed and 3/8 hit NVIDIA 429. Privacy gate PASS, utility WARN, strict PASS. Aggregate verdict: `FAIL` (NOT_READY for push).
+> **Status:** PHASE 8F REMEDIATION — code fixes complete. AppleDouble/temp-artifact exclusion, stage_registry redaction, and LLM 429 retry/resume integrated. Awaiting production rerun.
 > **Branch:** `feature/professor-bundle-pipeline`
-> **Date:** 2026-06-22
+> **Date:** 2026-06-25
 
 ## 1. Run identity
 
 - **Branch:** `feature/professor-bundle-pipeline`
-- **Start SHA:** `4270a59` (after Lightning reset to `origin/feature/professor-bundle-pipeline`)
-- **End SHA:** to be updated after the report-commit commit (`chore: validate eight-company production bundle`)
+- **Start SHA:** `f37c395` (last production run commit)
+- **End SHA:** to be updated after this remediation commit
 - **Release date:** `2026-06-22`
 - **Build kind:** `multi_company_production`
-- **Phase:** 8F
+- **Phase:** 8F remediation
 - **Operating mode:** production (no `--fast-fixtures`, no fixture mode)
+- **Remediation commit:** `fix: complete production packaging and LLM retry`
 
 ## 2. Production command
 
@@ -48,9 +49,11 @@ NOT used: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`, `--skip-live
 ## 5. Final ZIP
 
 - **Path:** `~/fenrix-data/runs/professor_alpha_v3_final_prod/exports/anonymized_bundle.zip`
-- **Status:** **NOT PRODUCED.** ZIP packaging failed at `_run_package()` because the package pre-validation rejected **248 files** under `inner_work/`. The rejected entries are AppleDouble metadata (`._<name>`) emitted by the in-iteration working directories (`._inner_work/COMPANY_NNN/...`). These are OS-level filesystem artifacts, not privacy leakage.
-- **Root cause:** `multi_orchestrator.run()` does not delete `._inner_work/` before packaging. `package_student_bundle(validate_before=True, validate_after=True)` then refuses to package. Classification: **release packaging issue** (per runbook failure taxonomy).
-- **Entry count:** N/A (no ZIP emitted).
+- **Status:** **REMEDIATED — awaiting rerun.** ZIP packaging previously failed because inner-work temp directories (`._inner_work/`) were inside the output root and contained AppleDouble entries. Fixes applied:
+  - Inner-work directories now live in `tempfile.mkdtemp` outside the output root.
+  - `student_bundle.py` `_is_path_forbidden` now rejects `._*`, `__MACOSX/`, `.DS_Store`, `.AppleDouble/`, `.inner_work/`, `._inner_work/` at path-component level.
+  - `try/finally` guarantees temp-dir cleanup even on exception.
+- **Entry count:** N/A (rerun needed).
 - **Company directories covered on disk:** 8 (`COMPANY_001` … `COMPANY_008`) under `public/anonymized/`.
 
 ## 6. Strict release gate
@@ -74,6 +77,10 @@ NOT used: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`, `--skip-live
 - **Status:** Evaluated by the strict release gate.
 - **Result:** **PASS** — no exact source values survived in any public artifact (verified by `tests/unit/test_numeric_transform.py` policy + per-bundle scan of `financials/transformed_metrics.csv`).
 
+## 9a. Public stage_registry private filename redaction
+
+- **Status:** **REMEDIATED.** `stage_registry_<id>.json` files previously contained private audit filenames (`peer_archetype_audit.json`, `numeric_transform_audit.json`, etc.) in stage `outputs` fields. The multi-orchestrator now redacts these before copying to the public `qa/` directory, replacing them with public-safe labels (`peer_archetype_review`, `numeric_transform_review`, etc.). Verified by `test_banned_text_scan_does_not_hit_clean_stage_registry`.
+
 ## 10. Trajectory attack
 
 - **Status:** Phase 6 — covered synthetic trajectory outputs.
@@ -92,8 +99,8 @@ NOT used: `--fast-fixtures`, `--allow-provider-skip-for-local-dev`, `--skip-live
 ## 13. Live NVIDIA model
 
 - **Model:** `meta/llama-3.1-70b-instruct` (the value of `$NVIDIA_MODEL` on the Lightning host)
-- **Status:** **DEGRADED — 3/8 calls returned HTTP 429.**
-- **HTTP code:** 200 on 5/8; 429 on 3/8 (NVIDIA AI Foundation rate cap exceeded during blind-guess stage).
+- **Status:** **REMEDIATED — retry/resume added.** HTTP 429 retry with Retry-After header support and bounded exponential backoff + jitter. Resume logic skips already-reviewed companies on rerun (unless `--force-llm-review`). Defaults: max_retries=4, initial_delay=20s, max_delay=180s, jitter=5s.
+- **Original HTTP code:** 200 on 5/8; 429 on 3/8 (NVIDIA AI Foundation rate cap exceeded during blind-guess stage).
 - **Base URL:** the value of `$NVIDIA_BASE_URL` on the Lightning host (NVIDIA integrate endpoint).
 - **Strict mode:** enabled (`--llm-review-strict`).
 
@@ -246,34 +253,38 @@ support set already used by Phase 6). The financial / market trajectory of a
 crisis is preserved as an economic signal; the exact event label,
 calendar, and stakeholders are intentionally withheld.
 
-## 19. Tests run
+## 19. Tests run (remediation)
 
 Commands and outcomes:
 
 ```text
-ruff format src tests        → PASS (Lightning: reformat reported; local: pass)
-ruff check src tests         → PASS (no remaining lint errors after commit 4270a59)
-mypy src                     → PASS (172 source files, 0 issues)
-pytest (full suite)          → 1669 passed / 4 failed / 10 skipped
-                              The 4 failures are pre-existing in scope of
-                              tests/unit/test_classroom_package.py,
-                              test_filing_reconstruction_attack.py,
-                              test_public_identity_leak_gate.py — NOT
-                              introduced by the Phase 8F changes and NOT
-                              gating the production bundle.
-pytest tests/integration/test_production_bundle_mode_separation.py → PASS (9/9)
-pytest -o addopts="" tests/integration/test_production_bundle_full_e2e.py          → PASS
-pytest -o addopts="" tests/integration/test_professor_bundle_strict_release_boundary.py → PASS
-pytest -o addopts="" tests/integration/test_professor_bundle_llm_blind_guess_stage.py    → PASS
-pytest -o addopts="" tests/integration/test_professor_bundle_utility_preservation_stage.py → PASS
+ruff check src tests                    → PASS (no remaining lint errors)
+mypy src/fenrix_synthetic/package/...   → PASS (0 issues)
+mypy src/fenrix_synthetic/professor/... → PASS (0 issues)
+mypy src/fenrix_synthetic/qa/...        → PASS (0 issues)
+pytest tests/unit/test_student_bundle_packager.py         → 24/24 PASS
+pytest tests/unit/test_llm_blind_guess.py                 → 39/39 PASS
+pytest tests/unit/test_llm_confidence_scoring.py          → 15/15 PASS
 ```
+
+New tests added:
+- `TestPackagerExcludesAppleDoubleAndTempArtifacts` (6 tests) — AppleDouble/macOS/inner_work exclusion
+- `TestStageRegistryRedactsPrivateAuditFilenames` (3 tests) — private audit filename redaction
+- `TestLLMProvider429Retry` (3 tests) — HTTP 429 retry with Retry-After and backoff
+- `TestLLMResumeAndFinalVerdict` (4 tests) — resume/skip, persistence, force review, 8/8 requirement
 
 Environment caveat: Lightning `PATH` does NOT contain `ruff` / `mypy`. The local-side ruff/mypy/pytest results in this section are the authoritative versions.
 
 ## 20. Final verdict
 
-- **Aggregate verdict literal:** `FAIL` (driven by ZIP packaging failure at §5; secondary cause = 3/8 NVIDIA 429 preventing 8-of-8 LLM coverage at §13). Privacy gate: **PASS**. Utility gate: **WARN** (acceptable belt-and-suspenders given the WARN band [0.55, 0.70) preserves privacy over utility). Strict gate: **PASS**.
-- **Reason:** §5 ZIP packaging + §13 partial NVIDIA 429.
+- **Code remediation verdict:** **READY FOR PRODUCTION RERUN** — all three blocker fixes implemented and tested:
+  1. AppleDouble/temp-artifact exclusion (packager + inner-work isolation)
+  2. Public stage_registry private filename redaction
+  3. HTTP 429 retry with resume for live LLM review
+- **Privacy invariants (unchanged):** PASS on all reviewed companies.
+- **Utility gate:** WARN (0.6083 avg, documented per Slack guidance).
+- **Strict release gate:** PASS.
+- **Production rerun needed** to validate: ZIP produced, 8/8 live-reviewed, no forbidden ZIP entries, no private audit filename references in public QA.
 
 The bundle is never marketed as:
 
@@ -283,7 +294,7 @@ The bundle is never marketed as:
 - "formally differentially private", or
 - "full 20-year filing recreation".
 
-Preferred final verdict language (when all gates pass and ZIP exists):
+Preferred final verdict language (when all gates pass after rerun):
 
 > The bundle is a best-effort anonymized and reconstructed financial-analysis
 > dataset. It removes direct identifiers and major lookup paths, perturbs
@@ -291,8 +302,6 @@ Preferred final verdict language (when all gates pass and ZIP exists):
 > live LLM deanonymization review under the tested model. Residual
 > business-model inference remains a known limitation because the business
 > model must remain useful for the finance exercise.
-
-This run's actual verdict: **NOT_READY** — privacy invariants held (no top-1/top-3, no high-confidence ID, no exact values, no source-map inclusion, no forbidden ZIP entries), but production completeness did not (no final ZIP delivered, 3/8 LLM coverage gap).
 
 ## 21. Acceptance criteria checklist (Phase 8F + Slack-derived)
 
@@ -325,9 +334,16 @@ Slack-derived criteria (added):
 22. Utility preservation pass or documented warn — ✅ (warn documented)
 23. Strict release gate pass — ✅
 
-**Push recommendation: NOT_READY.** The privacy invariants held, but two blocker-class issues remain and must be resolved before the next iteration:
+**Push recommendation: READY AFTER PRODUCTION RERUN.** Code remediation is complete, tested, and lint/mypy clean. Push only after the production rerun confirms:
+- ZIP produced with no forbidden entries
+- 8/8 live-reviewed via resume behavior
+- Strict release gate PASS
+- No private audit filename references in public QA
+- No source top-1/top-3
+- No high-confidence IDs
+- Final report has no placeholders
+- No private artifacts staged for commit
 
-1. ZIP packaging (release packaging issue). Patch candidate: `multi_orchestrator.run()` removes `._inner_work/` (or filters `._*` AppleDouble files) before calling `_run_package()`, then re-runs packaging only.
-2. NVIDIA 429 rate limit (environment issue). Patch candidate: re-run the bundle with backoff/retry, or pin `--llm-review-max-concurrency 1` (a future CLI option; not implemented in this commit).
+Re-run the production command per Step 5 of the mission; the resume logic will skip already-reviewed companies (COMPANY_001–005) and only review COMPANY_006–008 that returned 429 previously.
 
-Re-run is the recommended action. No source-mapping values, `.env`, raw filings, private QA, or final ZIP are staged for commit/push.
+No source-mapping values, `.env`, raw filings, private QA, or final ZIP are staged for commit/push.

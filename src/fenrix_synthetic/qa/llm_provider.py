@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -404,7 +406,19 @@ class OpenAICompatibleProvider:
 
     Configuration is drawn from constructor args or environment variables.
     The API key is never printed, logged, or persisted.
+
+    HTTP 429 retry behaviour:
+    - Honors ``Retry-After`` header if present and reasonable (≤ ``max_delay``).
+    - Otherwise uses bounded exponential backoff with jitter.
+    - ``_sleeper`` is injectable for deterministic tests (set to a callable
+      accepting seconds).
     """
+
+    #: Default retry constants — kept at module level so tests can reference them.
+    RETRY_DEFAULT_MAX_ATTEMPTS: int = 4
+    RETRY_DEFAULT_INITIAL_DELAY: float = 20.0
+    RETRY_DEFAULT_MAX_DELAY: float = 180.0
+    RETRY_DEFAULT_JITTER: float = 5.0
 
     def __init__(
         self,
@@ -412,9 +426,12 @@ class OpenAICompatibleProvider:
         api_key_env: str = "NVIDIA_API_KEY",
         model: str = "meta/llama-3.1-70b-instruct",
         timeout: float = 60.0,
-        max_retries: int = 2,
+        max_retries: int = RETRY_DEFAULT_MAX_ATTEMPTS,
         temperature: float = 0.0,
         max_tokens: int = 2048,
+        retry_initial_delay: float = RETRY_DEFAULT_INITIAL_DELAY,
+        retry_max_delay: float = RETRY_DEFAULT_MAX_DELAY,
+        retry_jitter: float = RETRY_DEFAULT_JITTER,
     ) -> None:
         self._base_url = (base_url or "https://integrate.api.nvidia.com/v1").rstrip("/")
         self._api_key = os.environ.get(api_key_env, "")
@@ -424,6 +441,11 @@ class OpenAICompatibleProvider:
         self._max_retries = max_retries
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._retry_initial_delay = retry_initial_delay
+        self._retry_max_delay = retry_max_delay
+        self._retry_jitter = retry_jitter
+        # Test-injectable sleeper (seconds → None).
+        self._sleeper: Callable[[float], None] = time.sleep
 
     @property
     def provider_name(self) -> str:
@@ -440,15 +462,18 @@ class OpenAICompatibleProvider:
     def complete_json(self, prompt: str, *, timeout_s: int = 60) -> dict[str, Any]:
         """Send prompt and return parsed JSON response.
 
+        Retries on HTTP 429 with ``Retry-After`` header support and
+        bounded exponential backoff + jitter.
+
         Args:
             prompt: The full prompt to send.
-            timeout_s: Maximum time to wait.
+            timeout_s: Maximum time to wait per attempt.
 
         Returns:
             Parsed JSON dict.
 
         Raises:
-            LLMProviderError: On any failure (network, auth, malformed response).
+            LLMProviderError: On any non-retryable failure or exhaustion.
         """
         if httpx is None:
             raise LLMProviderError("httpx package not available for LLM requests")
@@ -475,8 +500,9 @@ class OpenAICompatibleProvider:
         }
 
         last_error: str | None = None
+        max_attempts = max(1, self._max_retries + 1)
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(max_attempts):
             try:
                 resp = httpx.post(
                     f"{self._base_url}/chat/completions",
@@ -503,14 +529,22 @@ class OpenAICompatibleProvider:
                 last_error = f"HTTP {exc.response.status_code}: {body_snippet}"
                 if exc.response.status_code in (401, 403):
                     raise LLMProviderError(f"Authentication failed: {last_error}") from exc
-                if exc.response.status_code == 429 and attempt < self._max_retries:
-                    time.sleep(2**attempt)
+                if exc.response.status_code == 429 and attempt + 1 < max_attempts:
+                    delay = self._compute_429_delay(exc.response.headers)
+                    logger.warning(
+                        "LLM provider HTTP 429 on attempt %d/%d; sleeping %.1fs",
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                    )
+                    self._sleeper(delay)
                     continue
 
             except httpx.TimeoutException:
                 last_error = "timeout"
-                if attempt < self._max_retries:
-                    time.sleep(2**attempt)
+                if attempt + 1 < max_attempts:
+                    delay = self._compute_backoff_delay(attempt)
+                    self._sleeper(delay)
                     continue
 
             except LLMProviderError:
@@ -518,13 +552,40 @@ class OpenAICompatibleProvider:
 
             except Exception as exc:
                 last_error = str(exc)
-                if attempt < self._max_retries:
-                    time.sleep(2**attempt)
+                if attempt + 1 < max_attempts:
+                    delay = self._compute_backoff_delay(attempt)
+                    self._sleeper(delay)
                     continue
 
         raise LLMProviderError(
-            f"LLM request failed after {self._max_retries} retries: {last_error}"
+            f"LLM request failed after {max_attempts} attempts: {last_error}"
         ) from None
+
+    def _compute_429_delay(self, response_headers: Any | None) -> float:
+        """Compute delay for an HTTP 429 response.
+
+        Honors ``Retry-After`` header if present and reasonable (≤ max_delay).
+        Falls back to bounded exponential backoff with jitter.
+        """
+        if response_headers is not None:
+            try:
+                retry_after = response_headers.get("Retry-After") or response_headers.get("retry-after")
+                if retry_after is not None:
+                    try:
+                        val = float(str(retry_after))
+                        if 0 < val <= self._retry_max_delay:
+                            return val
+                    except (ValueError, TypeError):
+                        pass
+            except AttributeError:
+                pass
+        return self._compute_backoff_delay(0)
+
+    def _compute_backoff_delay(self, attempt: int, /) -> float:
+        """Compute bounded exponential backoff delay with jitter."""
+        delay: float = min(self._retry_max_delay, self._retry_initial_delay * (2 ** attempt))
+        jitter: float = random.uniform(0, self._retry_jitter)
+        return delay + jitter
 
     def __repr__(self) -> str:
         return (
@@ -578,7 +639,10 @@ def create_llm_provider(
             api_key_env=cfg.get("api_key_env", "NVIDIA_API_KEY"),
             model=cfg.get("model", "meta/llama-3.1-70b-instruct"),
             timeout=cfg.get("timeout", 60.0),
-            max_retries=cfg.get("max_retries", 2),
+            max_retries=cfg.get("max_retries", 4),
+            retry_initial_delay=cfg.get("retry_initial_delay_s", 20.0),
+            retry_max_delay=cfg.get("retry_max_delay_s", 180.0),
+            retry_jitter=cfg.get("retry_jitter_s", 5.0),
         )
 
     if provider_type == "local_ollama":
