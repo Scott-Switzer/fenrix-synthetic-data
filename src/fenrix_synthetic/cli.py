@@ -2993,12 +2993,51 @@ def build_professor_bundle(
     default=False,
     help="Validate inputs and print plan without running",
 )
+@click.option(
+    "--llm-review-provider",
+    default="offline_stub",
+    type=click.Choice(["offline_stub", "openai_compatible", "local_ollama"]),
+    help="LLM review provider for blind guess stage",
+)
+@click.option(
+    "--llm-review-model",
+    default=None,
+    help="LLM model identifier (e.g., meta/llama-3.1-70b-instruct)",
+)
+@click.option(
+    "--llm-review-base-url",
+    default=None,
+    help="Base URL for LLM API (e.g., https://integrate.api.nvidia.com/v1)",
+)
+@click.option(
+    "--llm-review-api-key-env",
+    default="NVIDIA_API_KEY",
+    help="Environment variable name for LLM API key",
+)
+@click.option(
+    "--llm-review-strict",
+    is_flag=True,
+    default=False,
+    help="Fail closed on LLM provider errors in strict mode",
+)
+@click.option(
+    "--skip-live-llm-review",
+    is_flag=True,
+    default=False,
+    help="Skip live LLM review (use offline stub)",
+)
 def build_production_bundle(
     output_root: Path,
     source_mapping_path: Path,
     archive_inventory_path: Path,
     release_date: str,
     dry_run: bool,
+    llm_review_provider: str = "offline_stub",
+    llm_review_model: str | None = None,
+    llm_review_base_url: str | None = None,
+    llm_review_api_key_env: str = "NVIDIA_API_KEY",
+    llm_review_strict: bool = False,
+    skip_live_llm_review: bool = False,
 ) -> None:
     """Build a TRUE production multi-company professor bundle (Phase 8F).
 
@@ -3050,11 +3089,33 @@ def build_production_bundle(
     click.echo(f"  archive_inventory: {archive_inventory_path}")
     click.echo(f"  release_date: {release_date}")
 
+    # Build LLM provider config from CLI flags. In production, the
+    # orchestrator uses llm_provider_cfg["provider"] == "openai_compatible"
+    # with base_url / model / api_key_env from env (NVIDIA_BASE_URL /
+    # NVIDIA_MODEL / NVIDIA_API_KEY).
+    provider_choice = "offline_stub" if skip_live_llm_review else llm_review_provider
+    llm_provider_cfg: dict[str, Any] = {
+        "provider": provider_choice,
+        "api_key_env": llm_review_api_key_env,
+    }
+    if llm_review_model:
+        llm_provider_cfg["model"] = llm_review_model
+    if llm_review_base_url:
+        llm_provider_cfg["base_url"] = llm_review_base_url
+    if llm_review_strict:
+        llm_provider_cfg["strict"] = True
+    click.echo(f"  llm_review_provider: {provider_choice}")
+    if llm_provider_cfg.get("model"):
+        click.echo(f"  llm_review_model: {llm_provider_cfg['model']}")
+    if llm_provider_cfg.get("base_url"):
+        click.echo(f"  llm_review_base_url: {llm_provider_cfg['base_url']}")
+
     orchestrator = ProfessorBundleMultiCompanyOrchestrator(
         output_root=output_root,
         source_mapping_path=source_mapping_path,
         archive_inventory_path=archive_inventory_path,
         release_date=release_date,
+        llm_provider_cfg=llm_provider_cfg,
     )
     result = orchestrator.run()
 

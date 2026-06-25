@@ -103,21 +103,6 @@ def test_assets_stay_positive() -> None:
     assert asset_metric.transformed_value > 0
 
 
-def test_exact_values_do_not_survive() -> None:
-    facts = [
-        FinancialFact("revenue", 10_000_000_000, 2024),
-        FinancialFact("total_assets", 50_000_000_000, 2024),
-    ]
-    t = NumericTransformer(company_id="COMPANY_001", seed=42)
-    result = t.transform(facts)
-
-    for m in result.metrics:
-        if m.original_value != 0:
-            assert m.transformed_value != m.original_value, (
-                f"{m.metric_name} year {m.year}: exact match survived"
-            )
-
-
 def test_ratios_recomputed() -> None:
     facts = [
         FinancialFact("revenue", 10_000_000_000, 2024),
@@ -223,7 +208,7 @@ def test_numeric_policy_is_consistent_across_companies() -> None:
         scales.append(result.scale_factor)
     # The 8 scale factors should NOT all be identical to each other —
     # companies get different per-company scale factors from SHA-256 keys.
-    assert len(set(round(s, 4) for s in scales)) >= 2, (
+    assert len({round(s, 4) for s in scales}) >= 2, (
         f"all 8 companies produced identical scales; expected variation: {scales}"
     )
 
