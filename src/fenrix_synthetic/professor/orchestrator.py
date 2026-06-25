@@ -63,6 +63,7 @@ from .sec_providers import (
 )
 from .stages import (
     BuildMode,
+    LiveValidationStatus,
     ProfessorStage,
     ProviderKind,
     StageRegistry,
@@ -281,6 +282,10 @@ class ProfessorBundleOrchestrator:
             self._run_stage_adversarial_qa(qa_dir)
         except Exception as exc:
             stage_crashed = True
+            self.registry.set_live_validation(
+                LiveValidationStatus.PROVIDER_ERROR,
+                detail="Pipeline crashed before or during LLM stage",
+            )
             self._register(
                 ProfessorStage.RELEASE_GATE,
                 StageStatus.FAIL,
@@ -334,6 +339,7 @@ class ProfessorBundleOrchestrator:
             "strict_fixture_ready": self.registry.strict_fixture_ready,
             "fixture_ready": self.registry.fixture_ready,
             "beta_status": _read_gate_beta_status(qa_dir) or self.registry.beta_status,
+            "live_validation_status": self.registry.live_validation_status.value,
             "build_mode": self.config.build_mode.value,
             "output_root": str(self.config.output_root),
             "zip_path": str(exports_dir / "anonymized_bundle.zip"),
@@ -1036,7 +1042,15 @@ class ProfessorBundleOrchestrator:
 
         try:
             llm_provider = create_llm_provider(provider_type, self.llm_provider_cfg)
+            # Determine if this is a live (network) provider by checking the instance type
+            from ..qa.llm_provider import OfflineStubProvider
+
+            is_live_provider = not isinstance(llm_provider, OfflineStubProvider)
         except (ValueError, ImportError) as e:
+            self.registry.set_live_validation(
+                LiveValidationStatus.NOT_LIVE_VALIDATED,
+                detail=f"LLM provider not available: {e}",
+            )
             self._register(
                 ProfessorStage.LLM_BLIND_GUESS,
                 StageStatus.PROVIDER_NOT_RUN,
@@ -1061,7 +1075,51 @@ class ProfessorBundleOrchestrator:
                 actual_source_company=actual_source_company,
                 actual_source_ticker=actual_source_ticker,
             )
+
+            # Set live validation status based on result
+            if is_live_provider:
+                if result.provider_error:
+                    self.registry.set_live_validation(
+                        LiveValidationStatus.PROVIDER_ERROR,
+                        detail=f"Live LLM call failed: {result.provider_error}",
+                    )
+                elif result.score_result and result.score_result.private.verdict.value == "PASS":
+                    # Check if there are warnings on the private score detail
+                    has_warnings = bool(
+                        getattr(result.score_result.private, "warnings", [])
+                    )
+                    if has_warnings:
+                        self.registry.set_live_validation(
+                            LiveValidationStatus.LIVE_LLM_VALIDATED,
+                            detail="Live review passed (with warnings) — model: "
+                            + llm_provider.model_name,
+                        )
+                    else:
+                        self.registry.set_live_validation(
+                            LiveValidationStatus.LIVE_LLM_VALIDATED,
+                            detail="Live review passed (low confidence) — model: "
+                            + llm_provider.model_name,
+                        )
+                else:
+                    reason = (
+                        result.score_result.private.reason
+                        if result.score_result
+                        else "unknown"
+                    )
+                    self.registry.set_live_validation(
+                        LiveValidationStatus.LIVE_LLM_FAILED,
+                        detail=f"Live review failed: {reason}",
+                    )
+            else:
+                self.registry.set_live_validation(
+                    LiveValidationStatus.NOT_ATTEMPTED,
+                    detail="Using offline stub provider (not a live validation)",
+                )
         except Exception as e:
+            self.registry.set_live_validation(
+                LiveValidationStatus.PROVIDER_ERROR,
+                detail=f"LLM blind guess crashed: {e}",
+            )
             self._register(
                 ProfessorStage.LLM_BLIND_GUESS,
                 StageStatus.FAIL if self.config.strict else StageStatus.PROVIDER_NOT_RUN,
@@ -1825,6 +1883,7 @@ class ProfessorBundleOrchestrator:
             "strict_fixture_ready": self.registry.strict_fixture_ready,
             "fixture_ready": self.registry.fixture_ready,
             "beta_status": self.registry.beta_status,
+            "live_validation_status": self.registry.live_validation_status.value,
             "non_production_conditions": self.registry.non_production_conditions,
             "stage_count": len(self.registry._records),
             "all_stages_pass": self.registry.all_stages_pass,

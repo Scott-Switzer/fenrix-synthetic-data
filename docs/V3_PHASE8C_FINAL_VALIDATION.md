@@ -179,3 +179,72 @@ fenrix-synth build-professor-bundle \
   --output-root /tmp/fenrix_phase8c_smoke \
   --llm-review-provider offline_stub
 ```
+
+## Phase 8D: Live Validation Complete (2026-06-24)
+
+### Live NVIDIA/OpenAI-compatible Review
+
+- **NVIDIA key detected**: Yes (via `.env`, never committed)
+- **httpx installed**: Yes (v0.28.1, declared in `pyproject.toml` as production dependency)
+- **Live request attempted**: Yes
+- **Live request succeeded**: Yes (HTTP 200 from `https://integrate.api.nvidia.com/v1/chat/completions`)
+- **Model used**: `$NVIDIA_MODEL` (meta/llama-3.1-70b-instruct or equivalent)
+- **Companies reviewed**: COMPANY_001
+- **Any high confidence**: No
+- **Any actual source top-1**: No
+- **Any actual source top-3**: No
+- **Live validation status**: `LIVE_LLM_VALIDATED`
+
+### How to Reproduce Live Review
+
+```bash
+# Load .env
+set -a && source .env && set +a
+
+# Run with live NVIDIA review
+python -m fenrix_synthetic.cli build-professor-bundle \
+  --config configs/professor_bundle.fixture.yaml \
+  --fast-fixtures \
+  --output /tmp/fenrix_live_smoke \
+  --llm-review-provider openai_compatible \
+  --llm-review-base-url "$NVIDIA_BASE_URL" \
+  --llm-review-model "$NVIDIA_MODEL" \
+  --llm-review-api-key-env NVIDIA_API_KEY \
+  --llm-review-strict
+```
+
+### Live Validation Status Values
+
+Added to `StageRegistry` and `beta_status`:
+
+| Status | Meaning |
+|--------|--------|
+| `NOT_ATTEMPTED` | No live provider configured or fixture mode |
+| `NOT_LIVE_VALIDATED` | Live provider available but not run |
+| `LIVE_LLM_VALIDATED` | Live review ran and confidence gate passed |
+| `LIVE_LLM_FAILED` | Live review ran but model identified source |
+| `PROVIDER_ERROR` | Live review attempted but API error occurred |
+| `PRODUCTION_CANDIDATE_READY` | All stages pass + live validation passes |
+
+### httpx Dependency
+
+`httpx>=0.28` is a production dependency in `pyproject.toml`. Install with:
+
+```bash
+pip install -e .
+```
+
+On Lightning.ai with externally-managed Python:
+```bash
+pip install httpx --break-system-packages
+```
+
+### Test Results (Phase 8D)
+
+- ruff: clean
+- mypy: clean
+- All focused tests pass
+- Live NVIDIA smoke: PASS (LIVE_LLM_VALIDATED)
+- Offline smoke: PASS (STRICT_FIXTURE_READY)
+- ZIP validations: Both pass, all required files present, zero forbidden entries
+

@@ -2944,6 +2944,7 @@ def build_professor_bundle(
     click.echo(f"Release safe: {result.get('release_safe', False)}")
     click.echo(f"Strict fixture ready: {result.get('strict_fixture_ready', False)}")
     click.echo(f"Beta status: {result['beta_status']}")
+    click.echo(f"Live validation: {result.get('live_validation_status', 'NOT_ATTEMPTED')}")
     click.echo(f"ZIP: {result['zip_path']}")
 
     # Exit code logic

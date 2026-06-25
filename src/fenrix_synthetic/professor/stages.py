@@ -77,6 +77,23 @@ class BuildMode(StrEnum):
     PRODUCTION = "production"
 
 
+class LiveValidationStatus(StrEnum):
+    """Live LLM validation outcome for the blind-guess review stage.
+
+    - NOT_ATTEMPTED: No live provider configured or build mode is fixture/local_dev.
+    - NOT_LIVE_VALIDATED: Live provider configured but review was skipped or not run.
+    - LIVE_LLM_VALIDATED: Live review ran and confidence gate passed.
+    - LIVE_LLM_FAILED: Live review ran but confidence gate failed (top-1, top-3, high confidence).
+    - PROVIDER_ERROR: Live review attempted but provider returned an error.
+    """
+
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
+    NOT_LIVE_VALIDATED = "NOT_LIVE_VALIDATED"
+    LIVE_LLM_VALIDATED = "LIVE_LLM_VALIDATED"
+    LIVE_LLM_FAILED = "LIVE_LLM_FAILED"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
+
+
 class ProviderKind(StrEnum):
     """Kind of provider used by a stage."""
 
@@ -169,6 +186,8 @@ class StageRegistry:
     def __init__(self, build_mode: BuildMode = BuildMode.PRODUCTION) -> None:
         self._records: dict[ProfessorStage, StageStatusRecord] = {}
         self._build_mode = build_mode
+        self._live_validation_status: LiveValidationStatus = LiveValidationStatus.NOT_ATTEMPTED
+        self._live_validation_detail: str = ""
 
     @property
     def build_mode(self) -> BuildMode:
@@ -295,10 +314,43 @@ class StageRegistry:
         return self._build_mode == BuildMode.FIXTURE and self.all_stages_present
 
     @property
+    def live_validation_status(self) -> LiveValidationStatus:
+        """Current live LLM validation status."""
+        return self._live_validation_status
+
+    def set_live_validation(
+        self, status: LiveValidationStatus, detail: str = ""
+    ) -> None:
+        """Record the live LLM validation outcome.
+
+        Should be called after the LLM_BLIND_GUESS stage completes.
+        """
+        self._live_validation_status = status
+        self._live_validation_detail = detail
+
+    @property
     def beta_status(self) -> str:
-        """Determine beta status string based on build mode and readiness."""
-        if self.professor_ready:
-            return "PROFESSOR_READY"
+        """Determine beta status string based on build mode and readiness.
+
+        Incorporates live LLM validation status where applicable:
+        - In production mode with live validation: LIVE_LLM_VALIDATED or LIVE_LLM_FAILED
+        - In production mode without live validation: NOT_LIVE_VALIDATED
+        - In fixture mode: STRICT_FIXTURE_READY or FIXTURE_READY
+        - Full production readiness: PRODUCTION_CANDIDATE_READY
+        """
+        # Production mode: live validation matters
+        if self._build_mode == BuildMode.PRODUCTION:
+            if self.professor_ready:
+                if self._live_validation_status == LiveValidationStatus.LIVE_LLM_VALIDATED:
+                    return "PRODUCTION_CANDIDATE_READY"
+                if self._live_validation_status == LiveValidationStatus.LIVE_LLM_FAILED:
+                    return "LIVE_LLM_FAILED"
+                if self._live_validation_status == LiveValidationStatus.PROVIDER_ERROR:
+                    return "LIVE_LLM_FAILED"
+                return "NOT_LIVE_VALIDATED"
+            return "NOT_PROFESSOR_READY"
+
+        # Fixture mode
         if self.strict_fixture_ready:
             return "STRICT_FIXTURE_READY"
         if self.fixture_ready:
@@ -323,6 +375,8 @@ class StageRegistry:
             "has_mock_providers": self.has_mock_providers,
             "has_missing_provider_provenance": self.has_missing_provider_provenance,
             "non_production_conditions": self.non_production_conditions,
+            "live_validation_status": self._live_validation_status.value,
+            "live_validation_detail": self._live_validation_detail,
             "stages": {rec.stage: rec.model_dump() for rec in self._records.values()},
         }
 

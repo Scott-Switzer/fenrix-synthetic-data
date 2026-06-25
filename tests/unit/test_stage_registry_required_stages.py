@@ -6,6 +6,7 @@ from fenrix_synthetic.professor.stages import (
     ALL_MANDATORY_STAGES,
     STAGES_REQUIRING_EVIDENCE,
     BuildMode,
+    LiveValidationStatus,
     ProfessorStage,
     ProviderKind,
     StageRegistry,
@@ -34,12 +35,25 @@ def _all_pass_registry() -> StageRegistry:
 
 class TestStageRegistryRequiredStages:
     def test_all_mandatory_stages_defined(self) -> None:
-        assert len(ALL_MANDATORY_STAGES) == 20  # 19 original + PEER_ARCHETYPE
+        assert len(ALL_MANDATORY_STAGES) == 22  # 23 stages total
 
     def test_all_stages_pass_makes_professor_ready(self) -> None:
         reg = _all_pass_registry()
         assert reg.professor_ready is True
-        assert reg.beta_status == "PROFESSOR_READY"
+        # Without live validation, beta_status is NOT_LIVE_VALIDATED in production mode
+        assert reg.beta_status == "NOT_LIVE_VALIDATED"
+
+    def test_live_validation_makes_production_candidate_ready(self) -> None:
+        reg = _all_pass_registry()
+        reg.set_live_validation(LiveValidationStatus.LIVE_LLM_VALIDATED, "test")
+        assert reg.professor_ready is True
+        assert reg.beta_status == "PRODUCTION_CANDIDATE_READY"
+
+    def test_live_llm_failed_status(self) -> None:
+        reg = _all_pass_registry()
+        reg.set_live_validation(LiveValidationStatus.LIVE_LLM_FAILED, "model identified source")
+        assert reg.professor_ready is True
+        assert reg.beta_status == "LIVE_LLM_FAILED"
 
     def test_missing_stage_blocks_professor_ready(self) -> None:
         reg = _all_pass_registry()
@@ -101,4 +115,4 @@ class TestStageRegistryRequiredStages:
         assert "professor_ready" in data
         assert "beta_status" in data
         assert "stages" in data
-        assert len(data["stages"]) == 20  # 19 original + PEER_ARCHETYPE
+        assert len(data["stages"]) == 22  # 23 stages total
