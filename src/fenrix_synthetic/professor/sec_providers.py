@@ -188,26 +188,30 @@ class FixtureSecProvider(SecProvider):
 
 
 class ArchiveInventorySecProvider(SecProvider):
-    """SEC provider that serves filings from a pre-ingested archive inventory.
+    """SEC provider — Phase 8F production path.
 
-    Phase 8F production path: instead of issuing HTTP requests against the
-    live SEC submissions API, this provider reads a Phase 5A-style archive
-    inventory (``source_archive_inventory.json``) plus a private source
-    mapping (``source_companies.yaml``) and serves ``SourceFiling`` objects
-    derived from inventory metadata.
+    HONEST CLASSIFICATION: this provider is **archive-indexed
+    deterministic reconstructed stubs**, NOT archive-backed
+    reconstructed content. The Phase 5A-style archive inventory
+    (``source_archive_inventory.json``) and the private source mapping
+    (``source_companies.yaml``) are loaded — the latter is used ONLY to
+    wire per-company ticker routing in ``get_provider_report`` —
+    but ``discover_filings`` hardcodes ``period_end``,
+    ``accession_ref``, and ``filing_date``, and ``parse_sections``
+    emits four generic 10-K-shaped stub sections (Item 1, 1A, 7, 8)
+    with sector-neutral text only. NO per-filing HTML text is read
+    from the archive's ``text_path`` pointers; that is deferred to
+    Phase 6.
 
-    The ``parse_sections`` implementation produces deterministic sanitized
-    10-K-shaped section stubs (``ITEM_1``, ``ITEM_1A``, ``ITEM_7``,
-    ``ITEM_8``) that pass ``validate_10k_sections``. These stubs contain
-    NO company-specific identifiers, NO tickers, NO exact numbers — only
-    generic sector-relevant text. Real per-filing HTML parsing of
-    archived SEC documents is deferred to Phase 6 (this provider is
-    intentionally safe-by-default; if you need real text you must
-    plug in a custom subclass).
+    The ``parse_sections`` stubs pass ``validate_10k_sections`` (which
+    requires ITEM_7 + ITEM_8) and contain NO company-specific
+    identifiers, NO tickers, NO exact numbers. This is intentionally
+    safe-by-default; if you need real text, plug in a custom subclass.
 
-    The provider is bound to a single ``company_id`` at construction time.
-    The wrapper instantiates one provider per company, so each iteration
-    of the multi-company loop produces a different company's filings.
+    The provider is bound to a single ``company_id`` at construction
+    time. The wrapper instantiates one provider per company, so each
+    iteration of the multi-company loop produces a different
+    company's filings.
     """
 
     def __init__(
