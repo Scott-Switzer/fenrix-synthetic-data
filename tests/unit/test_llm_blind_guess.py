@@ -8,10 +8,9 @@ from pathlib import Path
 import pytest
 
 from fenrix_synthetic.qa.llm_blind_guess import (
-    BlindGuessResult,
     LLMBlindGuessHarness,
-    collect_public_content,
     _is_private_path,
+    collect_public_content,
 )
 from fenrix_synthetic.qa.llm_provider import (
     LLMProviderError,
@@ -314,7 +313,7 @@ class TestLLMBlindGuessHarness:
         provider = OfflineStubProvider(StubConfig.exact_top1_hit())
         harness = LLMBlindGuessHarness(provider, strict=True)
 
-        result = harness.review(
+        harness.review(
             public_dir=public_dir,
             private_dir=private_dir,
             company_id="COMPANY_001",
@@ -337,9 +336,6 @@ class TestLLMBlindGuessHarness:
         private_qa = private_dir / "qa"
         private_qa.mkdir(parents=True)
         (private_qa / "source_identity.json").write_text("SECRET: Canary Holdings")
-
-        provider = OfflineStubProvider(StubConfig.pass_case())
-        harness = LLMBlindGuessHarness(provider)
 
         # Content collection should not include private files
         content = collect_public_content(public_dir, "COMPANY_001")

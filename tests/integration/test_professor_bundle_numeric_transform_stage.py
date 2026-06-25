@@ -7,16 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from fenrix_synthetic.anonymization.numeric_transform import (
-    FinancialFact,
-    NumericTransformer,
-)
 from fenrix_synthetic.anonymization.accounting_sanity import (
     AccountingSanityChecker,
     SanityConfig,
 )
+from fenrix_synthetic.anonymization.numeric_transform import (
+    FinancialFact,
+    NumericTransformer,
+)
 from fenrix_synthetic.qa.exact_number_attack import AttackConfig, ExactNumberAttack
-
 
 # ── Fixtures ─────────────────────────────────────────────────────
 
@@ -180,8 +179,6 @@ class TestNumericTransformStage:
         self, tmp_path: Path, fixture_facts: list[FinancialFact], company_id: str
     ) -> None:
         """Public financial files should not contain source ticker or company keys."""
-        transformer = NumericTransformer(company_id, seed=42)
-        result = transformer.transform(fixture_facts)
         financials_dir = tmp_path / "financials"
         financials_dir.mkdir()
         md_lines = [f"# Financial Summary for {company_id}"]
