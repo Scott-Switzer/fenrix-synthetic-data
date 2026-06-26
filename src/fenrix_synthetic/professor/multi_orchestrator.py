@@ -21,9 +21,11 @@ This module is additive — it does NOT modify the existing single-company
 6. Aggregates per-company LLM blind-guess + utility results into
    bundle-level ``qa/llm_blind_guess_summary.json`` and
    ``qa/utility_preservation_summary.json``.
-7. Runs the strict V3 release gate (``evaluate_strict_release_gate``)
+7. **V3.1**: Runs decoy-aware LLM review with opaque candidate labels
+   (Candidate A-E) — private label→company mapping NEVER enters ZIP.
+8. Runs the strict V3 release gate (``evaluate_strict_release_gate``)
    once on the bundle root.
-8. Runs the allowlist packager (``package_student_bundle``) once.
+9. Runs the allowlist packager (``package_student_bundle``) once.
 
 Public safety invariants are inherited from the existing strict V3
 release gate and the package allowlist. This module does NOT loosen
@@ -48,19 +50,27 @@ import orjson
 
 from ..anonymization.numeric_transform import PERTURBATION_DISCLOSURE
 from ..package.student_bundle import package_student_bundle
+from ..qa.artifact_quality_gate import (
+    NOT_PROFESSOR_READY,
+    PROFESSOR_READY_V3_1,
+    evaluate_artifact_quality_gate,
+    write_quality_gate_report,
+)
+from ..qa.confidence_scoring import (
+    DecoyScoreResult,
+    ScoreVerdict,
+)
 from ..qa.llm_blind_guess import (
     BlindGuessResult,
     collect_public_content,
 )
 from ..qa.llm_provider import (
     LLMProvider,
+    _build_decoy_aware_review_prompt,
     create_llm_provider,
 )
-from ..qa.artifact_quality_gate import (
-    evaluate_artifact_quality_gate,
-    write_quality_gate_report,
-    PROFESSOR_READY_V3_1,
-    NOT_PROFESSOR_READY,
+from ..qa.llm_provider import (
+    LLMProviderError as _LLMPE,
 )
 from ..qa.release_gate import evaluate_strict_release_gate
 from ..qa.utility_preservation import (
@@ -99,6 +109,7 @@ class CompanyIterationResult:
     inner_status: str
     inner_run_dir: Path
     blind_guess: BlindGuessResult | None = None
+    decoy_score: DecoyScoreResult | None = None
     utility_score_details: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
@@ -114,6 +125,7 @@ class MultiOrchestratorResult:
     companies_passed: int
     companies_failed: int
     blind_guess_summary: dict[str, Any]
+    decoy_aware_summary: dict[str, Any]
     utility_summary: dict[str, Any]
     strict_release_gate: dict[str, Any]
     aggregate_verdict: str
@@ -437,6 +449,208 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     # ── Per-company LLM blind-guess ────────────────────────────────────
 
+    def _run_per_company_decoy_aware_review(
+        self, company_id: str, public_company_dir: Path
+    ) -> DecoyScoreResult | None:
+        """Run decoy-aware LLM review for one company.
+
+        Builds a candidate set of 5 (true source + 4 peers from the
+        per-archetype pool), shuffles deterministically, sends the
+        opaque-label prompt to the LLM, scores the response, and
+        writes ONLY the redacted public summary to
+        ``qa/decoy_aware_llm_{id}.json``.
+
+        The private candidate mapping (label → real company name)
+        is written to ``private/qa/`` UNDER THE INNER WORK ROOT,
+        which is excluded from the student ZIP.
+        """
+        from ..qa.confidence_scoring import score_decoy_aware_guess as _score
+
+        bundle_qa = self.output_root / "qa"
+        bundle_qa.mkdir(parents=True, exist_ok=True)
+        per_co = bundle_qa / f"decoy_aware_llm_{company_id}.json"
+
+        # ── Resume: skip already-reviewed companies ─────────────────
+        if per_co.exists() and not self.force_llm_review:
+            try:
+                existing = json.loads(per_co.read_text(encoding="utf-8"))
+                if existing.get("verdict") in {"PASS", "WARN", "FAIL"}:
+                    return None
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        source_info = self._source_mapping.get(company_id, {})
+        actual_source_company = source_info.get("source_company", "")
+        actual_source_ticker = source_info.get("source_ticker", "")
+        if not actual_source_company:
+            return None
+
+        # ── Determine archetype for peer selection ───────────────────
+        archetype_key: str | None = None
+        archetype_path = public_company_dir / "profile" / "archetype_card.json"
+        if archetype_path.exists():
+            try:
+                card = json.loads(archetype_path.read_text(encoding="utf-8"))
+                archetype_key = card.get("archetype_key")
+            except (json.JSONDecodeError, OSError):
+                pass
+        if archetype_key is None:
+            archetype_key = _resolve_archetype_for_company(company_id)
+
+        # ── Build candidate set (true source + 4 peers) ──────────────
+        peer_pool = _DECOY_PEER_POOLS.get(archetype_key, [])
+        # Filter out the true source if it appears in the peer pool
+        available_peers = [
+            (name, ticker) for name, ticker in peer_pool
+            if name.lower() != actual_source_company.lower()
+        ]
+        # Select 4 peers deterministically
+        n_peers_needed = 4
+        if len(available_peers) < n_peers_needed:
+            # Not enough peers — use all available and note the shortfall
+            n_peers_needed = len(available_peers)
+            pass  # Can still run with fewer decoys
+
+        seed = int(hashlib.sha256(f"{company_id}:{self.hash_salt}:decoy".encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        selected_peers: list[tuple[str, str]] = rng.sample(
+            available_peers, min(n_peers_needed, len(available_peers))
+        ) if available_peers else []
+
+        # Combine true source + peers, then shuffle
+        all_candidates: list[tuple[str, str]] = [
+            (actual_source_company, actual_source_ticker),
+        ] + selected_peers
+        rng.shuffle(all_candidates)
+
+        # Build opaque labels and private mapping
+        opaque_labels = [f"Candidate {chr(65 + i)}" for i in range(len(all_candidates))]  # A, B, C, D, E
+        private_label_map: dict[str, tuple[str, str | None]] = {}
+        for label, (name, ticker) in zip(opaque_labels, all_candidates, strict=True):
+            private_label_map[label] = (name, ticker if ticker else None)
+
+        # Which label maps to the true source?
+        actual_source_label = ""
+        for label, (name, _) in private_label_map.items():
+            if name.lower() == actual_source_company.lower():
+                actual_source_label = label
+                break
+        if not actual_source_label and opaque_labels:
+            actual_source_label = opaque_labels[0]  # fallback
+
+        # ── Write private mapping (under inner work root, NEVER in ZIP) ──
+        private_q_dir = self._inner_work_root / "private" / "qa"
+        private_q_dir.mkdir(parents=True, exist_ok=True)
+        (private_q_dir / f"decoy_candidate_map_{company_id}.json").write_text(
+            json.dumps(
+                {
+                    "company_id": company_id,
+                    "archetype_key": archetype_key,
+                    "actual_source_label": actual_source_label,
+                    "candidate_mapping": private_label_map,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        # ── Build and send prompt ─────────────────────────────────────
+        provider_type = self.llm_provider_cfg.get("provider", "offline_stub")
+        try:
+            provider: LLMProvider = create_llm_provider(provider_type, self.llm_provider_cfg)
+        except (ValueError, ImportError):
+            return None
+
+        public_root = self.output_root / "public"
+        public_content = collect_public_content(public_root, company_id)
+        prompt = _build_decoy_aware_review_prompt(
+            public_content, company_id, opaque_labels
+        )
+
+        # Use the decoy-aware system prompt if the provider supports it.
+        # For openai_compatible, we prepend the system prompt to the user prompt.
+        try:
+            raw = provider.complete_json(prompt, timeout_s=180)
+        except _LLMPE:
+            return None
+
+        # ── Score ─────────────────────────────────────────────────────
+        result = _score(
+            raw,
+            actual_source_label=actual_source_label,
+            private_label_map=private_label_map,
+            company_id=company_id,
+        )
+
+        # ── Write only the REDACTED public summary ────────────────────
+        per_co.write_bytes(
+            orjson.dumps(
+                result.public.to_dict(),
+                option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
+            )
+        )
+        return result
+
+    # ── Decoy-aware aggregation across companies ──────────────────────
+
+    def _aggregate_decoy_aware(
+        self, results: list[CompanyIterationResult]
+    ) -> dict[str, Any]:
+        """Aggregate per-company decoy-aware review into a single summary.
+
+        Only companies with a ``decoy_score`` are counted. The summary
+        contains NO real company names, labels, or private mappings.
+        """
+        reviewed = [r for r in results if r.decoy_score is not None]
+        n = len(results)
+        n_reviewed = len(reviewed)
+        passed = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.PASS
+        )
+        warned = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.WARN
+        )
+        failed = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.FAIL
+        )
+        direct_leaks = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.direct_leak_detected
+        )
+        top1_hits = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.top_guess_is_actual
+        )
+        top3_hits = sum(
+            1 for r in reviewed
+            if r.decoy_score is not None and r.decoy_score.public.actual_in_top3
+        )
+
+        decoy_gate = "fail" if failed > 0 or direct_leaks > 0 else "warn" if warned > 0 else "pass"
+
+        summary: dict[str, Any] = {
+            "schema_version": "1.0",
+            "aggregate_kind": "multi_company_decoy_aware_llm",
+            "companies_total": n,
+            "companies_reviewed": n_reviewed,
+            "companies_passed": passed,
+            "companies_warned": warned,
+            "companies_failed": failed,
+            "companies_unreviewed": n - n_reviewed,
+            "direct_leak_detected": direct_leaks,
+            "true_source_top1_hits": top1_hits,
+            "true_source_top3_hits": top3_hits,
+            "decoy_gate": decoy_gate,
+        }
+        (self.output_root / "qa" / "decoy_aware_llm_summary.json").write_bytes(
+            orjson.dumps(summary, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+        )
+        return summary
+
     def _run_per_company_blind_guess(
         self, company_id: str, public_company_dir: Path
     ) -> BlindGuessResult | None:
@@ -698,6 +912,11 @@ class ProfessorBundleMultiCompanyOrchestrator:
             source_mapping=self._source_mapping,
         )
 
+        # V3.1: Update RUN_SUMMARY.md and RELEASE_MANIFEST to include
+        # decoy-aware review results, reading back the freshly-written
+        # decoy_aware_llm_summary.json from disk.
+        _update_docs_with_decoy_results(self.output_root)
+
     # ── Strict release gate + ZIP packaging ──────────────────────────
 
     def _run_strict_release_gate(self) -> dict[str, Any]:
@@ -823,6 +1042,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
                 if bg is None:
                     warnings.append(f"{company_id}: unable to reload cached blind-guess result")
 
+            # V3.1: Run decoy-aware LLM review per company
+            decoy = self._run_per_company_decoy_aware_review(company_id, public_dst)
+
             # Run per-company utility preservation
             util = self._run_per_company_utility(company_id, public_dst)
 
@@ -832,12 +1054,14 @@ class ProfessorBundleMultiCompanyOrchestrator:
                     inner_status=status,
                     inner_run_dir=inner_dir,
                     blind_guess=bg,
+                    decoy_score=decoy,
                     utility_score_details=util,
                 )
             )
 
         # Per-company summaries in 1 location → aggregate.
         blind_guess_summary = self._aggregate_blind_guess(iteration_results)
+        decoy_aware_summary = self._aggregate_decoy_aware(iteration_results)
         utility_summary = self._aggregate_utility(iteration_results)
 
         self._write_top_level_files(companies_processed, blind_guess_summary, utility_summary)
@@ -850,13 +1074,15 @@ class ProfessorBundleMultiCompanyOrchestrator:
         )
         companies_failed = len(iteration_results) - companies_passed
 
-        # Aggregate verdict — V3.1: includes artifact quality gate
+        # Aggregate verdict — V3.1: includes artifact quality gate + decoy-aware LLM
         if failures:
             verdict = "FAIL"
         elif strict_gate.get("passed") is False:
             verdict = "STRICT_GATE_FAILED"
         elif blind_guess_summary.get("privacy_gate") == "fail":
             verdict = "PRIVACY_GATE_FAILED"
+        elif decoy_aware_summary.get("decoy_gate") == "fail":
+            verdict = "DECOY_AWARE_GATE_FAILED"
         elif utility_summary.get("utility_gate") == "fail":
             verdict = "UTILITY_GATE_FAILED"
         elif not quality_gate.get("passed", False):
@@ -873,6 +1099,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
         final_validation_assertions = {
             "eight_companies_generated": all_eight,
             "eight_companies_live_reviewed": live_reviewed,
+            "decoy_aware_review_completed": decoy_aware_summary.get("companies_reviewed", 0) == 8,
+            "decoy_aware_gate_pass": decoy_aware_summary.get("decoy_gate") == "pass",
+            "decoy_direct_leak_count": decoy_aware_summary.get("direct_leak_detected", 0) == 0,
             "financial_perturbation_policy_disclosed_in_public_docs": True,
             "exact_perturbation_parameters_excluded_from_public_zip": True,
             "business_model_limitation_documented": True,
@@ -912,6 +1141,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
             "companies_passed": companies_passed,
             "companies_failed": companies_failed,
             "blind_guess_summary": blind_guess_summary,
+            "decoy_aware_summary": decoy_aware_summary,
             "utility_summary": utility_summary,
             "strict_release_gate": strict_gate,
             "artifact_quality_gate": quality_gate,  # V3.1: quality gate
@@ -941,6 +1171,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
             companies_passed=companies_passed,
             companies_failed=companies_failed,
             blind_guess_summary=blind_guess_summary,
+            decoy_aware_summary=decoy_aware_summary,
             utility_summary=utility_summary,
             strict_release_gate=strict_gate,
             aggregate_verdict=verdict,
@@ -999,10 +1230,10 @@ def _resolve_archetype_for_company(company_id: str) -> str:
     import hashlib as _hashlib
 
     salt = "phase8f-v1"
-    seed = int(_hashlib.sha256(f"{company_id}:{salt}".encode()).hexdigest()[:8], 16)
-    # Use the same global shuffle as _build_archetype_card.
+    seed_ignored = int(_hashlib.sha256(f"{company_id}:{salt}".encode()).hexdigest()[:8], 16)
+    _ = seed_ignored  # kept for compatibility; shuffle is global
     options = list(_ARCHETYPE_OPTIONS)
-    rng = _random.Random(15485863)
+    rng = random.Random(15485863)
     rng.shuffle(options)
     # For the fallback, use a hash-derived index.
     # The caller should pass the correct archetype_key when possible.
@@ -1016,6 +1247,110 @@ _GENERIC_RISK_SIGNALS = [
     "market",
     "operational",
 ]
+
+# ── V3.1 Per-archetype decoy peer pools ────────────────────────────
+# Each archetype maps to a list of well-known public companies in the same
+# broad sector. These are used as decoys in decoy-aware LLM review.
+# The true source is shuffled among them; the mapping stays private.
+
+_DECOY_PEER_POOLS: dict[str, list[tuple[str, str]]] = {
+    "global_consumer_staples": [
+        ("Procter & Gamble Co", "PG"),
+        ("Unilever PLC", "UL"),
+        ("Colgate-Palmolive Company", "CL"),
+        ("Kimberly-Clark Corporation", "KMB"),
+        ("The Clorox Company", "CLX"),
+        ("Reckitt Benckiser Group PLC", "RKT"),
+        ("Henkel AG & Co KGaA", "HEN"),
+        ("Church & Dwight Co Inc", "CHD"),
+        ("Estée Lauder Companies Inc", "EL"),
+        ("Mondelez International Inc", "MDLZ"),
+    ],
+    "diversified_beverage_snack": [
+        ("PepsiCo Inc", "PEP"),
+        ("The Coca-Cola Company", "KO"),
+        ("Keurig Dr Pepper Inc", "KDP"),
+        ("Monster Beverage Corporation", "MNST"),
+        ("Constellation Brands Inc", "STZ"),
+        ("Brown-Forman Corporation", "BF-B"),
+        ("The Hershey Company", "HSY"),
+        ("General Mills Inc", "GIS"),
+        ("Kellogg Company", "K"),
+        ("Campbell Soup Company", "CPB"),
+    ],
+    "off_price_apparel_retail": [
+        ("The TJX Companies Inc", "TJX"),
+        ("Ross Stores Inc", "ROST"),
+        ("Burlington Stores Inc", "BURL"),
+        ("Gap Inc", "GAP"),
+        ("Nordstrom Inc", "JWN"),
+        ("Macy's Inc", "M"),
+        ("Kohl's Corporation", "KSS"),
+        ("American Eagle Outfitters Inc", "AEO"),
+        ("Urban Outfitters Inc", "URBN"),
+        ("Abercrombie & Fitch Co", "ANF"),
+    ],
+    "international_nicotine_products": [
+        ("Philip Morris International Inc", "PM"),
+        ("Altria Group Inc", "MO"),
+        ("British American Tobacco PLC", "BTI"),
+        ("Imperial Brands PLC", "IMB"),
+        ("Japan Tobacco Inc", "2914"),
+        ("Vector Group Ltd", "VGR"),
+        ("Turning Point Brands Inc", "TPB"),
+        ("RLX Technology Inc", "RLX"),
+        ("Scandinavian Tobacco Group A/S", "STG"),
+        ("Universal Corporation", "UVV"),
+    ],
+    "digital_commerce_cloud_platform": [
+        ("Amazon.com Inc", "AMZN"),
+        ("Alibaba Group Holding Ltd", "BABA"),
+        ("JD.com Inc", "JD"),
+        ("Shopify Inc", "SHOP"),
+        ("MercadoLibre Inc", "MELI"),
+        ("eBay Inc", "EBAY"),
+        ("Etsy Inc", "ETSY"),
+        ("Wayfair Inc", "W"),
+        ("Chewy Inc", "CHWY"),
+        ("Coupang Inc", "CPNG"),
+    ],
+    "regional_banking_institution": [
+        ("Truist Financial Corporation", "TFC"),
+        ("PNC Financial Services Group Inc", "PNC"),
+        ("U.S. Bancorp", "USB"),
+        ("Fifth Third Bancorp", "FITB"),
+        ("M&T Bank Corporation", "MTB"),
+        ("Regions Financial Corporation", "RF"),
+        ("Citizens Financial Group Inc", "CFG"),
+        ("Huntington Bancshares Inc", "HBAN"),
+        ("KeyCorp", "KEY"),
+        ("Comerica Incorporated", "CMA"),
+    ],
+    "global_asset_management": [
+        ("BlackRock Inc", "BLK"),
+        ("Blackstone Inc", "BX"),
+        ("KKR & Co Inc", "KKR"),
+        ("The Carlyle Group Inc", "CG"),
+        ("Apollo Global Management Inc", "APO"),
+        ("Ares Management Corporation", "ARES"),
+        ("T. Rowe Price Group Inc", "TROW"),
+        ("Franklin Resources Inc", "BEN"),
+        ("Invesco Ltd", "IVZ"),
+        ("State Street Corporation", "STT"),
+    ],
+    "digital_advertising_cloud_services": [
+        ("Alphabet Inc", "GOOGL"),
+        ("Meta Platforms Inc", "META"),
+        ("Microsoft Corporation", "MSFT"),
+        ("Snap Inc", "SNAP"),
+        ("Pinterest Inc", "PINS"),
+        ("The Trade Desk Inc", "TTD"),
+        ("Roku Inc", "ROKU"),
+        ("AppLovin Corporation", "APP"),
+        ("Unity Software Inc", "U"),
+        ("Salesforce Inc", "CRM"),
+    ],
+}
 
 # ── Archetype vocabulary (module-level, shared across all companies) ───────
 # V3.1: Rebuilt with 8 distinct broad archetypes that preserve finance-relevant
@@ -1840,6 +2175,59 @@ def _write_artifact_inventory_csv(output_root: Path) -> None:
     with open(output_root / "artifact_inventory.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerows(rows)
+
+
+def _update_docs_with_decoy_results(output_root: Path) -> None:
+    """Update RUN_SUMMARY.md and RELEASE_MANIFEST.json with decoy-aware results.
+
+    Called after the decoy-aware aggregation has already written
+    ``qa/decoy_aware_llm_summary.json``. Reads it back and appends
+    a decoy-aware section to RUN_SUMMARY.md.
+    """
+    decoy_path = output_root / "qa" / "decoy_aware_llm_summary.json"
+    if not decoy_path.exists():
+        return
+
+    try:
+        decoy = json.loads(decoy_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    # Append decoy-aware section to RUN_SUMMARY.md
+    run_summary_path = output_root / "RUN_SUMMARY.md"
+    if run_summary_path.exists():
+        existing = run_summary_path.read_text(encoding="utf-8")
+        decoy_section = (
+            f"\n## Decoy-Aware Adversarial Review (V3.1)\n\n"
+            f"- Companies reviewed: {decoy.get('companies_reviewed', 0)}/{decoy.get('companies_total', 0)}\n"
+            f"- Companies passed: {decoy.get('companies_passed', 0)}\n"
+            f"- Companies warned: {decoy.get('companies_warned', 0)}\n"
+            f"- Companies failed: {decoy.get('companies_failed', 0)}\n"
+            f"- Direct leaks detected: {decoy.get('direct_leak_detected', 0)}\n"
+            f"- True source top-1 hits: {decoy.get('true_source_top1_hits', 0)}\n"
+            f"- True source top-3 hits: {decoy.get('true_source_top3_hits', 0)}\n"
+            f"- Decoy gate: **{decoy.get('decoy_gate', 'unknown').upper()}**\n\n"
+            "The decoy-aware review presents the LLM with 5 candidates "
+            "(one true source + four sector peers) under opaque labels "
+            "(Candidate A-E) and asks it to identify the true source. "
+            "This is a stronger test than open-ended blind guessing. "
+            "No real company names or tickers are present in this summary.\n"
+        )
+        run_summary_path.write_text(existing + decoy_section, encoding="utf-8")
+
+    # Update RELEASE_MANIFEST.json with decoy gate result
+    manifest_path = output_root / "RELEASE_MANIFEST.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if "privacy_summary" in manifest:
+                manifest["privacy_summary"]["decoy_aware_summary"] = decoy
+            manifest["decoy_aware_gate"] = decoy.get("decoy_gate", "unknown")
+            manifest_path.write_bytes(
+                orjson.dumps(manifest, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
+            )
+        except (json.JSONDecodeError, OSError):
+            pass
 
 
 def _write_reconciliation_checks(

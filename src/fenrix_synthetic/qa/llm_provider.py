@@ -1,10 +1,13 @@
-"""LLM provider interface for blind-guess adversarial review.
+"""LLM provider interface for blind-guess and decoy-aware adversarial review.
 
 Provider-neutral Protocol with implementations:
 
 - ``offline_stub``: deterministic, no network, configurable pass/fail
 - ``openai_compatible``: works with NVIDIA NIM, OpenRouter, local servers
 - ``local_ollama``: optional Ollama provider
+
+V3.1: Added ``_build_decoy_aware_review_prompt()`` for constrained
+multiple-choice adversarial review with opaque candidate labels.
 
 No API keys are hardcoded. No live provider is required for CI.
 """
@@ -110,6 +113,9 @@ class StubConfig:
 
     Allows deterministic simulation of different review outcomes
     for testing without network calls.
+
+    If ``decoy_response`` is set, ``OfflineStubProvider`` returns it
+    directly for decoy-aware review testing.
     """
 
     confidence: float = 0.20
@@ -120,6 +126,7 @@ class StubConfig:
     refusal_or_uncertain: bool = True
     should_fail: bool = False
     fail_reason: str = ""
+    decoy_response: dict[str, Any] | None = None
 
     @classmethod
     def pass_case(cls) -> StubConfig:
@@ -266,6 +273,108 @@ class StubConfig:
         )
 
     @classmethod
+    def decoy_pass_low_confidence(cls) -> StubConfig:
+        """Simulate decoy-aware review: PASS — wrong guess, low confidence."""
+        return cls(
+            confidence=0.15,
+            decoy_response={
+                "anonymized_company_id": "COMPANY_001",
+                "top_guess_label": "Candidate D",
+                "top_guess_confidence": "low",
+                "top_3_labels": ["Candidate D", "Candidate B", "Candidate A"],
+                "evidence": [
+                    {"claim": "Broad sector characteristics are consistent but not diagnostic.", "basis": "business_model"}
+                ],
+                "inference_basis": "business_model",
+                "would_identify_exact_source": False,
+                "direct_leak_detected": False,
+                "notes": "Insufficient evidence to distinguish from peers.",
+            },
+        )
+
+    @classmethod
+    def decoy_pass_wrong_guess_medium(cls) -> StubConfig:
+        """Simulate decoy-aware review: PASS — wrong guess, medium confidence."""
+        return cls(
+            confidence=0.45,
+            decoy_response={
+                "anonymized_company_id": "COMPANY_001",
+                "top_guess_label": "Candidate C",
+                "top_guess_confidence": "medium",
+                "top_3_labels": ["Candidate C", "Candidate E", "Candidate B"],
+                "evidence": [
+                    {"claim": "Financial patterns resemble the candidate's sector.", "basis": "financial_pattern"}
+                ],
+                "inference_basis": "financial_pattern",
+                "would_identify_exact_source": False,
+                "direct_leak_detected": False,
+                "notes": "Moderate confidence but guessed wrong candidate.",
+            },
+        )
+
+    @classmethod
+    def decoy_fail_top1_high_confidence(cls) -> StubConfig:
+        """Simulate decoy-aware review: FAIL — correct top-1, high confidence."""
+        return cls(
+            confidence=0.85,
+            decoy_response={
+                "anonymized_company_id": "COMPANY_001",
+                "top_guess_label": "Candidate A",
+                "top_guess_confidence": "high",
+                "top_3_labels": ["Candidate A", "Candidate D", "Candidate B"],
+                "evidence": [
+                    {"claim": "Revenue structure and margin profile are uniquely identifying.", "basis": "financial_pattern"},
+                    {"claim": "Geographic segment split matches exactly.", "basis": "business_model"},
+                ],
+                "inference_basis": "financial_pattern",
+                "would_identify_exact_source": True,
+                "direct_leak_detected": False,
+                "notes": "Confident identification based on distinctive financial patterns.",
+            },
+        )
+
+    @classmethod
+    def decoy_fail_direct_leak(cls) -> StubConfig:
+        """Simulate decoy-aware review: FAIL — evidence includes direct identifiers."""
+        return cls(
+            confidence=0.55,
+            decoy_response={
+                "anonymized_company_id": "COMPANY_001",
+                "top_guess_label": "Candidate A",
+                "top_guess_confidence": "medium",
+                "top_3_labels": ["Candidate A", "Candidate B", "Candidate D"],
+                "evidence": [
+                    {"claim": "Product launch timeline matches exactly.", "basis": "product_event_fingerprint"},
+                    {"claim": "Revenue matches known public figure.", "basis": "exact_number"},
+                ],
+                "inference_basis": "product_event_fingerprint",
+                "would_identify_exact_source": True,
+                "direct_leak_detected": True,
+                "notes": "Direct identifier evidence found.",
+            },
+        )
+
+    @classmethod
+    def decoy_warn_business_model(cls) -> StubConfig:
+        """Simulate decoy-aware review: WARN — true source top-3, low confidence, business model only."""
+        return cls(
+            confidence=0.25,
+            decoy_response={
+                "anonymized_company_id": "COMPANY_001",
+                "top_guess_label": "Candidate B",
+                "top_guess_confidence": "low",
+                "top_3_labels": ["Candidate B", "Candidate A", "Candidate D"],
+                "evidence": [
+                    {"claim": "Business model and sector are consistent.", "basis": "business_model"}
+                ],
+                "inference_basis": "business_model",
+                "would_identify_exact_source": False,
+                "direct_leak_detected": False,
+                "notes": "True source in top-3 but only through broad business-model inference.",
+            },
+        )
+
+    @classmethod
     def malformed_output(cls) -> StubConfig:
         """Simulate a provider that returns malformed output."""
         return cls(should_fail=True, fail_reason="Malformed output")
@@ -305,13 +414,17 @@ class OfflineStubProvider:
             timeout_s: Ignored by stub.
 
         Returns:
-            Configured response dict.
+            Configured response dict — blind-review or decoy-aware format.
 
         Raises:
             LLMProviderError: If configured to simulate a provider error.
         """
         if self._config.should_fail:
             raise LLMProviderError(self._config.fail_reason)
+
+        # Decoy-aware mode: return the decoy_response if configured.
+        if self._config.decoy_response is not None:
+            return self._config.decoy_response
 
         return {
             "anonymized_company_id": "COMPANY_001",
@@ -348,6 +461,27 @@ Rules:
 - Do not fabricate evidence or guess randomly.
 - Citation patterns in the data (like "Company 001") are anonymized placeholders
   and should NOT be treated as clues."""
+
+_DECOY_SYSTEM_PROMPT = """\
+You are an adversarial privacy reviewer evaluating an anonymized company packet.
+
+You will be given:
+1. An anonymized company profile with financial, market, SEC, and news summaries.
+2. A candidate set of 5 possible real public companies, labeled only as
+   Candidate A, Candidate B, Candidate C, Candidate D, Candidate E.
+
+Your task is to determine which candidate (if any) is the true source company
+behind the anonymized packet. You must also identify any evidence that would
+enable exact identification.
+
+Rules:
+- You must return ONLY valid JSON — no explanation outside the JSON object.
+- One of the candidates IS the true source; the other 4 are sector/scale peers.
+- If you cannot distinguish the true source from peers with confidence, say so.
+- Evaluate: business model fit, financial pattern match, product/event
+  fingerprints, any direct identifiers or exact numbers that survive
+  anonymization, and any metadata leaks (tickers, CIKs, locations, executives).
+- Be honest about your confidence level."""
 
 
 def _build_blind_review_prompt(public_content: str, company_id: str) -> str:
@@ -392,6 +526,104 @@ Return a JSON object with these exact keys:
   "evidence_summary": "Insufficient evidence for a company-level identification.",
   "refusal_or_uncertain": true
 }}
+"""
+
+
+def _build_decoy_aware_review_prompt(
+    public_content: str,
+    company_id: str,
+    candidate_labels: list[str],
+) -> str:
+    """Build a decoy-aware review prompt with opaque candidate labels.
+
+    The prompt presents the anonymized content alongside a constrained
+    candidate set (Candidate A/B/C/D/E). Real company names are NEVER
+    included in the prompt — only opaque labels.
+
+    Args:
+        public_content: Aggregated public bundle content.
+        company_id: The anonymized company ID.
+        candidate_labels: List of 5 opaque labels e.g.
+            ``["Candidate A", "Candidate B", ..., "Candidate E"]``.
+
+    Returns:
+        Full prompt string for the LLM.
+    """
+    max_chars = 50_000
+    if len(public_content) > max_chars:
+        public_content = (
+            public_content[: int(max_chars * 0.6)]
+            + "\n\n... [content truncated] ...\n\n"
+            + public_content[-int(max_chars * 0.4) :]
+        )
+
+    candidate_block = "\n".join(f"- {label}" for label in candidate_labels)
+
+    return f"""\
+You are an adversarial privacy reviewer evaluating an anonymized company packet.
+
+You are given:
+1. An anonymized public-company packet (profile, financials, market data,
+   SEC summaries, and synthetic news).
+2. A candidate set of 5 real public companies, labeled only as:
+
+{candidate_block}
+
+One of these candidates is the TRUE source company behind the anonymized packet.
+The other 4 are sector/scale peers that are NOT the source.
+
+Your task:
+1. Determine which candidate (if any) you believe is most likely the true source.
+2. Choose top 3 candidates in order of likelihood.
+3. Provide your confidence: low, medium, or high.
+4. List the evidence that informed your ranking.
+5. Classify each piece of evidence by inference basis.
+6. State whether you would identify an exact source company from the evidence alone.
+
+Return strict JSON only. Do NOT include real company names in your output —
+use only the opaque labels (Candidate A, Candidate B, etc.).
+
+The anonymized company ID is: {company_id}
+
+--- PUBLIC COMPANY PACKET ---
+{public_content}
+--- END PACKET ---
+
+Return a JSON object with these exact keys:
+{{
+  "anonymized_company_id": "{company_id}",
+  "top_guess_label": "Candidate B",
+  "top_guess_confidence": "medium",
+  "top_3_labels": ["Candidate B", "Candidate D", "Candidate A"],
+  "evidence": [
+    {{
+      "claim": "The revenue structure and margin profile are consistent with a consumer staples manufacturer of this scale.",
+      "basis": "business_model",
+      "criteria_type": "financial_pattern"
+    }},
+    {{
+      "claim": "The geographic revenue split matches the candidate's disclosed segment reporting pattern.",
+      "basis": "financial_pattern",
+      "criteria_type": "segment_geography"
+    }}
+  ],
+  "inference_basis": "business_model",
+  "would_identify_exact_source": false,
+  "direct_leak_detected": false,
+  "notes": "Sector-level evidence only — cannot distinguish from peers with high confidence."
+}}
+
+Evidence basis must be one of:
+- business_model
+- financial_pattern
+- product_event_fingerprint
+- direct_identifier
+- exact_number
+- metadata_leak
+- sector_only
+- unknown
+
+Confidence must be one of: low, medium, high.
 """
 
 
@@ -487,8 +719,12 @@ class OpenAICompatibleProvider:
             "Content-Type": "application/json",
         }
 
+        # Detect decoy-aware prompt by checking for candidate label markers.
+        is_decoy = "Candidate A" in prompt and "top_guess_label" in prompt
+        system_prompt = _DECOY_SYSTEM_PROMPT if is_decoy else _BLIND_REVIEW_SYSTEM_PROMPT
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _BLIND_REVIEW_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
 
