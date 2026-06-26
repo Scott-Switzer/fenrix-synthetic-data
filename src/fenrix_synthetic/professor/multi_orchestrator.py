@@ -52,7 +52,7 @@ from ..anonymization.numeric_transform import PERTURBATION_DISCLOSURE
 from ..package.student_bundle import package_student_bundle
 from ..qa.artifact_quality_gate import (
     NOT_PROFESSOR_READY,
-    PROFESSOR_READY_V3_1,
+    PROFESSOR_READY_V3_2,
     evaluate_artifact_quality_gate,
     write_quality_gate_report,
 )
@@ -73,9 +73,15 @@ from ..qa.llm_provider import (
     LLMProviderError as _LLMPE,
 )
 from ..qa.release_gate import evaluate_strict_release_gate
-from ..qa.utility_preservation import (
-    CompanyThesis,
-    score_utility_preservation,
+from ..qa.utility_audit import (
+    UtilityAuditResult,
+    aggregate_utility_audits,
+    score_v3_utility,
+)
+from ..qa.utility_preservation import CompanyThesis
+from ..qa.volume_gate import (
+    evaluate_volume_gate,
+    write_volume_gate_report,
 )
 
 # ── Result dataclasses ──────────────────────────────────────────────────
@@ -736,60 +742,37 @@ class ProfessorBundleMultiCompanyOrchestrator:
     def _run_per_company_utility(
         self, company_id: str, public_company_dir: Path
     ) -> dict[str, Any] | None:
-        """Compute utility preservation for one company and write
-        ``qa/utility_preservation_<id>.json`` (redacted public summary only).
+        """Compute V3.2 utility audit and write per-company summary.
 
-        V3.1: Reads the public archetype card to construct a public thesis
-        that reflects what a reader would infer from the profile. The
-        source thesis and public thesis are both derived from the same
-        archetype, so the utility score measures how faithfully the
-        archetype card communicates the intended business thesis.
+        Uses ``score_v3_utility`` which measures educational usefulness
+        across multiple components and applies adversarial privacy caps.
         """
-        # V3.1: Resolve the archetype from the public archetype card.
-        archetype_key: str | None = None
-        archetype_path = (
-            public_company_dir / "profile" / "archetype_card.json"
+        audit_result = score_v3_utility(
+            company_id,
+            public_company_dir,
+            blind_summary=None,
+            decoy_summary=None,
         )
-        if archetype_path.exists():
-            try:
-                card = json.loads(archetype_path.read_text(encoding="utf-8"))
-                archetype_key = card.get("archetype_key")
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        source_thesis = _build_source_thesis(company_id, archetype_key=archetype_key)
-
-        # V3.1: Build public thesis from the archetype card's thesis data.
-        # This reflects what a reader would infer from the profile — the
-        # same archetype vocabulary that appears in the profile.md.
-        #
-        # Note: When both source and public theses are built from the
-        # same archetype key, the utility score will reflect perfect
-        # thesis preservation (score ≈ 1.0). This is intentional — the
-        # archetype card communicates the thesis faithfully. The utility
-        # gate is still meaningful for detecting cases where the public
-        # output is missing or the archetype card is inconsistent.
-        public_thesis = _build_source_thesis(company_id, archetype_key=archetype_key)
-
-        result = score_utility_preservation(source_thesis, public_thesis)
 
         bundle_qa = self.output_root / "qa"
         bundle_qa.mkdir(parents=True, exist_ok=True)
         per_co = bundle_qa / f"utility_preservation_{company_id}.json"
         per_co.write_bytes(
             orjson.dumps(
-                result.public.to_dict(),
+                audit_result.to_public_dict(),
                 option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
             )
         )
         return {
             "company_id": company_id,
-            "overall_score": float(result.private.overall_utility_score),
-            "public_score": float(result.public.overall_utility_score),
-            "verdict": str(result.private.verdict),
-            "public_verdict": str(result.public.verdict),
-            "signals_preserved": list(result.public.signals_preserved),
-            "signals_lost": list(result.public.signals_lost),
+            "overall_score": float(audit_result.final_utility_score),
+            "public_score": float(audit_result.final_utility_score),
+            "base_score": float(audit_result.base_utility_score),
+            "privacy_cap": float(audit_result.privacy_cap),
+            "verdict": str(audit_result.verdict),
+            "public_verdict": str(audit_result.verdict),
+            "signals_preserved": list(audit_result.signals_preserved),
+            "signals_lost": list(audit_result.signals_lost),
         }
 
     # ── Aggregation across companies ──────────────────────────────────
@@ -863,33 +846,26 @@ class ProfessorBundleMultiCompanyOrchestrator:
         return summary
 
     def _aggregate_utility(self, results: list[CompanyIterationResult]) -> dict[str, Any]:
-        scores: list[float] = []
-        verdicts: list[str] = []
+        """Aggregate per-company utility using V3.2 audit aggregation."""
+        audit_results: list[UtilityAuditResult] = []
         per_company: dict[str, dict[str, Any]] = {}
         for r in results:
             if r.utility_score_details is None:
                 continue
             per_company[r.company_id] = r.utility_score_details
-            scores.append(float(r.utility_score_details["public_score"]))
-            verdicts.append(str(r.utility_score_details["public_verdict"]))
+            audit_results.append(UtilityAuditResult(
+                company_id=r.company_id,
+                base_utility_score=float(r.utility_score_details.get("base_score", r.utility_score_details.get("public_score", 0))),
+                privacy_cap=float(r.utility_score_details.get("privacy_cap", 1.0)),
+                final_utility_score=float(r.utility_score_details.get("public_score", 0)),
+                verdict=str(r.utility_score_details.get("public_verdict", "WARN")),
+                privacy_classification="unknown",
+                signals_preserved=list(r.utility_score_details.get("signals_preserved", [])),
+                signals_lost=list(r.utility_score_details.get("signals_lost", [])),
+            ))
 
-        n = len(scores)
-        avg = round(sum(scores) / n, 4) if n else 0.0
-        fails = sum(1 for v in verdicts if v == "FAIL")
-        summary = {
-            "schema_version": "1.0",
-            "aggregate_kind": "multi_company_utility",
-            "companies_reviewed": n,
-            "average_utility_score": avg,
-            "min_score": round(min(scores), 4) if scores else 0.0,
-            "max_score": round(max(scores), 4) if scores else 0.0,
-            "verdict_pass_count": n - fails,
-            "verdict_warn_or_fail_count": fails,
-            "per_company": per_company,
-            "utility_gate": (
-                "pass" if (avg >= 0.70 and fails == 0) else "warn" if avg >= 0.55 else "fail"
-            ),
-        }
+        summary = aggregate_utility_audits(audit_results)
+        summary["per_company"] = per_company
         (self.output_root / "qa" / "utility_preservation_summary.json").write_bytes(
             orjson.dumps(summary, option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2)
         )
@@ -928,10 +904,17 @@ class ProfessorBundleMultiCompanyOrchestrator:
         return gate
 
     def _run_artifact_quality_gate(self) -> dict[str, Any]:
-        """V3.1: Evaluate artifact quality gate and write report."""
+        """V3.2: Evaluate artifact quality gate and write report."""
         result = evaluate_artifact_quality_gate(self.output_root)
         bundle_qa = self.output_root / "qa"
         write_quality_gate_report(result, bundle_qa)
+        return result.to_dict()
+
+    def _run_volume_gate(self) -> dict[str, Any]:
+        """V3.2: Evaluate volume gate and write report."""
+        result = evaluate_volume_gate(self.output_root)
+        bundle_qa = self.output_root / "qa"
+        write_volume_gate_report(result, bundle_qa)
         return result.to_dict()
 
     def _run_package(self) -> Path:
@@ -1067,14 +1050,15 @@ class ProfessorBundleMultiCompanyOrchestrator:
         self._write_top_level_files(companies_processed, blind_guess_summary, utility_summary)
 
         strict_gate = self._run_strict_release_gate()
-        quality_gate = self._run_artifact_quality_gate()  # V3.1: new quality gate
+        quality_gate = self._run_artifact_quality_gate()  # V3.2
+        volume_gate_result = self._run_volume_gate()  # V3.2
 
         companies_passed = sum(
             1 for r in iteration_results if r.blind_guess and r.blind_guess.passed
         )
         companies_failed = len(iteration_results) - companies_passed
 
-        # Aggregate verdict — V3.1: includes artifact quality gate + decoy-aware LLM
+        # Aggregate verdict — V3.2
         if failures:
             verdict = "FAIL"
         elif strict_gate.get("passed") is False:
@@ -1085,10 +1069,12 @@ class ProfessorBundleMultiCompanyOrchestrator:
             verdict = "DECOY_AWARE_GATE_FAILED"
         elif utility_summary.get("utility_gate") == "fail":
             verdict = "UTILITY_GATE_FAILED"
+        elif not volume_gate_result.get("passed", False):
+            verdict = "VOLUME_GATE_FAILED"
         elif not quality_gate.get("passed", False):
             verdict = NOT_PROFESSOR_READY
         else:
-            verdict = PROFESSOR_READY_V3_1
+            verdict = PROFESSOR_READY_V3_2
 
         # Aggregate Slack-derived final validation assertions (item #7).
         distinct_companies = len(set(companies_processed))
@@ -1116,6 +1102,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
             ),
             "utility_preservation_pass_or_documented_warn": utility_pass_or_warn,
             "strict_release_gate_pass": strict_pass,
+            "volume_gate_pass": volume_gate_result.get("passed", False),
         }
         assertion_pass = all(final_validation_assertions.values())
 
@@ -1144,7 +1131,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
             "decoy_aware_summary": decoy_aware_summary,
             "utility_summary": utility_summary,
             "strict_release_gate": strict_gate,
-            "artifact_quality_gate": quality_gate,  # V3.1: quality gate
+            "artifact_quality_gate": quality_gate,
+            "volume_gate": volume_gate_result,
             "final_validation_assertions": dict(final_validation_assertions),
             "final_validation_passed": assertion_pass,
             "aggregate_verdict": verdict,
@@ -1400,10 +1388,10 @@ _ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
         "in procurement, manufacturing, and logistics."
     ),
     "diversified_beverage_snack": (
-        "Diversified producer of branded beverages and snack foods with a "
-        "vertically integrated bottling and distribution network. Revenue "
-        "is split across carbonated and non-carbonated beverages and packaged "
-        "snack categories in over 100 markets."
+        "Diversified producer of branded consumer packaged goods with a "
+        "broad distribution network spanning multiple channels. Revenue "
+        "is split across beverage and snack-food categories in numerous "
+        "domestic and international markets."
     ),
     "off_price_apparel_retail": (
         "Off-price apparel and home fashion retailer operating a national "
@@ -1425,11 +1413,11 @@ _ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
         "subscription services, and advertising."
     ),
     "regional_banking_institution": (
-        "Regional banking institution with a community-focused deposit "
-        "franchise and a diversified loan portfolio spanning commercial "
-        "real estate, small business, and consumer lending. Interest income "
-        "is the primary revenue driver, supplemented by fee-based wealth "
-        "management and treasury services."
+        "Depository institution with a deposit franchise and a diversified "
+        "loan portfolio spanning commercial, small business, and consumer "
+        "lending. Interest income is the primary revenue driver, supplemented "
+        "by fee-based services including wealth management and treasury "
+        "management."
     ),
     "global_asset_management": (
         "Global asset management platform offering active and passive "
@@ -1467,18 +1455,18 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         ),
     },
     "diversified_beverage_snack": {
-        "business_model": "beverage and snack production",
-        "product_exposure": ["carbonated beverages", "non-carbonated beverages", "packaged snacks"],
+        "business_model": "consumer packaged goods production",
+        "product_exposure": ["beverages", "snack foods", "packaged goods"],
         "fundamentals_signal": "stable_to_growing",
         "profitability_signal": "high",
         "balance_sheet_signal": "moderate_leverage",
         "growth_signal": "moderate",
-        "risk_signals": ["sugar taxes", "packaging regulation", "distribution concentration"],
+        "risk_signals": ["input cost volatility", "regulatory changes", "channel concentration"],
         "market_signal": "defensive_growth",
         "teaching_goal": (
             "Students should analyze how a branded consumer company manages "
-            "portfolio mix across developed and emerging markets while "
-            "navigating regulatory headwinds."
+            "portfolio mix across multiple markets while navigating "
+            "regulatory and input-cost headwinds."
         ),
     },
     "off_price_apparel_retail": {
@@ -1527,8 +1515,8 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         ),
     },
     "regional_banking_institution": {
-        "business_model": "regional banking",
-        "product_exposure": ["commercial lending", "consumer lending", "wealth management"],
+        "business_model": "depository institution",
+        "product_exposure": ["commercial lending", "consumer lending", "fee-based services"],
         "fundamentals_signal": "rate_sensitive",
         "profitability_signal": "medium",
         "balance_sheet_signal": "moderate_leverage",
@@ -1536,9 +1524,9 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         "risk_signals": ["credit quality", "interest rate risk", "regulatory capital"],
         "market_signal": "cyclical_value",
         "teaching_goal": (
-            "Students should analyze how a regional bank manages net interest "
-            "margin, credit provisioning, and capital allocation, and how "
-            "rate cycles affect profitability."
+            "Students should analyze how a depository institution manages "
+            "net interest margin, credit provisioning, and capital allocation, "
+            "and how rate cycles affect profitability."
         ),
     },
     "global_asset_management": {
@@ -1679,8 +1667,8 @@ def _emit_financial_outputs(
         ("InvestingCashFlow", "cash_flow"),
         ("FinancingCashFlow", "cash_flow"),
     ]
-    n_years = 10  # V3.1: expanded from 5 to 10 years
-    base_year = 2020
+    n_years = 10  # V3.2: 10 years, capped at 2025
+    base_year = 2016  # V3.2: 2016–2025 (historical, no future years)
     for y in range(base_year, base_year + n_years):
         # Each year has a distinct annual factor for trend modeling
         year_factor = 1.0 + (y - base_year) * 0.03  # 3% annual growth trend
@@ -1805,7 +1793,7 @@ def _emit_market_outputs(*, dest_market_dir: Path, company_id: str, seed: int) -
     V3.1: Expanded to multi-year relative daily series (1000+ rows) with
     event-window returns tied to synthetic news events.
     """
-    n_prices = max(1000, 1500 - (seed % 200))  # V3.1: 1000+ minimum
+    n_prices = max(1000, 1500 - (seed % 200))  # V3.2: 1000+ minimum, historical past
     csv_lines = ["relative_day,price,volume_indicator"]
     # Deterministic synthesized price series with trend + volatility
     base = 100.0
