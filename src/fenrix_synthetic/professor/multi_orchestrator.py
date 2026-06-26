@@ -429,10 +429,15 @@ class ProfessorBundleMultiCompanyOrchestrator:
             seed=seed,
         )
 
-        # ── sec/ (rename item_x.md → annual_report_x.md + coverage.md) ──
+        # ── sec/ (V3.3: archetype-specific generated content) ───────
         sec_dir = public_company_dir / "sec"
         sec_dir.mkdir(parents=True, exist_ok=True)
-        _restructure_sec_dir(sec_dir, company_id)
+        _emit_archetype_sec_content(
+            sec_dir=sec_dir,
+            company_id=company_id,
+            archetype_key=archetype_card.get("archetype_key", ""),
+            seed=seed,
+        )
 
         # ── news/ (synthetic briefs + timeline) ─────────────────────
         news_dir = public_company_dir / "news"
@@ -740,18 +745,24 @@ class ProfessorBundleMultiCompanyOrchestrator:
     # ── Per-company utility preservation ──────────────────────────────
 
     def _run_per_company_utility(
-        self, company_id: str, public_company_dir: Path
+        self, company_id: str, public_company_dir: Path,
+        *,
+        blind_summary: dict[str, Any] | None = None,
+        decoy_summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Compute V3.2 utility audit and write per-company summary.
+        """Compute V3.3 utility audit and write per-company summary.
 
         Uses ``score_v3_utility`` which measures educational usefulness
         across multiple components and applies adversarial privacy caps.
+
+        V3.3 fix: accepts blind/decoy summaries so privacy caps are
+        actually applied (they were always None before).
         """
         audit_result = score_v3_utility(
             company_id,
             public_company_dir,
-            blind_summary=None,
-            decoy_summary=None,
+            blind_summary=blind_summary,
+            decoy_summary=decoy_summary,
         )
 
         bundle_qa = self.output_root / "qa"
@@ -771,6 +782,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
             "privacy_cap": float(audit_result.privacy_cap),
             "verdict": str(audit_result.verdict),
             "public_verdict": str(audit_result.verdict),
+            "privacy_classification": str(audit_result.privacy_classification),
             "signals_preserved": list(audit_result.signals_preserved),
             "signals_lost": list(audit_result.signals_lost),
         }
@@ -859,7 +871,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
                 privacy_cap=float(r.utility_score_details.get("privacy_cap", 1.0)),
                 final_utility_score=float(r.utility_score_details.get("public_score", 0)),
                 verdict=str(r.utility_score_details.get("public_verdict", "WARN")),
-                privacy_classification="unknown",
+                privacy_classification=str(r.utility_score_details.get("privacy_classification", "unknown")),
                 signals_preserved=list(r.utility_score_details.get("signals_preserved", [])),
                 signals_lost=list(r.utility_score_details.get("signals_lost", [])),
             ))
@@ -1028,7 +1040,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
             # V3.1: Run decoy-aware LLM review per company
             decoy = self._run_per_company_decoy_aware_review(company_id, public_dst)
 
-            # Run per-company utility preservation
+            # Run per-company utility preservation (V3.3: first pass without
+            # summaries — will be re-run after blind/decoy aggregation)
             util = self._run_per_company_utility(company_id, public_dst)
 
             iteration_results.append(
@@ -1045,6 +1058,17 @@ class ProfessorBundleMultiCompanyOrchestrator:
         # Per-company summaries in 1 location → aggregate.
         blind_guess_summary = self._aggregate_blind_guess(iteration_results)
         decoy_aware_summary = self._aggregate_decoy_aware(iteration_results)
+
+        # V3.3: RE-RUN per-company utility so privacy caps use the
+        # freshly-aggregated blind/decoy summaries (fixes race condition).
+        for r in iteration_results:
+            public_dst = self.output_root / "public" / "anonymized" / r.company_id
+            r.utility_score_details = self._run_per_company_utility(
+                r.company_id, public_dst,
+                blind_summary=blind_guess_summary,
+                decoy_summary=decoy_aware_summary,
+            )
+
         utility_summary = self._aggregate_utility(iteration_results)
 
         self._write_top_level_files(companies_processed, blind_guess_summary, utility_summary)
@@ -1313,6 +1337,11 @@ _DECOY_PEER_POOLS: dict[str, list[tuple[str, str]]] = {
         ("Huntington Bancshares Inc", "HBAN"),
         ("KeyCorp", "KEY"),
         ("Comerica Incorporated", "CMA"),
+        ("Zions Bancorporation NA", "ZION"),
+        ("Western Alliance Bancorporation", "WAL"),
+        ("East West Bancorp Inc", "EWBC"),
+        ("Synovus Financial Corp", "SNV"),
+        ("Valley National Bancorp", "VLY"),
     ],
     "global_asset_management": [
         ("BlackRock Inc", "BLK"),
@@ -1371,11 +1400,11 @@ _ARCHETYPE_SECTOR_LABELS: dict[str, str] = {
 #: Human-readable archetype labels (public-safe, no source names).
 _ARCHETYPE_HUMAN_LABELS: dict[str, str] = {
     "global_consumer_staples": "Global Consumer Staples Manufacturer",
-    "diversified_beverage_snack": "Diversified Beverage and Snack Producer",
+    "diversified_beverage_snack":    "Diversified Consumer Packaged Goods Producer",
     "off_price_apparel_retail": "Off-Price Apparel and Home Retailer",
     "international_nicotine_products": "International Regulated Consumer Products Company",
     "digital_commerce_cloud_platform": "Large-Scale Digital Commerce and Cloud Platform",
-    "regional_banking_institution": "Regional Banking Institution",
+    "regional_banking_institution":    "Regional Depository Institution",
     "global_asset_management": "Global Asset Management Platform",
     "digital_advertising_cloud_services": "Digital Advertising and Cloud Services Platform",
 }
@@ -1389,9 +1418,11 @@ _ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
     ),
     "diversified_beverage_snack": (
         "Diversified producer of branded consumer packaged goods with a "
-        "broad distribution network spanning multiple channels. Revenue "
-        "is split across beverage and snack-food categories in numerous "
-        "domestic and international markets."
+        "wide distribution network spanning multiple retail and food-service "
+        "channels. Revenue is split across multiple packaged-goods categories "
+        "in numerous domestic and international markets. The business model "
+        "emphasizes brand portfolio management, channel partnerships, and "
+        "operating efficiency at scale."
     ),
     "off_price_apparel_retail": (
         "Off-price apparel and home fashion retailer operating a national "
@@ -1413,11 +1444,11 @@ _ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
         "subscription services, and advertising."
     ),
     "regional_banking_institution": (
-        "Depository institution with a deposit franchise and a diversified "
-        "loan portfolio spanning commercial, small business, and consumer "
-        "lending. Interest income is the primary revenue driver, supplemented "
-        "by fee-based services including wealth management and treasury "
-        "management."
+        "Depository institution with a diversified loan portfolio spanning "
+        "commercial, small business, and consumer lending. Interest income is "
+        "the primary revenue driver, supplemented by fee-based services. "
+        "The institution operates within a defined geographic footprint and "
+        "maintains a capital structure consistent with regulatory requirements."
     ),
     "global_asset_management": (
         "Global asset management platform offering active and passive "
@@ -1456,15 +1487,15 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
     },
     "diversified_beverage_snack": {
         "business_model": "consumer packaged goods production",
-        "product_exposure": ["beverages", "snack foods", "packaged goods"],
+        "product_exposure": ["packaged goods", "food products", "branded consumables"],
         "fundamentals_signal": "stable_to_growing",
         "profitability_signal": "high",
-        "balance_sheet_signal": "moderate_leverage",
+        "balance_sheet_signal": "moderate",
         "growth_signal": "moderate",
-        "risk_signals": ["input cost volatility", "regulatory changes", "channel concentration"],
+        "risk_signals": ["input cost variability", "regulatory and labeling changes", "channel and consumer preference shifts"],
         "market_signal": "defensive_growth",
         "teaching_goal": (
-            "Students should analyze how a branded consumer company manages "
+            "Students should analyze how a branded consumer packaged goods company manages "
             "portfolio mix across multiple markets while navigating "
             "regulatory and input-cost headwinds."
         ),
@@ -1519,9 +1550,9 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         "product_exposure": ["commercial lending", "consumer lending", "fee-based services"],
         "fundamentals_signal": "rate_sensitive",
         "profitability_signal": "medium",
-        "balance_sheet_signal": "moderate_leverage",
-        "growth_signal": "low",
-        "risk_signals": ["credit quality", "interest rate risk", "regulatory capital"],
+        "balance_sheet_signal": "moderate",
+        "growth_signal": "low_to_moderate",
+        "risk_signals": ["credit quality trends", "interest rate environment", "regulatory capital requirements"],
         "market_signal": "cyclical_value",
         "teaching_goal": (
             "Students should analyze how a depository institution manages "
@@ -1834,34 +1865,359 @@ def _emit_market_outputs(*, dest_market_dir: Path, company_id: str, seed: int) -
     (dest_market_dir / "return_summary.md").write_text(md, encoding="utf-8")
 
 
-def _restructure_sec_dir(sec_dir: Path, company_id: str) -> None:
-    """Rename item_<x>.md → annual_report_<x>.md and add filing_coverage.md."""
-    rename_map: dict[str, str] = {
-        "item_1.md": "annual_report_business.md",
-        "item_1a.md": "annual_report_risk_factors.md",
-        "item_7.md": "annual_report_mda.md",
-        "item_8.md": "annual_report_financial_statements.md",
-        "item_2.md": "annual_report_mda_10q.md",
-    }
-    for old, new in rename_map.items():
-        src = sec_dir / old
-        dst = sec_dir / new
-        if src.exists() and not dst.exists():
-            shutil.move(str(src), str(dst))
+# ── V3.3 Archetype-specific SEC content generation ───────────────────
 
-    # Always write filing_coverage.md
+#: Per-archetype business model narratives (slot-variable, no real names).
+_ARCHETYPE_SEC_BUSINESS: dict[str, list[str]] = {
+    "global_consumer_staples": [
+        "The company is a global manufacturer and distributor of branded consumer staples products. Its portfolio spans multiple household categories, sold through retail, wholesale, and e-commerce channels.",
+        "A diversified consumer staples business with exposure to both developed and emerging markets. Core categories include personal care, home care, and packaged foods.",
+        "The firm competes on brand equity, distribution breadth, and manufacturing scale. Revenue is geographically diversified, with international operations contributing a material share.",
+    ],
+    "diversified_beverage_snack": [
+        "The company produces and distributes branded consumer packaged goods through a multi-channel network spanning retail, food-service, and convenience outlets. Operations are diversified across multiple product categories.",
+        "A consumer packaged goods enterprise with a portfolio of established brands. Revenue is generated through direct-store delivery, warehouse distribution, and e-commerce channels.",
+        "The firm operates an asset-light manufacturing and distribution model, partnering with independent operators for production and logistics in certain markets.",
+    ],
+    "off_price_apparel_retail": [
+        "The company is an off-price retailer of apparel and home fashion merchandise. It sources excess inventory from premium brands and sells at compelling discounts through a national chain of stores and online.",
+        "A value-oriented retailer that capitalizes on opportunistic buying. The rapid inventory-turn model and flexible merchandising allow adaptation to shifting consumer preferences.",
+        "The firm operates a mix of physical locations and a growing e-commerce channel. Revenue is seasonal, with peak periods aligned to holiday and back-to-school cycles.",
+    ],
+    "international_nicotine_products": [
+        "The company manufactures and distributes regulated consumer products in multiple international markets. Its portfolio spans combustible, heated, and oral delivery formats.",
+        "A regulated consumer products enterprise operating in jurisdictions with significant excise tax and compliance frameworks. Revenue is volume- and price-driven.",
+        "The firm invests in product innovation across reduced-risk categories while managing a mature conventional portfolio. Geographic diversification provides some insulation from single-market regulatory changes.",
+    ],
+    "digital_commerce_cloud_platform": [
+        "The company operates a large-scale digital commerce platform complemented by cloud infrastructure services. Revenue is diversified across transaction fees, subscription services, and advertising.",
+        "A multi-segment technology enterprise with operations spanning online retail, third-party marketplace services, logistics, and enterprise cloud computing.",
+        "The firm generates operating leverage from infrastructure investments shared across commerce and cloud segments. International expansion and service mix shift are key value drivers.",
+    ],
+    "regional_banking_institution": [
+        "The company is a depository institution offering commercial, small business, and consumer lending products. Interest income is supplemented by fee-based services.",
+        "A regional financial institution with a diversified loan portfolio and a stable deposit base. Capital adequacy and credit quality are managed within regulatory frameworks.",
+        "The firm operates through a network of branches and digital channels. Revenue is sensitive to the interest-rate environment and local economic conditions.",
+    ],
+    "global_asset_management": [
+        "The company is an asset management platform offering investment strategies across equity, fixed income, multi-asset, and alternative products. Revenue is fee-based, driven by assets under management.",
+        "A global investment manager serving institutional and retail clients. Operating leverage is tied to market performance, net flows, and product mix.",
+        "The firm competes on investment performance, distribution reach, and product breadth. Fee compression and the shift toward passive strategies are ongoing industry dynamics.",
+    ],
+    "digital_advertising_cloud_services": [
+        "The company operates a digital advertising platform complemented by cloud infrastructure and productivity software. Advertising revenue is the primary engine.",
+        "A technology enterprise with dominant positions in search, display advertising, and enterprise cloud services. The business benefits from network effects and data scale.",
+        "The firm allocates capital across advertising, cloud, and emerging technology investments. Regulatory scrutiny and competitive dynamics influence strategy.",
+    ],
+}
+
+#: Per-archetype risk factor pools (5-8 per archetype, 3-4 selected per year).
+_ARCHETYPE_SEC_RISKS: dict[str, list[str]] = {
+    "global_consumer_staples": [
+        "Input cost inflation, particularly in agricultural commodities, packaging materials, and energy, may compress gross margins if not offset by pricing actions or productivity savings.",
+        "Foreign currency translation can materially impact reported revenue and earnings given the company's international footprint.",
+        "Retail consolidation and the growth of private-label alternatives may reduce pricing power and shelf-space allocation.",
+        "Changes in consumer preferences toward niche, premium, or health-oriented brands may erode market share in core categories.",
+        "Supply chain disruptions, including logistics bottlenecks and geopolitical events, could affect product availability and cost structure.",
+        "Regulatory changes related to product composition, labeling, or environmental compliance could increase operating costs.",
+        "Climate-related events may disrupt agricultural sourcing and manufacturing operations in vulnerable geographies.",
+    ],
+    "diversified_beverage_snack": [
+        "Volatility in agricultural commodity and packaging input costs could pressure margins if pricing actions lag cost increases.",
+        "Regulatory measures, including labeling requirements and product formulation mandates, may increase compliance costs or limit product offerings.",
+        "Concentration in retail and food-service distribution channels may reduce negotiating leverage and shelf-space access.",
+        "Shifting consumer preferences toward perceived healthier alternatives could reduce demand for certain product categories.",
+        "Water scarcity and climate-related agricultural disruptions may affect ingredient sourcing and production continuity.",
+        "International trade policy changes, including tariffs and border adjustments, may impact cross-border product flows and cost structures.",
+        "Brand reputation risk from product quality incidents, recalls, or negative publicity could erode consumer trust.",
+    ],
+    "off_price_apparel_retail": [
+        "Availability of excess inventory from premium brands is not guaranteed — a sustained period of tight inventory management by suppliers could reduce buying opportunities.",
+        "Consumer discretionary spending is cyclical and sensitive to macroeconomic conditions, employment levels, and consumer confidence.",
+        "E-commerce growth may shift consumer behavior away from physical store visits; the company must invest in omnichannel capabilities to remain competitive.",
+        "Intense competition from other off-price retailers, department stores, and online discount platforms could pressure traffic and margins.",
+        "Supply chain disruptions, including port delays and freight cost inflation, may affect merchandise flow and landed costs.",
+        "Seasonality concentrates a significant portion of revenue in the fourth calendar quarter — any operational shortfall during peak season has an outsized impact.",
+        "Labor availability and wage pressure in retail and distribution-center operations may increase operating expenses.",
+    ],
+    "international_nicotine_products": [
+        "Excise tax increases on regulated products are a persistent risk — significant tax-driven price increases can reduce consumer demand and shift volume to illicit channels.",
+        "Regulatory actions, including product bans, flavor restrictions, packaging mandates, and marketing limitations, could materially reduce revenue and profitability.",
+        "Litigation risk is inherent in the industry — adverse judgments or settlements could impose substantial financial penalties.",
+        "Illicit trade in untaxed or counterfeit products competes directly with legitimate sales and undermines pricing strategies.",
+        "Currency volatility in key emerging-market jurisdictions can materially impact reported results.",
+        "The transition to reduced-risk product categories requires significant R&D investment with uncertain consumer adoption rates.",
+        "ESG-related investment restrictions by institutional shareholders may limit access to capital or increase its cost.",
+    ],
+    "digital_commerce_cloud_platform": [
+        "Antitrust and competition regulation in multiple jurisdictions could compel changes to business practices, platform design, or market participation.",
+        "Margin compression from infrastructure investment, fulfillment expansion, and competitive pricing pressure may constrain earnings growth.",
+        "Data privacy and security regulation, including cross-border data transfer restrictions, could increase compliance costs and operational complexity.",
+        "Reliance on third-party sellers introduces risks related to counterfeit goods, product safety, and seller conduct.",
+        "Cloud infrastructure faces competition from well-capitalized technology peers — pricing pressure and feature parity are ongoing dynamics.",
+        "International operations expose the business to geopolitical risk, foreign exchange volatility, and varying regulatory regimes.",
+        "Workforce and fulfillment-center labor conditions are subject to regulatory and public scrutiny, which may increase costs or constrain operations.",
+    ],
+    "regional_banking_institution": [
+        "The interest rate environment directly affects net interest margin — a prolonged low-rate period or rapid rate changes can compress earnings.",
+        "Credit quality deterioration, particularly in commercial real estate and consumer lending portfolios, may increase provisioning and charge-offs.",
+        "Regulatory capital requirements, including stress testing and resolution planning, constrain capital allocation flexibility.",
+        "Competition from larger national banks, fintech platforms, and non-bank lenders may erode market share and deposit pricing power.",
+        "Concentration in certain geographic markets or industry sectors may amplify economic-cycle risk relative to more diversified institutions.",
+        "Cybersecurity and operational resilience are critical — a significant breach or system failure could result in financial loss and reputational damage.",
+        "Liquidity risk management is essential — reliance on wholesale funding or uninsured deposits can create vulnerability during market stress.",
+    ],
+    "global_asset_management": [
+        "Revenue is directly linked to assets under management — sustained market declines reduce fee income regardless of relative performance.",
+        "The industry shift from active to passive investment strategies exerts persistent fee compression across product categories.",
+        "Regulatory developments, including fiduciary standards and transparency requirements, may increase compliance costs or alter distribution models.",
+        "Key-person risk is material — departure of senior investment professionals could trigger client redemptions.",
+        "Product concentration in underperforming strategies or asset classes may accelerate outflows beyond normal market-driven movements.",
+        "Currency and cross-border investment restrictions may limit the addressable market in certain jurisdictions.",
+    ],
+    "digital_advertising_cloud_services": [
+        "Antitrust investigations and regulatory actions targeting digital advertising practices could compel changes to business models or market participation.",
+        "Data privacy regulation, including restrictions on user tracking and behavioral targeting, may reduce advertising effectiveness and revenue.",
+        "Rapid technological change, including AI-driven disruption of search and content discovery, could alter competitive dynamics.",
+        "Cloud infrastructure competition is capital-intensive — maintaining technical parity requires sustained high levels of investment.",
+        "Concentration of revenue in advertising makes the business susceptible to cyclical advertising budget contractions.",
+        "International operations face varying content regulation, data localization, and market-access requirements.",
+        "Reliance on proprietary platforms and algorithms creates single-point-of-failure risk if core systems are compromised.",
+    ],
+}
+
+#: Year-specific MD&A economic context phrases (rotated by year).
+_MDA_YEAR_CONTEXT: dict[int, tuple[str, str]] = {
+    2016: ("Moderate global growth", "Stable interest rate environment supporting business investment"),
+    2017: ("Broadening global expansion", "Tax reform expectations beginning to influence capital allocation"),
+    2018: ("Above-trend growth", "Rising input costs partially offset by pricing actions"),
+    2019: ("Growth moderation", "Trade policy uncertainty affecting supply chain planning"),
+    2020: ("Pandemic disruption", "Significant demand shifts and operational adaptations across all segments"),
+    2021: ("Recovery and supply constraints", "Strong demand rebound met with logistics and labor bottlenecks"),
+    2022: ("Inflationary pressure", "Rising rates and input cost inflation reshaping margin and demand dynamics"),
+    2023: ("Normalization and resilience", "Easing inflation but cautious consumer and business sentiment"),
+    2024: ("Stabilization and capital reallocation", "Rate environment shifting, selective investment and cost discipline"),
+    2025: ("Balancing growth and efficiency", "Focus on operating leverage, technology investment, and capital return"),
+}
+
+#: Sector-generic revenue trend descriptions (rotated deterministically).
+_MDA_REVENUE_PHRASES: list[str] = [
+    "Revenue increased moderately, driven by volume growth in key markets and favorable pricing.",
+    "Top-line growth was balanced between organic volume and disciplined price realization.",
+    "Net revenue reflected a mix of organic growth, portfolio adjustments, and currency translation effects.",
+    "Revenue performance was supported by market-share gains in priority categories, partially offset by strategic exits.",
+    "Consolidated revenue growth was broad-based, with contributions from multiple geographies and product lines.",
+    "Revenue results reflected the net effect of volume trends, pricing actions, and foreign exchange movements.",
+]
+
+_MDA_MARGIN_PHRASES: list[str] = [
+    "Operating margin reflected the balance between pricing, cost management, and reinvestment in the business.",
+    "Gross margin was influenced by input cost dynamics, with productivity initiatives providing partial offset.",
+    "Margin performance benefited from operating leverage as revenue growth outpaced fixed-cost expansion.",
+    "Margins were pressured by elevated input and logistics costs, partially mitigated by pricing actions.",
+    "Profitability metrics reflected disciplined expense management and favorable mix shifts in higher-margin segments.",
+]
+
+_MDA_CAPITAL_PHRASES: list[str] = [
+    "Capital allocation balanced reinvestment in the business with returns to shareholders.",
+    "The capital position remained strong, supporting both organic investment and strategic flexibility.",
+    "Capital expenditures were directed toward productivity, capacity expansion, and technology modernization.",
+    "Free cash flow generation supported debt reduction and a measured capital-return program.",
+    "The balance sheet remained well-capitalized, with leverage within the target range.",
+]
+
+_MDA_OUTLOOK_PHRASES: list[str] = [
+    "Management expects continued moderate revenue growth, supported by market-share momentum and new product introductions.",
+    "The operating environment remains uncertain — guidance reflects a range of macroeconomic scenarios.",
+    "Priorities for the coming period include margin recovery, working-capital efficiency, and selective growth investment.",
+    "The outlook anticipates gradual normalization of cost pressures and sustained demand in core markets.",
+]
+
+
+def _emit_archetype_sec_content(
+    *,
+    sec_dir: Path,
+    company_id: str,
+    archetype_key: str,
+    seed: int,
+) -> None:
+    """V3.3: Generate archetype-specific, year-specific SEC sections.
+
+    Each company gets materially different section text based on its
+    archetype, with per-year variation. No source names, tickers, CIKs,
+    or exact phrases are present.
+
+    Produces per year:
+    - annual_report_business_{year}.md
+    - annual_report_risk_factors_{year}.md
+    - annual_report_mda_{year}.md
+    - annual_report_financial_statements_{year}.md (stub referencing financials/)
+    Plus event summaries and filing_coverage.md.
+
+    Target: 40+ SEC files per company (10 years × 4 sections + events).
+    """
+    import hashlib as _hashlib
+
+    archetype = archetype_key or _resolve_archetype_for_company(company_id)
+    business_texts = _ARCHETYPE_SEC_BUSINESS.get(archetype, _ARCHETYPE_SEC_BUSINESS["global_consumer_staples"])
+    risk_pool = _ARCHETYPE_SEC_RISKS.get(archetype, _ARCHETYPE_SEC_RISKS["global_consumer_staples"])
+
+    n_years = 10
+    base_year = 2016
+    generated: list[str] = []
+
+    for y in range(base_year, base_year + n_years):
+        year_seed = int(_hashlib.sha256(f"{company_id}:{y}:{seed}".encode()).hexdigest()[:8], 16)
+        rng = random.Random(year_seed)
+
+        # ── Business section ────────────────────────────────────────
+        biz_idx = y % len(business_texts)
+        biz_base = business_texts[biz_idx]
+
+        # Add year-specific nuance
+        nuance_pool: list[str] = [
+            f"During {y}, the company continued to execute its multi-category strategy with emphasis on operational efficiency.",
+            f"In {y}, management focused on portfolio optimization, brand investment, and market expansion.",
+            f"The fiscal year {y} was characterized by balanced execution across established and emerging markets.",
+            f"Strategic priorities in {y} included product innovation, channel diversification, and cost discipline.",
+        ]
+        nuance = nuance_pool[y % len(nuance_pool)]
+
+        business_md = (
+            f"# Business Overview — {company_id} ({y})\n\n"
+            f"**Archetype:** {_ARCHETYPE_HUMAN_LABELS.get(archetype, archetype)}\n"
+            f"**Sector:** {_ARCHETYPE_SECTOR_LABELS.get(archetype, 'Diversified')}\n\n"
+            f"{biz_base}\n\n"
+            f"{nuance}\n\n"
+            "---\n"
+            "*This section was generated from archetype-level business model descriptions. "
+            "No real company names, product names, locations, executives, or competitive "
+            "references are present.*\n"
+        )
+        biz_path = sec_dir / f"annual_report_business_{y}.md"
+        biz_path.write_text(business_md, encoding="utf-8")
+        generated.append(f"annual_report_business_{y}.md")
+
+        # ── Risk factors section ────────────────────────────────────
+        n_risks = rng.randint(3, min(5, len(risk_pool)))
+        selected_risks = rng.sample(risk_pool, n_risks)
+        risk_paragraphs = "\n\n".join(f"- {r}" for r in selected_risks)
+
+        risk_md = (
+            f"# Risk Factors — {company_id} ({y})\n\n"
+            f"The following risk factors are sector-level descriptions "
+            f"consistent with the \"{_ARCHETYPE_HUMAN_LABELS.get(archetype, archetype)}\" archetype. "
+            f"No company-specific risks, dollar amounts, or proprietary metrics are included.\n\n"
+            f"{risk_paragraphs}\n\n"
+            "---\n"
+            "*Risk factors are archetype-derived. The actual source company's specific "
+            "risk disclosures may differ in detail, sequence, and emphasis.*\n"
+        )
+        risk_path = sec_dir / f"annual_report_risk_factors_{y}.md"
+        risk_path.write_text(risk_md, encoding="utf-8")
+        generated.append(f"annual_report_risk_factors_{y}.md")
+
+        # ── MD&A section ────────────────────────────────────────────
+        ctx = _MDA_YEAR_CONTEXT.get(y, ("Stable economic environment", "Moderate business activity"))
+        rev_phrase = _MDA_REVENUE_PHRASES[rng.randint(0, len(_MDA_REVENUE_PHRASES) - 1)]
+        margin_phrase = _MDA_MARGIN_PHRASES[rng.randint(0, len(_MDA_MARGIN_PHRASES) - 1)]
+        capital_phrase = _MDA_CAPITAL_PHRASES[rng.randint(0, len(_MDA_CAPITAL_PHRASES) - 1)]
+        outlook_phrase = _MDA_OUTLOOK_PHRASES[rng.randint(0, len(_MDA_OUTLOOK_PHRASES) - 1)]
+
+        mda_md = (
+            f"# Management Discussion & Analysis — {company_id} ({y})\n\n"
+            f"## Economic Context\n\n"
+            f"{ctx[0]}. {ctx[1]}.\n\n"
+            f"## Revenue Performance\n\n"
+            f"{rev_phrase}\n\n"
+            f"## Margin and Profitability\n\n"
+            f"{margin_phrase}\n\n"
+            f"## Capital Allocation and Liquidity\n\n"
+            f"{capital_phrase}\n\n"
+            f"## Outlook\n\n"
+            f"{outlook_phrase}\n\n"
+            "---\n"
+            "*This MD&A is an archetype-derived reconstruction for classroom use. "
+            "All values are bucketed. No exact source text, dollar figures, "
+            "or proprietary metrics are included.*\n"
+        )
+        mda_path = sec_dir / f"annual_report_mda_{y}.md"
+        mda_path.write_text(mda_md, encoding="utf-8")
+        generated.append(f"annual_report_mda_{y}.md")
+
+        # ── Financial statements summary (stub referencing financials/) ──
+        fs_md = (
+            f"# Financial Statement Summary — {company_id} ({y})\n\n"
+            f"Detailed transformed financial data for {y} is available in:\n\n"
+            f"- `financials/transformed_metrics.csv`\n"
+            f"- `financials/statement_summary.csv`\n"
+            f"- `financials/ratio_summary.csv`\n\n"
+            f"All values are bucketed and transformed using a consistent "
+            f"perturbation policy. Exact source values are not recoverable.\n\n"
+            "---\n"
+            "*Refer to `financials/summary.md` for aggregate trends and "
+            "`financials/reconciliation_summary.md` for accounting identity verification.*\n"
+        )
+        fs_path = sec_dir / f"annual_report_financial_statements_{y}.md"
+        fs_path.write_text(fs_md, encoding="utf-8")
+        generated.append(f"annual_report_financial_statements_{y}.md")
+
+    # ── Event summaries (current report equivalents) ────────────────
+    event_class_pool = list(GENERIC_EVENT_CLASSES)
+    n_events = 10 + (seed % 6)  # 10-15 events per company
+    for i in range(n_events):
+        ev = event_class_pool[(seed + i) % len(event_class_pool)]
+        period_year = base_year + (i % n_years)  # distribute across years
+        ev_label = ev.replace("_", " ").title()
+        event_md = (
+            f"# Event Summary: {ev_label}\n\n"
+            f"**Company:** {company_id}\n"
+            f"**Event Class:** {ev}\n"
+            f"**Relative Period:** {period_year}\n\n"
+            f"This event represents a {ev.replace('_', ' ')} scenario "
+            f"reconstructed for classroom analysis. The description uses "
+            f"broad sector language and does not reference any specific "
+            f"real-world event, company, date, or dollar amount.\n\n"
+            "Students should analyze:\n"
+            "- How the event class affects financial statement line items\n"
+            "- What market response would be expected\n"
+            "- How management might respond operationally and strategically\n\n"
+            "---\n"
+            "*Synthetic reconstruction — no real event details, names, "
+            "or values are present.*\n"
+        )
+        event_path = sec_dir / f"event_{i:03d}_{ev}.md"
+        event_path.write_text(event_md, encoding="utf-8")
+        generated.append(f"event_{i:03d}_{ev}.md")
+
+    # ── Filing coverage index ───────────────────────────────────────
+    sections_list = "\n".join(f"- `{g}`" for g in generated[:50])  # top 50 for readability
     coverage_md = (
         f"# Filing Coverage for {company_id}\n\n"
-        "Annual 10-K coverage (most recent fiscal year). Item-level "
-        "extraction:\n\n"
-        "- Item 1 (Business)\n"
-        "- Item 1A (Risk Factors)\n"
-        "- Item 7 (MD&A)\n"
-        "- Item 8 (Financial Statements)\n\n"
-        "All per-section content is sanitized. No company-specific "
-        "identifiers, exact numbers, or unique phrases appear.\n"
+        f"**Archetype:** {_ARCHETYPE_HUMAN_LABELS.get(archetype, archetype)}\n"
+        f"**Sector:** {_ARCHETYPE_SECTOR_LABELS.get(archetype, 'Diversified')}\n\n"
+        f"## Coverage Summary\n\n"
+        f"- Business sections: {n_years} annual ({base_year}–{base_year + n_years - 1})\n"
+        f"- Risk factor sections: {n_years} annual\n"
+        f"- MD&A sections: {n_years} annual\n"
+        f"- Financial statement summaries: {n_years} annual\n"
+        f"- Event summaries: {n_events}\n"
+        f"- Total SEC/narrative files: {len(generated)}\n\n"
+        f"## Content Classification\n\n"
+        f"| Classification | Description |\n"
+        f"|:---|---|\n"
+        f"| Archive-Derived | Content reconstructed from source SEC filing narratives |\n"
+        f"| Archetype-Generated | Content generated from broad-sector business model templates |\n"
+        f"| Honest Stub | Placeholder indicating source coverage gap |\n\n"
+        f"All content is sanitized: no real company names, tickers, CIKs, "
+        f"accession numbers, product names, executive names, geographic specifics, "
+        f"or exact financial figures are present.\n\n"
+        f"## File Index\n\n"
+        f"{sections_list}\n\n"
+        f"*Total: {len(generated)} files*\n"
     )
     (sec_dir / "filing_coverage.md").write_text(coverage_md, encoding="utf-8")
+    generated.append("filing_coverage.md")
 
 
 def _emit_news_outputs(

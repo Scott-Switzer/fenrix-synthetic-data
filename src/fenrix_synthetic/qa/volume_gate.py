@@ -63,6 +63,7 @@ class VolumeCheck:
     target: str
     actual: str
     blocking: bool = True
+    on_merits: bool | None = None  # V3.3: did this pass WITHOUT the waiver?
 
 
 @dataclass
@@ -227,6 +228,7 @@ def evaluate_volume_gate(
         companies_below_span = []
 
     year_span_ok = min_span >= t.min_year_span_per_company
+    yspan_passed = year_span_ok
     check3 = VolumeCheck(
         check_id="min_year_span",
         description=f"Minimum year span: {min_span} (target >= {t.min_year_span_per_company})",
@@ -234,6 +236,7 @@ def evaluate_volume_gate(
         target=f">= {t.min_year_span_per_company}",
         actual=str(min_span),
         blocking=not bool(waiver_reason),
+        on_merits=yspan_passed,
     )
     checks.append(check3)
     if companies_below_span:
@@ -246,6 +249,7 @@ def evaluate_volume_gate(
         min_sec = 0
 
     sec_docs_ok = min_sec >= t.min_sec_docs_per_company
+    sec_merits = sec_docs_ok
     check4 = VolumeCheck(
         check_id="min_sec_docs",
         description=f"Minimum SEC/docs per company: {min_sec} (target >= {t.min_sec_docs_per_company})",
@@ -253,6 +257,7 @@ def evaluate_volume_gate(
         target=f">= {t.min_sec_docs_per_company}",
         actual=str(min_sec),
         blocking=not bool(waiver_reason),
+        on_merits=sec_merits,
     )
     checks.append(check4)
 
@@ -303,6 +308,7 @@ def evaluate_volume_gate(
 
     # ── Check 6: Total ZIP entries ──────────────────────────────────
     entries_ok = total_entries >= t.min_total_zip_entries
+    ents_merits = entries_ok
     check6 = VolumeCheck(
         check_id="min_zip_entries",
         description=f"Total ZIP entries: {total_entries} (target >= {t.min_total_zip_entries})",
@@ -310,6 +316,7 @@ def evaluate_volume_gate(
         target=f">= {t.min_total_zip_entries}",
         actual=str(total_entries),
         blocking=not bool(waiver_reason),
+        on_merits=ents_merits,
     )
     checks.append(check6)
 
@@ -323,6 +330,7 @@ def evaluate_volume_gate(
         min_market_rows = 0
 
     market_ok = min_market_rows >= t.min_market_rows_per_company
+    mkt_merits = market_ok
     check7 = VolumeCheck(
         check_id="min_market_rows",
         description=f"Minimum market rows: {min_market_rows} (target >= {t.min_market_rows_per_company})",
@@ -330,6 +338,7 @@ def evaluate_volume_gate(
         target=f">= {t.min_market_rows_per_company}",
         actual=str(min_market_rows),
         blocking=not bool(waiver_reason),
+        on_merits=mkt_merits,
     )
     checks.append(check7)
 
@@ -344,14 +353,33 @@ def evaluate_volume_gate(
     )
     checks.append(check8)
 
-    # ── Decision ────────────────────────────────────────────────────
+    # ── Decision (V3.3: future_years always blocks, even with waiver) ─
     blocking_failed = [c for c in checks if c.blocking and not c.passed]
     non_blocking_failed = [c for c in checks if not c.blocking and not c.passed]
 
     for c in non_blocking_failed:
         warnings.append(f"{c.check_id}: {c.description}")
 
-    if waiver_reason and any(not c.passed for c in checks if c.check_id in {"min_sec_docs", "min_zip_entries", "min_year_span", "min_market_rows"}):
+    # Future years are a hard fail — waiver cannot override
+    future_year_fail = any("future_years" in c.check_id for c in blocking_failed)
+    if future_year_fail:
+        return VolumeGateResult(
+            passed=False, verdict=VOLUME_FAIL, checks=checks,
+            per_company=per_company, total_zip_entries=total_entries,
+            total_zip_bytes=total_bytes, company_count=company_count,
+            min_year_span=min_span, min_sec_docs=min_sec,
+            waiver_required=False, waiver_reason=waiver_reason or "",
+            warnings=warnings + ["Future years detected — waiver cannot override. All public years must be <= 2025."],
+        )
+
+    # Check if any volume-critical check failed on its OWN merits (without waiver)
+    waiver_check_ids = {"min_sec_docs", "min_zip_entries", "min_year_span", "min_market_rows"}
+    any_failed_on_merits = any(
+        not (c.on_merits if c.on_merits is not None else c.passed)
+        for c in checks if c.check_id in waiver_check_ids
+    )
+
+    if waiver_reason and any_failed_on_merits:
         # Some volume targets missed but source-backed waiver provided
         verdict = VOLUME_PASS_WITH_WAIVER
         passed = True
@@ -359,10 +387,6 @@ def evaluate_volume_gate(
     elif len(blocking_failed) == 0:
         verdict = VOLUME_PASS
         passed = True
-        waiver_used = False
-    elif any("future_years" in c.check_id for c in blocking_failed):
-        verdict = VOLUME_FAIL
-        passed = False
         waiver_used = False
     else:
         verdict = VOLUME_FAIL

@@ -148,20 +148,28 @@ def compute_privacy_cap_from_blind_decoy(
         if decoy_company.get("actual_in_top3") and decoy_company.get("model_confidence") == "low":
             return (PRIVACY_CAP_TOP3_LOW_ONLY, "top3_low_only")
 
-    # Check blind results
+    # Check blind results — V3.3: use per-company confidence arrays
     if blind_summary:
-        # Check if company is in actual_source_top_1
         top1_list: list[str] = blind_summary.get("actual_source_top_1", [])
+        top3_list: list[str] = blind_summary.get("actual_source_top_3", [])
+        high_conf: list[str] = blind_summary.get("high_confidence_guesses", [])
+        med_with_actual: list[str] = blind_summary.get("medium_confidence_with_actual", [])
+
+        # True source top-1 with any confidence => FAIL cap
         if company_id in top1_list:
-            # Determine confidence from per-company blind guess file
             return (PRIVACY_CAP_TOP1_HIGH_MEDIUM, "top1_high_medium")
 
-        top3_list: list[str] = blind_summary.get("actual_source_top_3", [])
+        # True source top-3 with high confidence => FAIL cap
         if company_id in top3_list:
-            return (PRIVACY_CAP_TOP3_HIGH_MEDIUM, "top3_high_medium")
+            if company_id in high_conf:
+                return (PRIVACY_CAP_TOP3_HIGH_MEDIUM, "top3_high_medium")
+            if company_id in med_with_actual:
+                return (PRIVACY_CAP_TOP3_HIGH_MEDIUM, "top3_high_medium")
+            # True source top-3 with low confidence only => WARN cap
+            return (PRIVACY_CAP_TOP3_LOW_ONLY, "top3_low_only")
 
-        high_conf_list: list[str] = blind_summary.get("high_confidence_guesses", [])
-        if company_id in high_conf_list:
+        # High confidence but wrong guess (still a strong privacy signal)
+        if company_id in high_conf:
             return (PRIVACY_CAP_TOP3_HIGH_MEDIUM, "top3_high_medium")
 
     # No adversarial hits

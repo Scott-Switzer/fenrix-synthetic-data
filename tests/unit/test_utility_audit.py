@@ -110,7 +110,11 @@ def test_privacy_cap_from_blind_top1():
 
 
 def test_privacy_cap_from_blind_top3():
-    blind = {"actual_source_top_3": ["COMPANY_002"]}
+    # V3.3: blind top-3 with high confidence => 0.75 cap
+    blind = {
+        "actual_source_top_3": ["COMPANY_002"],
+        "high_confidence_guesses": ["COMPANY_002"],
+    }
     cap, cls = compute_privacy_cap_from_blind_decoy(blind, None, "COMPANY_002")
     assert cap == PRIVACY_CAP_TOP3_HIGH_MEDIUM
     assert "top3" in cls
@@ -264,7 +268,11 @@ def test_utility_score_top3_capped_at_075():
     with TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         cd = _build_minimal_company_dir(tmpdir, "COMPANY_004")
-        blind = {"actual_source_top_3": ["COMPANY_004"]}
+        # V3.3: must add confidence info for high/medium cap
+        blind = {
+            "actual_source_top_3": ["COMPANY_004"],
+            "high_confidence_guesses": ["COMPANY_004"],
+        }
         result = score_v3_utility("COMPANY_004", cd, blind_summary=blind)
         assert result.privacy_cap == PRIVACY_CAP_TOP3_HIGH_MEDIUM
         assert result.final_utility_score <= 0.75
