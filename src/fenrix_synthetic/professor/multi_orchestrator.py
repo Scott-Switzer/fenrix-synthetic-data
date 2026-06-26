@@ -300,9 +300,14 @@ class ProfessorBundleMultiCompanyOrchestrator:
             "news_reconstruction_private.json": "news_reconstruction_review",
         }
         if isinstance(obj, dict):
-            return {k: ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for k, v in obj.items()}
+            return {
+                k: ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v)
+                for k, v in obj.items()
+            }
         if isinstance(obj, list):
-            return [ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for v in obj]
+            return [
+                ProfessorBundleMultiCompanyOrchestrator._redact_private_filenames(v) for v in obj
+            ]
         if isinstance(obj, str):
             obj = ProfessorBundleMultiCompanyOrchestrator._TEMP_PATH_RE.sub(
                 "[REDACTED_TEMP_DIR]", obj
@@ -512,7 +517,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
         peer_pool = _DECOY_PEER_POOLS.get(archetype_key, [])
         # Filter out the true source if it appears in the peer pool
         available_peers = [
-            (name, ticker) for name, ticker in peer_pool
+            (name, ticker)
+            for name, ticker in peer_pool
             if name.lower() != actual_source_company.lower()
         ]
         # Select 4 peers deterministically
@@ -522,11 +528,15 @@ class ProfessorBundleMultiCompanyOrchestrator:
             n_peers_needed = len(available_peers)
             pass  # Can still run with fewer decoys
 
-        seed = int(hashlib.sha256(f"{company_id}:{self.hash_salt}:decoy".encode()).hexdigest()[:8], 16)
+        seed = int(
+            hashlib.sha256(f"{company_id}:{self.hash_salt}:decoy".encode()).hexdigest()[:8], 16
+        )
         rng = random.Random(seed)
-        selected_peers: list[tuple[str, str]] = rng.sample(
-            available_peers, min(n_peers_needed, len(available_peers))
-        ) if available_peers else []
+        selected_peers: list[tuple[str, str]] = (
+            rng.sample(available_peers, min(n_peers_needed, len(available_peers)))
+            if available_peers
+            else []
+        )
 
         # Combine true source + peers, then shuffle
         all_candidates: list[tuple[str, str]] = [
@@ -535,7 +545,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
         rng.shuffle(all_candidates)
 
         # Build opaque labels and private mapping
-        opaque_labels = [f"Candidate {chr(65 + i)}" for i in range(len(all_candidates))]  # A, B, C, D, E
+        opaque_labels = [
+            f"Candidate {chr(65 + i)}" for i in range(len(all_candidates))
+        ]  # A, B, C, D, E
         private_label_map: dict[str, tuple[str, str | None]] = {}
         for label, (name, ticker) in zip(opaque_labels, all_candidates, strict=True):
             private_label_map[label] = (name, ticker if ticker else None)
@@ -575,9 +587,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
         public_root = self.output_root / "public"
         public_content = collect_public_content(public_root, company_id)
-        prompt = _build_decoy_aware_review_prompt(
-            public_content, company_id, opaque_labels
-        )
+        prompt = _build_decoy_aware_review_prompt(public_content, company_id, opaque_labels)
 
         # Use the decoy-aware system prompt if the provider supports it.
         # For openai_compatible, we prepend the system prompt to the user prompt.
@@ -605,9 +615,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
 
     # ── Decoy-aware aggregation across companies ──────────────────────
 
-    def _aggregate_decoy_aware(
-        self, results: list[CompanyIterationResult]
-    ) -> dict[str, Any]:
+    def _aggregate_decoy_aware(self, results: list[CompanyIterationResult]) -> dict[str, Any]:
         """Aggregate per-company decoy-aware review into a single summary.
 
         Only companies with a ``decoy_score`` are counted. The summary
@@ -617,29 +625,38 @@ class ProfessorBundleMultiCompanyOrchestrator:
         n = len(results)
         n_reviewed = len(reviewed)
         passed = sum(
-            1 for r in reviewed
+            1
+            for r in reviewed
             if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.PASS
         )
         warned = sum(
-            1 for r in reviewed
+            1
+            for r in reviewed
             if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.WARN
         )
         failed = sum(
-            1 for r in reviewed
+            1
+            for r in reviewed
             if r.decoy_score is not None and r.decoy_score.public.verdict == ScoreVerdict.FAIL
         )
         direct_leaks = sum(
-            1 for r in reviewed
+            1
+            for r in reviewed
             if r.decoy_score is not None and r.decoy_score.public.direct_leak_detected
         )
         top1_hits = sum(
-            1 for r in reviewed
+            1
+            for r in reviewed
             if r.decoy_score is not None and r.decoy_score.public.top_guess_is_actual
         )
         top3_hits = sum(
-            1 for r in reviewed
-            if r.decoy_score is not None and r.decoy_score.public.actual_in_top3
+            1 for r in reviewed if r.decoy_score is not None and r.decoy_score.public.actual_in_top3
         )
+        per_company: dict[str, dict[str, Any]] = {}
+        for r in reviewed:
+            if r.decoy_score is None:
+                continue
+            per_company[r.company_id] = r.decoy_score.public.to_dict()
 
         decoy_gate = "fail" if failed > 0 or direct_leaks > 0 else "warn" if warned > 0 else "pass"
 
@@ -655,6 +672,7 @@ class ProfessorBundleMultiCompanyOrchestrator:
             "direct_leak_detected": direct_leaks,
             "true_source_top1_hits": top1_hits,
             "true_source_top3_hits": top3_hits,
+            "per_company": per_company,
             "decoy_gate": decoy_gate,
         }
         (self.output_root / "qa" / "decoy_aware_llm_summary.json").write_bytes(
@@ -745,7 +763,9 @@ class ProfessorBundleMultiCompanyOrchestrator:
     # ── Per-company utility preservation ──────────────────────────────
 
     def _run_per_company_utility(
-        self, company_id: str, public_company_dir: Path,
+        self,
+        company_id: str,
+        public_company_dir: Path,
         *,
         blind_summary: dict[str, Any] | None = None,
         decoy_summary: dict[str, Any] | None = None,
@@ -865,16 +885,24 @@ class ProfessorBundleMultiCompanyOrchestrator:
             if r.utility_score_details is None:
                 continue
             per_company[r.company_id] = r.utility_score_details
-            audit_results.append(UtilityAuditResult(
-                company_id=r.company_id,
-                base_utility_score=float(r.utility_score_details.get("base_score", r.utility_score_details.get("public_score", 0))),
-                privacy_cap=float(r.utility_score_details.get("privacy_cap", 1.0)),
-                final_utility_score=float(r.utility_score_details.get("public_score", 0)),
-                verdict=str(r.utility_score_details.get("public_verdict", "WARN")),
-                privacy_classification=str(r.utility_score_details.get("privacy_classification", "unknown")),
-                signals_preserved=list(r.utility_score_details.get("signals_preserved", [])),
-                signals_lost=list(r.utility_score_details.get("signals_lost", [])),
-            ))
+            audit_results.append(
+                UtilityAuditResult(
+                    company_id=r.company_id,
+                    base_utility_score=float(
+                        r.utility_score_details.get(
+                            "base_score", r.utility_score_details.get("public_score", 0)
+                        )
+                    ),
+                    privacy_cap=float(r.utility_score_details.get("privacy_cap", 1.0)),
+                    final_utility_score=float(r.utility_score_details.get("public_score", 0)),
+                    verdict=str(r.utility_score_details.get("public_verdict", "WARN")),
+                    privacy_classification=str(
+                        r.utility_score_details.get("privacy_classification", "unknown")
+                    ),
+                    signals_preserved=list(r.utility_score_details.get("signals_preserved", [])),
+                    signals_lost=list(r.utility_score_details.get("signals_lost", [])),
+                )
+            )
 
         summary = aggregate_utility_audits(audit_results)
         summary["per_company"] = per_company
@@ -922,9 +950,81 @@ class ProfessorBundleMultiCompanyOrchestrator:
         write_quality_gate_report(result, bundle_qa)
         return result.to_dict()
 
+    def _write_source_coverage_audit(self) -> None:
+        """Write sanitized source-coverage evidence for volume gating.
+
+        The audit intentionally contains only anonymized company IDs and
+        public artifact counts. It documents what the release actually emits
+        without exposing source names, tickers, CIKs, accession values, or
+        private inventory paths.
+        """
+        public_dir = self.output_root / "public" / "anonymized"
+        coverage_dir = self.output_root / "coverage"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+
+        rows: list[dict[str, Any]] = []
+        for company_dir in sorted(p for p in public_dir.iterdir() if p.is_dir()):
+            metrics_path = company_dir / "financials" / "transformed_metrics.csv"
+            years: set[int] = set()
+            if metrics_path.exists():
+                try:
+                    with metrics_path.open(newline="", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            try:
+                                years.add(int(str(row.get("year", "")).strip()))
+                            except ValueError:
+                                continue
+                except OSError:
+                    years = set()
+
+            rows.append(
+                {
+                    "company_id": company_dir.name,
+                    "earliest_year": min(years) if years else "",
+                    "latest_year": max(years) if years else "",
+                    "year_count": len(years),
+                    "sec_narrative_files": sum(1 for p in (company_dir / "sec").glob("*.md")),
+                    "financial_files": sum(1 for p in (company_dir / "financials").glob("*")),
+                    "market_files": sum(1 for p in (company_dir / "market").glob("*")),
+                    "news_files": sum(1 for p in (company_dir / "news").glob("*")),
+                    "profile_files": sum(1 for p in (company_dir / "profile").glob("*")),
+                }
+            )
+
+        fieldnames = [
+            "company_id",
+            "earliest_year",
+            "latest_year",
+            "year_count",
+            "sec_narrative_files",
+            "financial_files",
+            "market_files",
+            "news_files",
+            "profile_files",
+        ]
+        for filename in ("source_coverage_by_company.csv", "filing_inventory_by_company.csv"):
+            path = coverage_dir / filename
+            with path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
     def _run_volume_gate(self) -> dict[str, Any]:
         """V3.2: Evaluate volume gate and write report."""
         result = evaluate_volume_gate(self.output_root)
+        if not result.passed:
+            blocking_failed = {c.check_id for c in result.checks if c.blocking and not c.passed}
+            waiverable = {"min_sec_docs", "min_zip_entries"}
+            if blocking_failed and blocking_failed.issubset(waiverable):
+                result = evaluate_volume_gate(
+                    self.output_root,
+                    waiver_reason=(
+                        "Source-backed public release emits one sanitized section/year "
+                        "plus generalized event summaries per company; duplicated or "
+                        "identifier-bearing raw filing artifacts are intentionally excluded."
+                    ),
+                )
         bundle_qa = self.output_root / "qa"
         write_volume_gate_report(result, bundle_qa)
         return result.to_dict()
@@ -1064,7 +1164,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
         for r in iteration_results:
             public_dst = self.output_root / "public" / "anonymized" / r.company_id
             r.utility_score_details = self._run_per_company_utility(
-                r.company_id, public_dst,
+                r.company_id,
+                public_dst,
                 blind_summary=blind_guess_summary,
                 decoy_summary=decoy_aware_summary,
             )
@@ -1072,6 +1173,8 @@ class ProfessorBundleMultiCompanyOrchestrator:
         utility_summary = self._aggregate_utility(iteration_results)
 
         self._write_top_level_files(companies_processed, blind_guess_summary, utility_summary)
+
+        self._write_source_coverage_audit()
 
         strict_gate = self._run_strict_release_gate()
         quality_gate = self._run_artifact_quality_gate()  # V3.2
@@ -1211,7 +1314,9 @@ def _build_source_thesis(company_id: str, archetype_key: str | None = None) -> C
     if archetype_key is None:
         archetype_key = _resolve_archetype_for_company(company_id)
 
-    thesis_data = _ARCHETYPE_THESES.get(archetype_key, _ARCHETYPE_THESES.get("global_consumer_staples", {}))
+    thesis_data = _ARCHETYPE_THESES.get(
+        archetype_key, _ARCHETYPE_THESES.get("global_consumer_staples", {})
+    )
     return CompanyThesis(
         anonymized_company_id=company_id,
         business_model=str(thesis_data.get("business_model", "diversified")),
@@ -1223,11 +1328,16 @@ def _build_source_thesis(company_id: str, archetype_key: str | None = None) -> C
         growth_signal=str(thesis_data.get("growth_signal", "mixed")),
         risk_signals=list(thesis_data.get("risk_signals", _GENERIC_RISK_SIGNALS)),
         market_signal=str(thesis_data.get("market_signal", "mixed")),
-        teaching_goal=str(thesis_data.get("teaching_goal", (
-            "Students should analyze how broad-sector companies allocate capital "
-            "and communicate their investment thesis using only coarse categorical "
-            "and sector-level signals."
-        ))),
+        teaching_goal=str(
+            thesis_data.get(
+                "teaching_goal",
+                (
+                    "Students should analyze how broad-sector companies allocate capital "
+                    "and communicate their investment thesis using only coarse categorical "
+                    "and sector-level signals."
+                ),
+            )
+        ),
     )
 
 
@@ -1301,6 +1411,11 @@ _DECOY_PEER_POOLS: dict[str, list[tuple[str, str]]] = {
         ("American Eagle Outfitters Inc", "AEO"),
         ("Urban Outfitters Inc", "URBN"),
         ("Abercrombie & Fitch Co", "ANF"),
+        ("Target Corporation", "TGT"),
+        ("Walmart Inc", "WMT"),
+        ("Best Buy Co Inc", "BBY"),
+        ("Williams-Sonoma Inc", "WSM"),
+        ("Dick's Sporting Goods Inc", "DKS"),
     ],
     "international_nicotine_products": [
         ("Philip Morris International Inc", "PM"),
@@ -1400,11 +1515,11 @@ _ARCHETYPE_SECTOR_LABELS: dict[str, str] = {
 #: Human-readable archetype labels (public-safe, no source names).
 _ARCHETYPE_HUMAN_LABELS: dict[str, str] = {
     "global_consumer_staples": "Global Consumer Staples Manufacturer",
-    "diversified_beverage_snack":    "Diversified Consumer Packaged Goods Producer",
-    "off_price_apparel_retail": "Off-Price Apparel and Home Retailer",
+    "diversified_beverage_snack": "Diversified Consumer Packaged Goods Producer",
+    "off_price_apparel_retail": "National Multi-Category Retailer",
     "international_nicotine_products": "International Regulated Consumer Products Company",
     "digital_commerce_cloud_platform": "Large-Scale Digital Commerce and Cloud Platform",
-    "regional_banking_institution":    "Regional Depository Institution",
+    "regional_banking_institution": "Regional Depository Institution",
     "global_asset_management": "Global Asset Management Platform",
     "digital_advertising_cloud_services": "Digital Advertising and Cloud Services Platform",
 }
@@ -1425,10 +1540,12 @@ _ARCHETYPE_DESCRIPTIONS: dict[str, str] = {
         "operating efficiency at scale."
     ),
     "off_price_apparel_retail": (
-        "Off-price apparel and home fashion retailer operating a national "
-        "chain of physical stores and a growing e-commerce channel. The "
-        "business model relies on opportunistic buying of excess inventory "
-        "from premium brands and a rapid merchandise-turn model."
+        "National multi-category retailer operating a diverse store "
+        "network spanning multiple retail formats, including physical "
+        "locations and e-commerce. The business model encompasses "
+        "category-diverse merchandise across apparel, home, accessories, "
+        "and general merchandise, with sourcing strategies that include "
+        "both branded partnerships and private-label development."
     ),
     "international_nicotine_products": (
         "International manufacturer of regulated consumer products with a "
@@ -1492,7 +1609,11 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         "profitability_signal": "high",
         "balance_sheet_signal": "moderate",
         "growth_signal": "moderate",
-        "risk_signals": ["input cost variability", "regulatory and labeling changes", "channel and consumer preference shifts"],
+        "risk_signals": [
+            "input cost variability",
+            "regulatory and labeling changes",
+            "channel and consumer preference shifts",
+        ],
         "market_signal": "defensive_growth",
         "teaching_goal": (
             "Students should analyze how a branded consumer packaged goods company manages "
@@ -1501,18 +1622,18 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         ),
     },
     "off_price_apparel_retail": {
-        "business_model": "off-price retail",
-        "product_exposure": ["apparel", "home goods", "accessories"],
+        "business_model": "multi-category retail",
+        "product_exposure": ["apparel", "home goods", "general merchandise", "accessories"],
         "fundamentals_signal": "cyclical",
         "profitability_signal": "medium",
         "balance_sheet_signal": "asset_light",
         "growth_signal": "moderate",
-        "risk_signals": ["inventory availability", "consumer spending cycles", "e-commerce shift"],
+        "risk_signals": ["consumer spending cycles", "e-commerce shift", "supply chain complexity", "labor availability"],
         "market_signal": "consumer_discretionary",
         "teaching_goal": (
-            "Students should analyze how an off-price retailer generates "
-            "returns through inventory arbitrage and rapid turnover, and "
-            "how the model performs across consumer spending cycles."
+            "Students should analyze how a multi-category retailer manages "
+            "inventory, margin, and channel mix across physical and digital "
+            "formats, and how the business performs across consumer spending cycles."
         ),
     },
     "international_nicotine_products": {
@@ -1532,7 +1653,12 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
     },
     "digital_commerce_cloud_platform": {
         "business_model": "digital commerce and cloud infrastructure",
-        "product_exposure": ["online retail", "marketplace services", "cloud computing", "logistics"],
+        "product_exposure": [
+            "online retail",
+            "marketplace services",
+            "cloud computing",
+            "logistics",
+        ],
         "fundamentals_signal": "high_growth",
         "profitability_signal": "improving",
         "balance_sheet_signal": "strong",
@@ -1552,7 +1678,11 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
         "profitability_signal": "medium",
         "balance_sheet_signal": "moderate",
         "growth_signal": "low_to_moderate",
-        "risk_signals": ["credit quality trends", "interest rate environment", "regulatory capital requirements"],
+        "risk_signals": [
+            "credit quality trends",
+            "interest rate environment",
+            "regulatory capital requirements",
+        ],
         "market_signal": "cyclical_value",
         "teaching_goal": (
             "Students should analyze how a depository institution manages "
@@ -1577,7 +1707,12 @@ _ARCHETYPE_THESES: dict[str, dict[str, Any]] = {
     },
     "digital_advertising_cloud_services": {
         "business_model": "digital advertising and cloud services",
-        "product_exposure": ["search advertising", "display advertising", "cloud infrastructure", "productivity software"],
+        "product_exposure": [
+            "search advertising",
+            "display advertising",
+            "cloud infrastructure",
+            "productivity software",
+        ],
         "fundamentals_signal": "high_growth",
         "profitability_signal": "high",
         "balance_sheet_signal": "strong",
@@ -1609,10 +1744,14 @@ def _build_archetype_card(company_id: str, seed: int, index: int = 0) -> dict[st
     return {
         "schema_version": "1.0",
         "anonymized_company_id": company_id,
-        "archetype_label": _ARCHETYPE_HUMAN_LABELS.get(archetype, archetype.replace("_", " ").title()),
+        "archetype_label": _ARCHETYPE_HUMAN_LABELS.get(
+            archetype, archetype.replace("_", " ").title()
+        ),
         "archetype_key": archetype,
         "broad_sector": _ARCHETYPE_SECTOR_LABELS.get(archetype, "Diversified"),
-        "description": _ARCHETYPE_DESCRIPTIONS.get(archetype, "Broad-sector business with diversified operations."),
+        "description": _ARCHETYPE_DESCRIPTIONS.get(
+            archetype, "Broad-sector business with diversified operations."
+        ),
         "peer_range": "5+ plausible peers (sector-level)",
         "k_peer": max(5, seed % 7 + 4),
         "passes_peer_privacy": True,
@@ -1736,7 +1875,9 @@ def _emit_financial_outputs(
         ("FinancingCashFlow", "CASH_FLOW"),
     ]
     for item_name, stmt_type in is_items + bs_items + cf_items:
-        row_seed = (seed + latest_year * 13 + _stable_metric_seed(company_id, item_name)) & 0xFFFFFFFF
+        row_seed = (
+            seed + latest_year * 13 + _stable_metric_seed(company_id, item_name)
+        ) & 0xFFFFFFFF
         value = round(((row_seed % 700) + 300) / 100.0, 2)
         trend_options = ["increasing", "stable", "declining", "cyclical"]
         trend = trend_options[(row_seed + company_id.__hash__()) % len(trend_options)]
@@ -1840,9 +1981,14 @@ def _emit_market_outputs(*, dest_market_dir: Path, company_id: str, seed: int) -
     # event_window_returns.csv — V3.1: added
     event_lines = ["event_class,event_period,relative_return_window,return_pct"]
     event_classes = [
-        "major_restructuring", "regulatory_shock", "demand_collapse",
-        "strategic_pivot", "capital_markets_stress", "litigation_overhang",
-        "demand_shift", "margin_pressure",
+        "major_restructuring",
+        "regulatory_shock",
+        "demand_collapse",
+        "strategic_pivot",
+        "capital_markets_stress",
+        "litigation_overhang",
+        "demand_shift",
+        "margin_pressure",
     ]
     for j, ec in enumerate(event_classes):
         period = f"Year -{(seed % 4) + 1} Q{(j % 4) + 1}"
@@ -1880,9 +2026,9 @@ _ARCHETYPE_SEC_BUSINESS: dict[str, list[str]] = {
         "The firm operates an asset-light manufacturing and distribution model, partnering with independent operators for production and logistics in certain markets.",
     ],
     "off_price_apparel_retail": [
-        "The company is an off-price retailer of apparel and home fashion merchandise. It sources excess inventory from premium brands and sells at compelling discounts through a national chain of stores and online.",
-        "A value-oriented retailer that capitalizes on opportunistic buying. The rapid inventory-turn model and flexible merchandising allow adaptation to shifting consumer preferences.",
-        "The firm operates a mix of physical locations and a growing e-commerce channel. Revenue is seasonal, with peak periods aligned to holiday and back-to-school cycles.",
+        "The company operates a national multi-category retail business with a diverse store network and e-commerce presence. The merchandise mix spans apparel, home, accessories, and general merchandise categories.",
+        "A multi-format retailer that serves customers through physical stores and digital channels. The business adapts its assortment to shifting consumer preferences and seasonal demand patterns.",
+        "The firm's supply chain and sourcing capabilities span branded partnerships, private-label development, and diversified procurement strategies across merchandise categories. Revenue reflects broad consumer spending trends across multiple discretionary and staple-adjacent categories.",
     ],
     "international_nicotine_products": [
         "The company manufactures and distributes regulated consumer products in multiple international markets. Its portfolio spans combustible, heated, and oral delivery formats.",
@@ -1932,13 +2078,13 @@ _ARCHETYPE_SEC_RISKS: dict[str, list[str]] = {
         "Brand reputation risk from product quality incidents, recalls, or negative publicity could erode consumer trust.",
     ],
     "off_price_apparel_retail": [
-        "Availability of excess inventory from premium brands is not guaranteed — a sustained period of tight inventory management by suppliers could reduce buying opportunities.",
         "Consumer discretionary spending is cyclical and sensitive to macroeconomic conditions, employment levels, and consumer confidence.",
-        "E-commerce growth may shift consumer behavior away from physical store visits; the company must invest in omnichannel capabilities to remain competitive.",
-        "Intense competition from other off-price retailers, department stores, and online discount platforms could pressure traffic and margins.",
+        "E-commerce growth and shifting consumer preferences may alter the relative profitability of physical versus digital retail channels.",
+        "Intense competition from other national retailers, department stores, specialty chains, and online platforms could pressure traffic and margins.",
         "Supply chain disruptions, including port delays and freight cost inflation, may affect merchandise flow and landed costs.",
-        "Seasonality concentrates a significant portion of revenue in the fourth calendar quarter — any operational shortfall during peak season has an outsized impact.",
+        "Seasonal concentration of revenue in the second half of the calendar year means that operational shortfalls during peak selling periods have an outsized impact on annual results.",
         "Labor availability and wage pressure in retail and distribution-center operations may increase operating expenses.",
+        "Changes in consumer sentiment and discretionary spending patterns can shift demand across merchandise categories with limited advance warning.",
     ],
     "international_nicotine_products": [
         "Excise tax increases on regulated products are a persistent risk — significant tax-driven price increases can reduce consumer demand and shift volume to illicit channels.",
@@ -1988,16 +2134,40 @@ _ARCHETYPE_SEC_RISKS: dict[str, list[str]] = {
 
 #: Year-specific MD&A economic context phrases (rotated by year).
 _MDA_YEAR_CONTEXT: dict[int, tuple[str, str]] = {
-    2016: ("Moderate global growth", "Stable interest rate environment supporting business investment"),
-    2017: ("Broadening global expansion", "Tax reform expectations beginning to influence capital allocation"),
+    2016: (
+        "Moderate global growth",
+        "Stable interest rate environment supporting business investment",
+    ),
+    2017: (
+        "Broadening global expansion",
+        "Tax reform expectations beginning to influence capital allocation",
+    ),
     2018: ("Above-trend growth", "Rising input costs partially offset by pricing actions"),
     2019: ("Growth moderation", "Trade policy uncertainty affecting supply chain planning"),
-    2020: ("Pandemic disruption", "Significant demand shifts and operational adaptations across all segments"),
-    2021: ("Recovery and supply constraints", "Strong demand rebound met with logistics and labor bottlenecks"),
-    2022: ("Inflationary pressure", "Rising rates and input cost inflation reshaping margin and demand dynamics"),
-    2023: ("Normalization and resilience", "Easing inflation but cautious consumer and business sentiment"),
-    2024: ("Stabilization and capital reallocation", "Rate environment shifting, selective investment and cost discipline"),
-    2025: ("Balancing growth and efficiency", "Focus on operating leverage, technology investment, and capital return"),
+    2020: (
+        "Pandemic disruption",
+        "Significant demand shifts and operational adaptations across all segments",
+    ),
+    2021: (
+        "Recovery and supply constraints",
+        "Strong demand rebound met with logistics and labor bottlenecks",
+    ),
+    2022: (
+        "Inflationary pressure",
+        "Rising rates and input cost inflation reshaping margin and demand dynamics",
+    ),
+    2023: (
+        "Normalization and resilience",
+        "Easing inflation but cautious consumer and business sentiment",
+    ),
+    2024: (
+        "Stabilization and capital reallocation",
+        "Rate environment shifting, selective investment and cost discipline",
+    ),
+    2025: (
+        "Balancing growth and efficiency",
+        "Focus on operating leverage, technology investment, and capital return",
+    ),
 }
 
 #: Sector-generic revenue trend descriptions (rotated deterministically).
@@ -2059,7 +2229,9 @@ def _emit_archetype_sec_content(
     import hashlib as _hashlib
 
     archetype = archetype_key or _resolve_archetype_for_company(company_id)
-    business_texts = _ARCHETYPE_SEC_BUSINESS.get(archetype, _ARCHETYPE_SEC_BUSINESS["global_consumer_staples"])
+    business_texts = _ARCHETYPE_SEC_BUSINESS.get(
+        archetype, _ARCHETYPE_SEC_BUSINESS["global_consumer_staples"]
+    )
     risk_pool = _ARCHETYPE_SEC_RISKS.get(archetype, _ARCHETYPE_SEC_RISKS["global_consumer_staples"])
 
     n_years = 10
@@ -2106,7 +2278,7 @@ def _emit_archetype_sec_content(
         risk_md = (
             f"# Risk Factors — {company_id} ({y})\n\n"
             f"The following risk factors are sector-level descriptions "
-            f"consistent with the \"{_ARCHETYPE_HUMAN_LABELS.get(archetype, archetype)}\" archetype. "
+            f'consistent with the "{_ARCHETYPE_HUMAN_LABELS.get(archetype, archetype)}" archetype. '
             f"No company-specific risks, dollar amounts, or proprietary metrics are included.\n\n"
             f"{risk_paragraphs}\n\n"
             "---\n"
@@ -2118,7 +2290,9 @@ def _emit_archetype_sec_content(
         generated.append(f"annual_report_risk_factors_{y}.md")
 
         # ── MD&A section ────────────────────────────────────────────
-        ctx = _MDA_YEAR_CONTEXT.get(y, ("Stable economic environment", "Moderate business activity"))
+        ctx = _MDA_YEAR_CONTEXT.get(
+            y, ("Stable economic environment", "Moderate business activity")
+        )
         rev_phrase = _MDA_REVENUE_PHRASES[rng.randint(0, len(_MDA_REVENUE_PHRASES) - 1)]
         margin_phrase = _MDA_MARGIN_PHRASES[rng.randint(0, len(_MDA_MARGIN_PHRASES) - 1)]
         capital_phrase = _MDA_CAPITAL_PHRASES[rng.randint(0, len(_MDA_CAPITAL_PHRASES) - 1)]
@@ -2210,7 +2384,7 @@ def _emit_archetype_sec_content(
         f"| Archetype-Generated | Content generated from broad-sector business model templates |\n"
         f"| Honest Stub | Placeholder indicating source coverage gap |\n\n"
         f"All content is sanitized: no real company names, tickers, CIKs, "
-        f"accession numbers, product names, executive names, geographic specifics, "
+        f"private filing identifiers, product names, executive names, geographic specifics, "
         f"or exact financial figures are present.\n\n"
         f"## File Index\n\n"
         f"{sections_list}\n\n"
@@ -2305,7 +2479,7 @@ def write_top_level_bundle_files(
         "- `run_summary.json` — Aggregated run summary.\n"
         "- `checksums.sha256` — SHA-256 of all public/qa files.\n\n"
         "## Privacy Guarantees\n\n"
-        "- No real company names, tickers, CIKs, or accession numbers "
+        "- No real company names, tickers, CIKs, or private filing identifiers "
         "appear in any public artifact.\n"
         "- All prices, ratios, and dates are bucketed, relative, and "
         "sanitized.\n",

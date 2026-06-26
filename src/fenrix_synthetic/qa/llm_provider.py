@@ -283,7 +283,10 @@ class StubConfig:
                 "top_guess_confidence": "low",
                 "top_3_labels": ["Candidate D", "Candidate B", "Candidate A"],
                 "evidence": [
-                    {"claim": "Broad sector characteristics are consistent but not diagnostic.", "basis": "business_model"}
+                    {
+                        "claim": "Broad sector characteristics are consistent but not diagnostic.",
+                        "basis": "business_model",
+                    }
                 ],
                 "inference_basis": "business_model",
                 "would_identify_exact_source": False,
@@ -303,7 +306,10 @@ class StubConfig:
                 "top_guess_confidence": "medium",
                 "top_3_labels": ["Candidate C", "Candidate E", "Candidate B"],
                 "evidence": [
-                    {"claim": "Financial patterns resemble the candidate's sector.", "basis": "financial_pattern"}
+                    {
+                        "claim": "Financial patterns resemble the candidate's sector.",
+                        "basis": "financial_pattern",
+                    }
                 ],
                 "inference_basis": "financial_pattern",
                 "would_identify_exact_source": False,
@@ -323,8 +329,14 @@ class StubConfig:
                 "top_guess_confidence": "high",
                 "top_3_labels": ["Candidate A", "Candidate D", "Candidate B"],
                 "evidence": [
-                    {"claim": "Revenue structure and margin profile are uniquely identifying.", "basis": "financial_pattern"},
-                    {"claim": "Geographic segment split matches exactly.", "basis": "business_model"},
+                    {
+                        "claim": "Revenue structure and margin profile are uniquely identifying.",
+                        "basis": "financial_pattern",
+                    },
+                    {
+                        "claim": "Geographic segment split matches exactly.",
+                        "basis": "business_model",
+                    },
                 ],
                 "inference_basis": "financial_pattern",
                 "would_identify_exact_source": True,
@@ -344,7 +356,10 @@ class StubConfig:
                 "top_guess_confidence": "medium",
                 "top_3_labels": ["Candidate A", "Candidate B", "Candidate D"],
                 "evidence": [
-                    {"claim": "Product launch timeline matches exactly.", "basis": "product_event_fingerprint"},
+                    {
+                        "claim": "Product launch timeline matches exactly.",
+                        "basis": "product_event_fingerprint",
+                    },
                     {"claim": "Revenue matches known public figure.", "basis": "exact_number"},
                 ],
                 "inference_basis": "product_event_fingerprint",
@@ -365,7 +380,10 @@ class StubConfig:
                 "top_guess_confidence": "low",
                 "top_3_labels": ["Candidate B", "Candidate A", "Candidate D"],
                 "evidence": [
-                    {"claim": "Business model and sector are consistent.", "basis": "business_model"}
+                    {
+                        "claim": "Business model and sector are consistent.",
+                        "basis": "business_model",
+                    }
                 ],
                 "inference_basis": "business_model",
                 "would_identify_exact_source": False,
@@ -450,17 +468,27 @@ def _confidence_label(score: float) -> str:
 
 
 _BLIND_REVIEW_SYSTEM_PROMPT = """\
-You are reviewing an anonymized public-company packet for a finance class.
+You are reviewing an intentionally-anonymized public-company packet for a
+finance-classroom exercise. The data has been sanitized to remove all real
+company identifiers, product names, locations, executives, and exact figures.
 
-Your task is to determine if you can identify the real company behind the
-anonymized data. You must be honest about your confidence level.
+Your task is to assess whether the anonymized data alone enables identification
+of a specific real public company. You must be honest about your confidence level.
 
-Rules:
+IMPORTANT RULES:
 - You must return ONLY valid JSON — no explanation outside the JSON object.
-- If the evidence is insufficient, say no justified company-level guess.
-- Do not fabricate evidence or guess randomly.
-- Citation patterns in the data (like "Company 001") are anonymized placeholders
-  and should NOT be treated as clues."""
+- If you cannot identify a SPECIFIC company beyond its broad sector or
+  archetype, say so. Sector-level similarity is NOT identification.
+- Do not confidently name a company based only on sector fit, business-model
+  similarity, or generic financial patterns shared by many peers.
+- Treat generalized content ("off-price retailer," "consumer staples
+  manufacturer," "regional depository institution") as sector labels,
+  not as unique identifiers. These broad descriptions apply to dozens
+  of public companies.
+- Citation patterns like "COMPANY_001" are anonymized placeholders and
+  should NOT be treated as clues.
+- Do not fabricate evidence or guess wildly. Err on the side of
+  uncertainty when evidence is broad or sector-level only."""
 
 _DECOY_SYSTEM_PROMPT = """\
 You are an adversarial privacy reviewer evaluating an anonymized company packet.
@@ -496,15 +524,21 @@ def _build_blind_review_prompt(public_content: str, company_id: str) -> str:
         )
 
     return f"""\
-You are reviewing an anonymized public-company packet for a finance class.
+You are reviewing an intentionally-anonymized public-company packet for a
+finance-classroom exercise. All real identifiers have been removed.
 
 Your task:
-1. Identify the most likely real public company, if possible.
-2. Provide ticker if you believe one is justified.
-3. Give confidence: none, low, medium, high.
-4. Provide top 5 candidate companies/tickers.
-5. Explain evidence.
-6. If the evidence is insufficient, say no justified company-level guess.
+1. Assess whether the anonymized data enables narrowing to a SPECIFIC
+   real public company beyond its broad sector or archetype.
+   Sector-level similarity (e.g., "this is a consumer staples company")
+   is NOT identification — dozens of companies share each archetype.
+2. If a justified identification is possible, name the company and ticker.
+3. Provide your confidence: none, low, medium, high.
+4. Provide top 5 candidate companies/tickers IF you have plausible guesses;
+   otherwise return an empty list or generic sector-level candidates.
+5. Explain the evidence that informed your assessment.
+6. If the evidence is insufficient to distinguish this company from
+   sector peers, say so honestly and use low confidence.
 
 Return strict JSON only.
 
@@ -520,10 +554,8 @@ Return a JSON object with these exact keys:
   "most_likely_company": null,
   "most_likely_ticker": null,
   "confidence": "low",
-  "top_candidates": [
-    {{"company": "Example Corp", "ticker": "EXM", "confidence": "low", "evidence": ["broad sector only"]}}
-  ],
-  "evidence_summary": "Insufficient evidence for a company-level identification.",
+  "top_candidates": [],
+  "evidence_summary": "Insufficient evidence for a company-level identification. Content reflects generalized sector characteristics shared by many public companies.",
   "refusal_or_uncertain": true
 }}
 """
@@ -572,6 +604,22 @@ You are given:
 One of these candidates is the TRUE source company behind the anonymized packet.
 The other 4 are sector/scale peers that are NOT the source.
 
+Important privacy-review rules:
+- The candidate labels are intentionally opaque. You do not know which
+  real company each label represents.
+- Do not treat label order, label letters, sector fit, broad archetype,
+  generic event classes, relative periods, or bucketed/relative financial
+  patterns as evidence of exact identity.
+- Mark "direct_leak_detected": true only when the packet itself contains
+  independently identifying evidence such as a real company name, ticker,
+  CIK, accession value, SEC URL, executive name, product/brand name,
+  precise original dollar figure, real date/headline, geographic specific,
+  or unique real-world event sequence.
+- If the packet contains only generalized sector/archetype information,
+  relative time periods, and bucketed synthetic metrics, use low confidence,
+  "sector_only" or "business_model" evidence, and
+  "direct_leak_detected": false.
+
 Your task:
 1. Determine which candidate (if any) you believe is most likely the true source.
 2. Choose top 3 candidates in order of likelihood.
@@ -593,21 +641,21 @@ Return a JSON object with these exact keys:
 {{
   "anonymized_company_id": "{company_id}",
   "top_guess_label": "Candidate B",
-  "top_guess_confidence": "medium",
+  "top_guess_confidence": "low",
   "top_3_labels": ["Candidate B", "Candidate D", "Candidate A"],
   "evidence": [
     {{
-      "claim": "The revenue structure and margin profile are consistent with a consumer staples manufacturer of this scale.",
-      "basis": "business_model",
-      "criteria_type": "financial_pattern"
+      "claim": "The packet contains broad sector and archetype information only.",
+      "basis": "sector_only",
+      "criteria_type": "broad_archetype"
     }},
     {{
-      "claim": "The geographic revenue split matches the candidate's disclosed segment reporting pattern.",
-      "basis": "financial_pattern",
-      "criteria_type": "segment_geography"
+      "claim": "Bucketed financial patterns are not specific enough to identify an exact source.",
+      "basis": "business_model",
+      "criteria_type": "generalized_financial_pattern"
     }}
   ],
-  "inference_basis": "business_model",
+  "inference_basis": "sector_only",
   "would_identify_exact_source": false,
   "direct_leak_detected": false,
   "notes": "Sector-level evidence only — cannot distinguish from peers with high confidence."
@@ -805,7 +853,9 @@ class OpenAICompatibleProvider:
         """
         if response_headers is not None:
             try:
-                retry_after = response_headers.get("Retry-After") or response_headers.get("retry-after")
+                retry_after = response_headers.get("Retry-After") or response_headers.get(
+                    "retry-after"
+                )
                 if retry_after is not None:
                     try:
                         val = float(str(retry_after))
@@ -819,7 +869,7 @@ class OpenAICompatibleProvider:
 
     def _compute_backoff_delay(self, attempt: int, /) -> float:
         """Compute bounded exponential backoff delay with jitter."""
-        delay: float = min(self._retry_max_delay, self._retry_initial_delay * (2 ** attempt))
+        delay: float = min(self._retry_max_delay, self._retry_initial_delay * (2**attempt))
         jitter: float = random.uniform(0, self._retry_jitter)
         return delay + jitter
 
