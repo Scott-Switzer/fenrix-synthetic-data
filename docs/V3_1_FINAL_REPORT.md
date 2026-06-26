@@ -1,17 +1,23 @@
-# V3.1 Professor Bundle — Final Production & Hardening Report
+# V3.1 Professor Bundle — Final Production & Validation Report
 
 **Date:** 2026-06-26  
 **Branch:** `feature/professor-bundle-pipeline`  
-**Latest Commit:** `e9e5730`  
-**Build Location:** Lightning AI (`s_01kvxp4wpmbdenat5ne183xqph@ssh.lightning.ai`)
+**Local HEAD:** `d4e32fb`  
+**Lightning HEAD:** `d4e32fb`  
+**GitHub HEAD:** `d4e32fb`  
+**Pushed:** Yes (`origin/feature/professor-bundle-pipeline`)  
+**Build Location:** Lightning AI (`s_01kvxp4wpmbdenat5ne183xqph@ssh.lightning.ai`, `ip-10-192-15-173`)  
+**Lightning Run Path:** `/teamspace/studios/this_studio/fenrix-data/runs/professor_alpha_v3_1`  
+**ZIP Path (Lightning):** `/teamspace/studios/this_studio/fenrix-data/runs/professor_alpha_v3_1/exports/anonymized_bundle.zip`  
+**Local Artifacts:** `~/Desktop/FENRIX_PROFESSOR_V3_1_FINAL/`
 
 ---
 
-## Final Verdict: **NOT_PROFESSOR_READY_PENDING_LIGHTNING_BUILD**
+## Final Verdict: **NOT_PROFESSOR_READY**
 
-The decoy-aware LLM review implementation is **code-complete** with 30 unit tests passing, ruff clean, and mypy clean. All local gates pass. However, the Lightning SSH key has expired — the production rebuild with decoy-aware live review cannot run until Lightning connectivity is restored.
+The V3.1 production build completed successfully with live NVIDIA Llama 3.1 70B review, including both blind-guess and decoy-aware adversarial review. All structural artifact quality checks pass, and the utility gate passes. However, the privacy gate failed — the LLM identified one company in blind top-3 and correctly picked another in decoy-aware review. The verdict is therefore `NOT_PROFESSOR_READY`.
 
-The code is functional: when built (with a valid Lightning connection and live NVIDIA API key), the decoy-aware pipeline should run, score, and produce a `decoy_aware_llm_summary.json`. If that gate passes, the verdict will upgrade to `PROFESSOR_READY_V3_1`.
+The anonymization is strong (7/8 companies pass both blind and decoy review), but not perfect enough for professor send. Two companies need stronger masking.
 
 ---
 
@@ -19,117 +25,146 @@ The code is functional: when built (with a valid Lightning connection and live N
 
 | Gate | Status | Detail |
 |:-----|:-------|:-------|
-| Privacy Gate (blind) | **PASS** | 0 source top-1, 0 source top-3, 0 high-confidence |
-| Utility Gate | **PASS** | Score 1.00 (8/8 companies) |
-| Artifact Quality Gate | **PASS** | 8 checks, 0 failures |
-| Strict Release Gate | **PASS** | No direct identifiers, no forbidden paths |
-| **Decoy-Aware LLM Review** | **CODE-COMPLETE, PENDING LIVE BUILD** | 30 unit tests pass locally; live Lightning build blocked |
+| **Privacy Gate (blind)** | **FAIL** | 8/8 reviewed; COMPANY_002 appeared in LLM top-3 |
+| **Privacy Gate (decoy)** | **FAIL** | 8/8 reviewed; COMPANY_005 correctly identified by LLM |
+| **Utility Gate** | **PASS** | Average score 1.00 (8/8 companies) |
+| **Artifact Quality Gate** | **PASS** | PROFESSOR_READY_V3_1, 8/8 checks, 0 failures |
+| **Strict Release Gate** | **PASS** | No direct identifiers, no forbidden paths |
+| **Final Validation** | **FAILED** | Privacy gates did not pass |
 
 ---
 
-## V3.1 Decoy-Aware Implementation (Code-Complete)
+## Per-Company Results
 
-### Files Modified
+### Blind Guess (Open-Ended LLM)
+| Company | Passed | Confidence | Note |
+|:--------|:-------|:-----------|:-----|
+| COMPANY_001 | PASS | low | |
+| COMPANY_002 | **FAIL** | medium | Actual source in top-3 candidates |
+| COMPANY_003 | PASS | low | |
+| COMPANY_004 | PASS | low | |
+| COMPANY_005 | PASS | low | |
+| COMPANY_006 | PASS | low | |
+| COMPANY_007 | PASS | low | |
+| COMPANY_008 | PASS | low | |
 
-1. **`src/fenrix_synthetic/qa/llm_provider.py`** (+140)
-   - Added `_DECOY_SYSTEM_PROMPT` for decoy-aware adversarial review
-   - Added `_build_decoy_aware_review_prompt(public_content, company_id, candidate_labels)` with opaque Candidate A-E labels
-   - Extended `StubConfig` with `decoy_response` field and 5 decoy factory methods:
-     - `decoy_pass_low_confidence()` — wrong guess, low confidence
-     - `decoy_pass_wrong_guess_medium()` — wrong guess, medium confidence
-     - `decoy_fail_top1_high_confidence()` — correct top-1, high confidence
-     - `decoy_fail_direct_leak()` — evidence includes direct identifiers
-     - `decoy_warn_business_model()` — true source top-3, low confidence, business model only
-   - Updated `OfflineStubProvider.complete_json()` to return `decoy_response` when set
-   - Updated `OpenAICompatibleProvider.complete_json()` to auto-detect decoy prompts and send `_DECOY_SYSTEM_PROMPT`
+### Decoy-Aware (Constrained Candidate Set)
+| Company | Verdict | Top-1 Hit | Top-3 Hit | Direct Leak | Basis |
+|:--------|:--------|:----------|:----------|:------------|:------|
+| COMPANY_001 | PASS | No | No | No | |
+| COMPANY_002 | PASS | No | No | No | |
+| COMPANY_003 | PASS | No | No | No | |
+| COMPANY_004 | PASS | No | No | No | |
+| COMPANY_005 | **FAIL** | **Yes** | — | No | business_model |
+| COMPANY_006 | PASS | No | No | No | |
+| COMPANY_007 | PASS | No | No | No | |
+| COMPANY_008 | PASS | No | No | No | |
 
-2. **`src/fenrix_synthetic/qa/confidence_scoring.py`** (+230)
-   - Added evidence basis constants: `_DIRECT_LEAK_BASES` (direct_identifier, exact_number, metadata_leak, product_event_fingerprint), `_ACCEPTABLE_BASES` (business_model, sector_only), `_VALID_BASES`
-   - Added `PrivateDecoyScoreDetail`, `PublicDecoyScoreSummary`, `DecoyScoreResult` dataclasses
-   - Added `score_decoy_aware_guess()` with 5 scoring rules:
-     - FAIL: direct leak evidence (any basis in `_DIRECT_LEAK_BASES`)
-     - FAIL: true source top-1 with medium/high confidence
-     - FAIL: true source top-3 with high confidence
-     - WARN: true source top-3 with low confidence, broad evidence only
-     - PASS: true source not top-1/top-3, no direct leaks
-   - Added `_count_bases()` helper for evidence basis histograms
-
-3. **`src/fenrix_synthetic/professor/multi_orchestrator.py`** (+400)
-   - Added `_DECOY_PEER_POOLS`: per-archetype lists of 8-10 real public peer companies (8 archetypes covered)
-   - Added `_run_per_company_decoy_aware_review()`: builds 5-candidate set (true source + 4 sector peers), shuffles deterministically, sends opaque-label prompt to LLM, scores, writes redacted public summary only. Private candidate mapping written under `_inner_work_root/private/qa/` — NEVER enters the student ZIP
-   - Added `_aggregate_decoy_aware()`: produces `qa/decoy_aware_llm_summary.json` with aggregate PASS/WARN/FAIL counts, direct leak counts, top-1/top-3 hits — zero real company names
-   - Wired decoy review into `_run_impl()` per-company loop (between blind guess and utility)
-   - Updated verdict cascade: `DECOY_AWARE_GATE_FAILED` blocks `PROFESSOR_READY_V3_1`
-   - Added decoy-aware assertions to final validation
-   - Added `_update_docs_with_decoy_results()`: appends decoy section to `RUN_SUMMARY.md` and `RELEASE_MANIFEST.json`
-   - Fixed pre-existing `_random` → `random` NameError in `_resolve_archetype_for_company()`
-   - Expanded `international_nicotine_products` peer pool from 8 to 10 entries
-
-4. **`tests/unit/test_decoy_aware_review.py`** (NEW, 30 tests)
-   - `TestDecoyPromptBuilder` (4): opaque labels only, required schema keys, company ID in prompt, system prompt safety
-   - `TestDecoyScoringPass` (3): wrong guess low confidence, wrong guess medium confidence, source not in top-3
-   - `TestDecoyScoringFail` (6): top-1 high conf, top-1 medium conf, direct_identifier evidence, exact_number evidence, product_event_fingerprint evidence, top-3 high confidence
-   - `TestDecoyScoringWarn` (2): top-3 low conf business model only, top-3 low conf financial pattern
-   - `TestDecoyPublicSafety` (3): no source names in public summary, evidence basis counts present, private detail contains source mapping
-   - `TestDirectLeakBases` (4): verify all 4 direct leak bases are present
-   - `TestDecoyStubProvider` (4): decoy schema returned, fail_direct_leak response, warn_business_model response, empty decoy falls back to blind format
-   - `TestDecoyStubRoundTrip` (4): PASS round-trip, FAIL top-1 round-trip, FAIL direct leak round-trip, WARN round-trip
-
-### Privacy Safeguards
-
-- **Prompt:** Only Candidate A/B/C/D/E opaque labels — zero real company names in the LLM prompt
-- **Private mapping:** Written under `_inner_work_root/private/qa/` (temp directory outside bundle root) — physically excluded from ZIP
-- **Public summary:** Contains only aggregate counts (PASS/WARN/FAIL, direct leak count, top-1/top-3 hits) — zero real names, tickers, or candidate-to-company mappings
-- **System prompt:** Separated from blind review; auto-detected by keyword matching in `OpenAICompatibleProvider`
+**Key finding:** COMPANY_002 failed blind review (LLM placed real source in top-3) but passed decoy review (could not pick it from a constrained set). COMPANY_005 passed blind review but failed decoy review (LLM correctly identified it from peers). Zero direct leaks detected — the LLM used business model and financial pattern inference, not leaked identifiers.
 
 ---
 
-## Local Verification Results
+## 8 Distinct Archetypes
 
-| Check | Tool | Result |
-|:------|:-----|:-------|
-| Syntax/compile | `python3 -m compileall src tests` | **PASS** |
-| Lint | `ruff check` (v0.11.7) | **PASS** — 0 errors |
-| Type check | `mypy` (confidence_scoring.py, llm_provider.py) | **PASS** — 0 errors |
-| Artifact quality tests | `pytest tests/unit/test_artifact_quality_gate.py` | **PASS** — 26/26 |
-| Decoy-aware tests | `pytest tests/unit/test_decoy_aware_review.py` | **PASS** — 30/30 |
-| Combined tests | `pytest` both suites | **PASS** — 56/56 in 0.94s |
+| Company | Archetype Key | Broad Sector |
+|:--------|:--------------|:-------------|
+| COMPANY_001 | international_nicotine_products | Consumer Defensive |
+| COMPANY_002 | diversified_beverage_snack | Consumer Staples |
+| COMPANY_003 | off_price_apparel_retail | Consumer Discretionary |
+| COMPANY_004 | global_asset_management | Financial Services |
+| COMPANY_005 | regional_banking_institution | Financial Services |
+| COMPANY_006 | digital_commerce_cloud_platform | Technology & Consumer Discretionary |
+| COMPANY_007 | digital_advertising_cloud_services | Technology & Communication Services |
+| COMPANY_008 | global_consumer_staples | Consumer Staples |
 
 ---
 
-## Lightning Status
+## ZIP Contents (241 entries, 299 KB)
 
-**SSH: BROKEN** — `Permission denied (publickey)` on all attempts using the configured `lightning_rsa` key. The SSH config at `~/.ssh/config` has:
+### ZIP Inspection: ALL STRUCTURAL ASSERTIONS PASS ✅
+- ✅ 241 entries
+- ✅ Exactly 8 company directories
+- ✅ 8 distinct broad archetypes
+- ✅ 10 financial years per company (all 10)
+- ✅ Market rows: 1,308–1,484 per company (all ≥ 1,000)
+- ✅ 5 SEC files per company
+- ✅ No forbidden files/extensions (.env, __MACOSX, .DS_Store, source_companies, identity_map, private/qa, raw/, .pem, .key, .html, .xml, .xbrl)
+- ✅ No LOCAL_DEV_NOT_READY, professor_ready=false, release_safe=false
+- ✅ No /tmp/ or /private/ strings in public files
+- ✅ No source names/tickers in public files
+- ✅ No raw SEC HTML/XML/XBRL
+- ✅ No .env, source map, raw archive, identity maps, AppleDouble
+- ✅ artifact_quality_gate.json exists and passes
+- ✅ public_release_gate.json exists
+- ✅ llm_blind_guess_summary.json exists (8/8 reviewed)
+- ✅ decoy_aware_llm_summary.json exists (8/8 reviewed)
+- ✅ utility_preservation_summary.json exists
+- ✅ README, QUICKSTART, RUN_SUMMARY, DATA_DICTIONARY, RELEASE_MANIFEST all present
 
+---
+
+## Implementation Summary
+
+### V3.1 Decoy-Aware LLM Review
+- **`qa/llm_provider.py`**: `_build_decoy_aware_review_prompt()`, `_DECOY_SYSTEM_PROMPT`, 5 stub decoy factories, auto-detect decoy vs blind in live provider
+- **`qa/confidence_scoring.py`**: `score_decoy_aware_guess()` with 5 scoring rules, `DecoyScoreResult` dataclasses, 4 direct leak bases including `product_event_fingerprint`
+- **`professor/multi_orchestrator.py`**: 8 per-archetype peer pools (8–10 companies each), `_run_per_company_decoy_aware_review()`, `_aggregate_decoy_aware()`, verdict cascade with `DECOY_AWARE_GATE_FAILED`, private mapping under temp dir (NEVER in ZIP)
+- **`tests/unit/test_decoy_aware_review.py`**: 30 tests (prompt safety, all scoring rules, public summary safety, stub round-trips)
+
+### Verification
+- 56/56 unit tests pass (30 decoy + 26 artifact quality)
+- Ruff clean, mypy clean, compileall clean on local
+- Lightning verification: compileall clean, pytest 56/56 pass
+- Ruff/mypy not on Lightning PATH (documented caveat)
+
+---
+
+## Decoy-Aware Scoring Rules (Implemented)
+
+| Rule | Condition | Verdict |
+|:-----|:----------|:--------|
+| 1 | Evidence includes direct_identifier, exact_number, metadata_leak, or product_event_fingerprint | FAIL |
+| 2 | True source is top-1 with medium or high confidence | FAIL |
+| 3 | True source is top-3 with high confidence | FAIL |
+| 4 | True source top-3 with low confidence, broad evidence only | WARN |
+| 5 | True source not top-1/top-3, no direct leaks | PASS |
+
+---
+
+## Known Limitations
+
+1. **Privacy gate failure (BLOCKING):** COMPANY_002 (blind top-3) and COMPANY_005 (decoy top-1) were identified by the LLM. Both used business-model/financial-pattern inference, not direct leaks. Stronger anonymization needed for these companies.
+
+2. **SEC content:** Archive-backed reconstruction is not yet functional — archive `text_path` entries not populated. Content is deterministic sanitized stubs. Honestly labeled.
+
+3. **Ruff/mypy on Lightning:** Not available on Lightning PATH (Python 3.14 environment). Passed locally with Python 3.12.
+
+---
+
+## Artifacts Delivered
+
+**Pull to local Mac (all present):**
 ```
-Host ssh.lightning.ai
-  IdentityFile ~/.ssh/lightning_rsa
-  IdentitiesOnly yes
+~/Desktop/FENRIX_PROFESSOR_V3_1_FINAL/
+├── anonymized_bundle.zip          (299 KB)
+├── artifact_quality_gate.json     (1.8 KB)
+├── decoy_aware_llm_summary.json   (350 B)
+├── llm_blind_guess_summary.json   (498 B)
+├── public_release_gate.json       (345 B)
+├── run_summary.json               (9.1 KB)
+└── utility_preservation_summary.json (4.1 KB)
 ```
 
-The key exists at `~/.ssh/lightning_rsa` and loads into the agent successfully, but Lightning rejects it. Likely cause: the Lightning AI studio instance was terminated and recreated with a new key. The Lightning SSH hostname (`s_01kvxp4wpmbdenat5ne183xqph@ssh.lightning.ai`) may also have changed.
+---
 
-### Required to Unblock
+## Send/No-Send Recommendation
 
-1. Obtain the new Lightning SSH key from the Lightning AI studio dashboard
-2. Update `~/.ssh/lightning_rsa` with the new private key
-3. Re-run the production build:
-   ```bash
-   ssh s_01kvxp4wpmbdenat5ne183xqph@ssh.lightning.ai \
-     'cd /teamspace/studios/this_studio/fenrix-synthetic-data && \
-      source .env && \
-      fenrix-synth build-production-bundle \
-        --output /teamspace/studios/this_studio/fenrix-data/runs/v3_1_production \
-        --source-mapping .../source_companies.yaml \
-        --source-archive-inventory .../source_archive_inventory.json \
-        --llm-review-provider openai_compatible \
-        --llm-review-model meta/llama-3.1-70b-instruct \
-        --llm-review-base-url https://integrate.api.nvidia.com/v1 \
-        --release-date 2026-06-26'
-   ```
-4. Run ZIP inspection
-5. Verify `qa/decoy_aware_llm_summary.json` exists and `decoy_gate == "pass"`
-6. Update verdict to `PROFESSOR_READY_V3_1` if all gates pass
+**DO NOT SEND** — The ZIP passes all structural quality checks but the privacy gate failed on live NVIDIA LLM review. COMPANY_002 and COMPANY_005 need stronger anonymization before professor delivery.
+
+### What to Fix
+1. Investigate COMPANY_002 (diversified_beverage_snack) — the LLM placed it in top-3 via blind open-ended guessing. Consider stronger financial perturbation for this archetype.
+2. Investigate COMPANY_005 (regional_banking_institution) — the LLM correctly identified it from its decoy peer set. Consider additional business model obfuscation or a larger decoy pool.
+3. Rebuild on Lightning once fixes are applied, then re-validate.
 
 ---
 
@@ -137,12 +172,7 @@ The key exists at `~/.ssh/lightning_rsa` and loads into the agent successfully, 
 
 | SHA | Description |
 |:----|:------------|
+| `d4e32fb` | docs(v3.1): update final report — decoy-aware code-complete, Lightning SSH blocked |
 | `e9e5730` | feat(v3.1): implement decoy-aware LLM review — opaque candidate labels, evidence classification, FAIL on direct leaks |
 | `05867df` | test(v3.1): add 26 unit tests for artifact_quality_gate, update final report with decoy-aware gap |
 | `c695af3` | feat(v3.1): professor-ready rebuild — 8 distinct archetypes, 10yr financials, artifact quality gate, utility gate fix |
-
----
-
-## Send/No-Send Recommendation
-
-**DO NOT SEND** — The decoy-aware LLM implementation is code-complete and locally verified, but the final production ZIP with live decoy-aware review has not been built. The Lightning SSH key needs to be refreshed. Once rebuilt with a passing decoy gate, the verdict will upgrade to `PROFESSOR_READY_V3_1`.
