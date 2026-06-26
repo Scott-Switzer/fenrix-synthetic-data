@@ -3050,7 +3050,7 @@ def build_production_bundle(
     This command does NOT accept ``--fast-fixtures`` or
     ``--allow-provider-skip-for-local-dev``. Production mode requires
     both ``--source-mapping`` and ``--archive-inventory``. The exit code
-    is 0 only if the bundle reaches ``PRODUCTION_CANDIDATE_READY``.
+    is 0 only if the bundle reaches ``PROFESSOR_READY_V3_1`` or ``PRODUCTION_CANDIDATE_READY``.
     """
     output_root = output_root.resolve()
     if output_root.exists() and not dry_run:
@@ -3129,7 +3129,7 @@ def build_production_bundle(
     click.echo(f"  ZIP: {result.zip_path}")
     click.echo(f"  aggregate_verdict: {result.aggregate_verdict}")
 
-    if result.aggregate_verdict != "PRODUCTION_CANDIDATE_READY":
+    if result.aggregate_verdict not in ("PRODUCTION_CANDIDATE_READY", "PROFESSOR_READY_V3_1"):
         click.echo(
             f"Production verdict is {result.aggregate_verdict} — not ready.",
             err=True,
