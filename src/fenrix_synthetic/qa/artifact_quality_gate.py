@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ── Verdict constants ─────────────────────────────────────────────────
 
 PROFESSOR_READY_V3_1 = "PROFESSOR_READY_V3_1"
